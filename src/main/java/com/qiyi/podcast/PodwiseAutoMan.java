@@ -8,8 +8,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.google.genai.Client;
-import com.google.genai.types.GenerateContentResponse;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Download;
@@ -29,7 +27,7 @@ import com.microsoft.playwright.options.LoadState;
 public class PodwiseAutoMan {
 
     private final static String DownloadDir = "/Users/cenwenchu/Desktop/podItems/";
-    private final static int MaxProcessCount = 100;
+    private final static int MaxProcessCount = 40;
 
 
 	public static void main(String[] args) {
@@ -148,7 +146,7 @@ public class PodwiseAutoMan {
 
                     processNodeList(itemList,itemNameList,page,preciseXpath);
 
-					downloadPodcasts(itemList,context);
+					downloadPodcasts(itemList,context,true);
 				}
             }
             
@@ -285,7 +283,7 @@ public class PodwiseAutoMan {
     }
 
 
-    private void downloadPodcasts(List<PodCastItem> itemList,BrowserContext context){
+    private void downloadPodcasts(List<PodCastItem> itemList,BrowserContext context,boolean needTranslateCN){
         for (PodCastItem item : itemList) {
             if (item.isProcessed) {
                 // 下载 podcast
@@ -329,17 +327,97 @@ public class PodwiseAutoMan {
 
                             if(downloadBtn != null)
                             {
+
+                                // 等待下载完成,英文版
                                 Download download = downloadPage.waitForDownload(() -> {
                                     downloadBtn.click(); // 替换为实际的下载按钮选择器
                                 });
-                
-                                // 指定保存路径
+                    
+                                    // 指定保存路径
                                 String downloadPath = DownloadDir + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
                                 download.saveAs(Paths.get(downloadPath));
-                
-                                // 获取下载信息 
+
+                                 // 获取下载信息 
                                 System.out.println("下载URL: " + download.url());
                                 System.out.println("保存路径: " + downloadPath);
+
+
+                                if (needTranslateCN)
+                                {
+                                    try
+                                    {
+                                        ElementHandle langBtn = downloadPage.waitForSelector(
+                                            "//button[contains(text(),'Original')]", 
+                                            new Page.WaitForSelectorOptions().setTimeout(5000)
+                                        );
+
+                                        if (langBtn != null)
+                                        {
+                                            langBtn.click();
+
+                                            ElementHandle cnBtn = downloadPage.querySelector(
+                                                "//button[span[contains(text(),'简体中文')] and span[contains(text(),'Select')]]"
+                                            );
+                                            
+                                            boolean isCnTranslated = false;
+
+                                            if (cnBtn != null)
+                                            {
+                                                cnBtn.click();
+                                                isCnTranslated = true;
+                                            }
+                                            else
+                                            {
+                                                cnBtn = downloadPage.querySelector(
+                                                    "//button/span[contains(text(),'简体中文')]"
+                                                );
+
+                                                if (cnBtn != null)
+                                                {
+                                                    cnBtn.click();
+                                                }   
+
+                                                try
+                                                {
+                                                    cnBtn = downloadPage.waitForSelector(
+                                                    "//button[span[contains(text(),'简体中文')] and span[contains(text(),'Select')]]",
+                                                        new Page.WaitForSelectorOptions().setTimeout(5*60*1000));    
+                                                        
+                                                    cnBtn.click();
+                                                    isCnTranslated = true;
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    System.out.println("点击简体中文按钮失败: " + ex.getMessage());
+                                                    ex.printStackTrace();
+                                                }
+                                            }
+ 
+                                            if (isCnTranslated)
+                                            {
+                                                ElementHandle newDownloadBtn = downloadPage.waitForSelector(
+                                                        "//button[contains(text(),'Download')]", 
+                                                    new Page.WaitForSelectorOptions().setTimeout(5000)
+                                                    );
+
+                                                download = downloadPage.waitForDownload(() -> {
+                                                    newDownloadBtn.click(); // 替换为实际的下载按钮选择器
+                                                });
+
+                                                downloadPath = DownloadDir + "CN/" + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
+                                                download.saveAs(Paths.get(downloadPath));
+
+                                                System.out.println("中文保存路径: " + downloadPath);
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.out.println("切换语言按钮点击失败: " + ex.getMessage());
+                                        ex.printStackTrace();
+                                    }
+                                }//不需要下载中文
+                                       
                             }
 
                         }
@@ -428,9 +506,14 @@ public class PodwiseAutoMan {
         try {
             // 确保下载目录存在
             java.io.File dir = new java.io.File(DownloadDir);
+            java.io.File outputDir = new java.io.File(DownloadDir+"summary/");
             if (!dir.exists() || !dir.isDirectory()) {
                 System.out.println("下载目录不存在: " + DownloadDir);
                 return;
+            }
+
+            if (!outputDir.exists() || !outputDir.isDirectory()) {
+                outputDir.mkdirs();
             }
             
             // 遍历目录中的 PDF 文件
@@ -447,8 +530,8 @@ public class PodwiseAutoMan {
                 System.out.println("正在处理文件: " + pdfFileName);
                 
                 // 构建输出文件名：在 .pdf 前添加 .cn 后缀
-                String outputFileName = pdfFileName.replace(".pdf", "_cn.pdf");
-                String outputFilePath = DownloadDir + outputFileName;
+                String outputFileName = pdfFileName.replace(".pdf", "_cn_summary.pdf");
+                String outputFilePath = outputDir.getPath() + "/" + outputFileName;
                 
                 // 检查摘要文件是否已存在
                 java.io.File outputFile = new java.io.File(outputFilePath);
@@ -459,7 +542,7 @@ public class PodwiseAutoMan {
                 
                 try {
                     // 调用 Gemini API 生成中文摘要
-                    String summary = generateSummaryWithGemini(pdfFile);
+                    String summary = PodCastUtil.generateSummaryWithGemini(pdfFile);
                     
                     // 保存摘要到文件
                     if (summary != null && !summary.isEmpty()) {
@@ -488,85 +571,5 @@ public class PodwiseAutoMan {
         }
     }
     
-    private String generateSummaryWithGemini(java.io.File pdfFile) {
-        try {
-
-            Client client = new Client();
-
-            GenerateContentResponse response =
-                client.models.generateContent(
-            "gemini-3-flash-preview",
-            "Explain how AI works in a few words",
-            null);
-
-            System.out.println(response.text());
-
-            // 这里需要实现调用 Gemini API 的逻辑
-            // 注意：需要替换为实际的 API 密钥和请求格式
-            String apiKey = "YOUR_GEMINI_API_KEY";
-            String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey;
-            
-            // 读取 PDF 文件内容（这里使用简化的方式，实际可能需要更复杂的 PDF 解析）
-            String pdfContent ="";// extractTextFromPDF(pdfFile);
-            if (pdfContent == null || pdfContent.isEmpty()) {
-                return null;
-            }
-            
-            // 构建请求体
-            String requestBody = "{\n" +
-                    "  \"contents\": [\n" +
-                    "    {\n" +
-                    "      \"parts\": [\n" +
-                    "        {\n" +
-                    "          \"text\": \"请为以下内容生成中文摘要：\\n\\n" + pdfContent + "\"\n" +
-                    "        }\n" +
-                    "      ]\n" +
-                    "    }\n" +
-                    "  ]\n" +
-                    "}";
-            
-            // 创建 HTTP 连接
-            java.net.URL url = new java.net.URL(apiUrl);
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            
-            // 发送请求
-            try (java.io.OutputStream os = conn.getOutputStream()) {
-                byte[] input = requestBody.getBytes("utf-8");
-                os.write(input, 0, input.length);
-            }
-            
-            // 读取响应
-            try (java.io.BufferedReader br = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream(), "utf-8"))) {
-                StringBuilder sb = new StringBuilder();
-                String responseLine = null;
-                while ((responseLine = br.readLine()) != null) {
-                    sb.append(responseLine.trim());
-                }
-                
-                // 解析响应
-                // 注意：这里的解析逻辑需要根据实际的 API 响应格式进行调整
-                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(response.toString());
-                com.fasterxml.jackson.databind.JsonNode candidatesNode = rootNode.path("candidates");
-                if (candidatesNode.isArray() && candidatesNode.size() > 0) {
-                    com.fasterxml.jackson.databind.JsonNode contentNode = candidatesNode.get(0).path("content");
-                    com.fasterxml.jackson.databind.JsonNode partsNode = contentNode.path("parts");
-                    if (partsNode.isArray() && partsNode.size() > 0) {
-                        return partsNode.get(0).path("text").asText();
-                    }
-                }
-            }
-            
-        } catch (Exception e) {
-            System.out.println("调用 Gemini API 时出错: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return null;
-    }
-
 
 }

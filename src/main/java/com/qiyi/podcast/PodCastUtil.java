@@ -2,12 +2,20 @@ package com.qiyi.podcast;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Properties;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.genai.Client;
+import com.google.genai.types.Content;
+import com.google.genai.types.File;
+import com.google.genai.types.GenerateContentResponse;
+import com.google.genai.types.Part;
+import com.google.genai.types.UploadFileConfig;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
@@ -117,5 +125,69 @@ public class PodCastUtil {
             System.out.println("等待超时，当前高度: " + 
                 page.evaluate("document.documentElement.scrollHeight"));
         }   
+
+
+    public static String generateSummaryWithGemini(java.io.File pdfFile) 
+    {
+        String GEMINI_API_KEY = "";
+        String responseText = "";
+
+        try 
+        {
+
+            Properties props = new Properties();
+            try (InputStream input = PodCastUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
+                if (input == null) {
+                    System.out.println("配置文件 podcast.cfg 未找到");
+                } else {
+                    props.load(input);
+                    System.out.println("配置文件加载成功");
+                }
+            } catch (IOException ex) {
+                System.out.println("加载配置文件失败: " + ex.getMessage());
+                ex.printStackTrace();
+            }
+
+            GEMINI_API_KEY = props.getProperty("GEMINI_API_KEY");
+
+            Client client = Client.builder()
+            .apiKey(GEMINI_API_KEY)
+            .build();
+
+
+            // 2. 上传本地文件 
+            File uploadedFile = client.files.upload(
+                pdfFile.getAbsolutePath(),
+                UploadFileConfig.builder()
+                    .mimeType("application/pdf") // 设置正确的 MIME 类型 (如 image/jpeg, application/pdf 等)
+                    .build()
+            );
+
+            System.out.println("文件上传成功: " + uploadedFile.uri().get());
+
+            // 3. 构建请求内容 (文本 + 文件)
+            Content content = Content.fromParts(
+                Part.fromText("针对这个播客的内容，生成一份中文摘要，提炼核心的知识点，可以适当的拓展一些知识丰富摘要"), // 文本部分
+                Part.fromUri(uploadedFile.uri().get(), uploadedFile.mimeType().get()) // 文件部分
+            );
+
+
+            GenerateContentResponse response =
+                client.models.generateContent(
+            "gemini-3-flash-preview",
+            content,
+            null);
+
+            responseText = response.text();
+            
+            System.out.println(responseText);
+        }
+        catch (Exception ex) {
+            System.out.println("调用 Gemini API 失败: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+
+        return responseText;
+    }
 
 }
