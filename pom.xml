@@ -50,13 +50,25 @@
       <scope>test</scope>
     </dependency>
     
-    <dependency>
+  <dependency>
     <groupId>com.microsoft.playwright</groupId>
     <artifactId>playwright</artifactId>
     <version>1.50.0</version>
 	</dependency>
 
-    
+  
+  <dependency>
+    <groupId>io.github.pig-mesh.ai</groupId>
+    <artifactId>deepseek-spring-boot-starter</artifactId>
+    <version>1.4.7</version>
+ </dependency>
+
+ <dependency>
+    <groupId>org.apache.pdfbox</groupId>
+    <artifactId>pdfbox</artifactId>
+    <version>3.0.2</version>
+</dependency>
+
     <dependency>
     <groupId>com.deque.html.axe-core</groupId>
     <artifactId>playwright</artifactId>

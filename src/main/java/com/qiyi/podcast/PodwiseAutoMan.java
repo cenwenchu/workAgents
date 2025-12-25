@@ -31,6 +31,12 @@ public class PodwiseAutoMan {
     private final static int MaxProcessCount = 10;
     private final static int ProcessSummaryCount = 1;
 
+    //两个模型枚举
+    public enum ModelType {
+        DEEPSEEK,
+        GEMINI
+    }
+
 
 	public static void main(String[] args) {
 
@@ -38,7 +44,7 @@ public class PodwiseAutoMan {
         //new PodwiseAutoMan().connectAndAutomate();
 
         //对于下载的文件，通过调用gemini的api来做翻译和中文摘要
-        new PodwiseAutoMan().processDownloadedFiles(ProcessSummaryCount,true);
+        new PodwiseAutoMan().processDownloadedFiles(ProcessSummaryCount,ModelType.DEEPSEEK,true);
 		
 	}
 
@@ -504,7 +510,7 @@ public class PodwiseAutoMan {
         }
 	}
 
-    private void processDownloadedFiles(int count,boolean needGenerateImage) {
+    private void processDownloadedFiles(int count,ModelType modelType,boolean needGenerateImage) {
 
         int processedCount = 0;
 
@@ -553,7 +559,16 @@ public class PodwiseAutoMan {
                 {
                     try {
                     // 调用 Gemini API 生成中文摘要
-                        String summary = PodCastUtil.generateSummaryWithGemini(pdfFile);
+                        String summary = null;
+                        
+                        if(modelType == ModelType.GEMINI)
+                        {
+                            summary = PodCastUtil.generateSummaryWithGemini(pdfFile);
+                        }
+                        else if(modelType == ModelType.DEEPSEEK)
+                        {
+                            summary = PodCastUtil.generateSummaryWithDeepSeek(pdfFile);
+                        }
                         
                         // 保存摘要到文件
                         if (summary != null && !summary.isEmpty()) {

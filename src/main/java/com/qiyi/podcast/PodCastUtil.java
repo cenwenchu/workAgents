@@ -9,6 +9,11 @@ import java.net.URL;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Properties;
+
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+
 import java.nio.file.Files;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -24,9 +29,17 @@ import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
 
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.OpenAiClient.OpenAiClientContext;
+import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionRequest;
+import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse;
+import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
+
 public class PodCastUtil {
 
     static String GEMINI_API_KEY = "";
+    static String DEEPSEEK_API_KEY = "";
+
 
     public static String getChromeWsEndpoint(int port) {
         try {
@@ -133,8 +146,8 @@ public class PodCastUtil {
         }   
 
 
-    public static void initGeminiClient() {
-        if (GEMINI_API_KEY.equals(""))
+    public static void initClientConfig() {
+        if (GEMINI_API_KEY.equals("") || DEEPSEEK_API_KEY.equals(""))
         {
             Properties props = new Properties();
             try (InputStream input = PodCastUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
@@ -150,13 +163,14 @@ public class PodCastUtil {
             }
 
             GEMINI_API_KEY = props.getProperty("GEMINI_API_KEY");
+            DEEPSEEK_API_KEY = props.getProperty("deepseek.api-key");
         }
     }
 
 
     public static void generateImageWithGemini(String fileString, String outputDirectory) {
 
-            initGeminiClient();
+            initClientConfig();
 
             try (Client client =Client.builder().apiKey(GEMINI_API_KEY).build();) {
 
@@ -222,6 +236,78 @@ public class PodCastUtil {
 
     }
 
+
+    public static String generateSummaryWithDeepSeek(java.io.File pdfFile) 
+    {
+        String responseText = "";
+
+        initClientConfig();
+
+        DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
+            .openAiApiKey(DEEPSEEK_API_KEY)
+            .baseUrl("https://api.deepseek.com")
+            .model("deepseek-chat")
+            .connectTimeout(java.time.Duration.ofSeconds(30))
+            .readTimeout(java.time.Duration.ofSeconds(60))
+            .logRequests(true)                          // 开启请求日志
+            .logResponses(true)                         // 开启响应日志
+            .build();
+
+        try
+        {
+
+            String pdfContent = readFileContent(pdfFile);
+
+            UserMessage userMessage = UserMessage.builder()
+                        .addText("针对这个播客的内容，首先可以去掉很多寒暄，日常聊天，以及一些无关紧要的内容；然后根据对话，提炼出一些重点知识点，或者话题；"+
+                            "最后根据这些知识点和话题，适当的补充一些专业词汇的介绍，生成一份中文摘要。播客文字内容如下：")
+                        .addText(pdfContent).build();
+
+            ChatCompletionRequest request = ChatCompletionRequest.builder()
+                    .messages(userMessage).build();
+
+            ChatCompletionResponse response = deepseekClient
+                .chatCompletion(new OpenAiClientContext(), request)
+                .execute();
+
+            // 4. 处理响应
+            if (response != null && response.choices() != null && !response.choices().isEmpty()) {
+                responseText = response.choices().get(0).message().content();
+                System.out.println("\n=== DeepSeek 回答 ===");
+                System.out.println(responseText);
+                
+                // 打印使用统计
+                System.out.println("\n=== 使用统计 ===");
+                System.out.println("Prompt tokens: " + response.usage().promptTokens());
+                System.out.println("Completion tokens: " + response.usage().completionTokens());
+                System.out.println("Total tokens: " + response.usage().totalTokens());
+            }
+            else {
+                System.out.println("未收到有效响应");
+            }
+        }
+        catch (Exception ex) {
+            System.out.println("调用 DeepSeek API 失败: " + ex.getMessage());
+            ex.printStackTrace();
+        }
+        finally {
+            deepseekClient.shutdown();
+        }
+        
+        return responseText;
+    }
+
+    public static String readFileContent(java.io.File file) throws IOException {
+
+        try (PDDocument document = Loader.loadPDF(file)) {
+            // 2. 创建PDF文本提取器
+            PDFTextStripper stripper = new PDFTextStripper();
+            
+            // 3. 提取文本
+            return stripper.getText(document);
+        }
+    }
+
     public static String generateSummaryWithGemini(java.io.File pdfFile) 
     {
         
@@ -229,7 +315,7 @@ public class PodCastUtil {
 
         try 
         {
-            initGeminiClient();
+            initClientConfig();
 
             Client client = Client.builder()
             .apiKey(GEMINI_API_KEY)

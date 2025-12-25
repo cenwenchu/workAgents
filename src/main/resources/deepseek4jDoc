@@ -1,0 +1,992 @@
+结合你提供的 `DeepSeekClient` 代码，我来展示完整的请求和返回处理范例。这个客户端支持同步、异步和流式三种调用方式。
+
+## 📦 完整的客户端使用示例
+
+### 1. **基础同步调用**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse;
+import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionRequest;
+
+public class BasicSyncExample {
+    public static void main(String[] args) {
+        // 1. 初始化客户端
+        DeepSeekClient client = DeepSeekClient.builder()
+            .openAiApiKey("sk-your-deepseek-api-key")  // 你的API密钥
+            .baseUrl("https://api.deepseek.com")        // DeepSeek API地址
+            .model("deepseek-chat")                     // 默认模型
+            .connectTimeout(java.time.Duration.ofSeconds(30))
+            .readTimeout(java.time.Duration.ofSeconds(60))
+            .logRequests(true)                          // 开启请求日志
+            .logResponses(true)                         // 开启响应日志
+            .build();
+        
+        try {
+            // 2. 构建请求
+            ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .addSystemMessage("你是一个Java编程专家")
+                .addUserMessage("解释一下Java中的Stream API有什么优势？")
+                .maxCompletionTokens(1000)
+                .temperature(0.7)
+                .build();
+            
+            // 3. 同步调用
+            System.out.println("发送请求到DeepSeek...");
+            ChatCompletionResponse response = client
+                .chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), request)
+                .execute();
+            
+            // 4. 处理响应
+            if (response != null && response.choices() != null && !response.choices().isEmpty()) {
+                String answer = response.choices().get(0).message().content();
+                System.out.println("\n=== DeepSeek 回答 ===");
+                System.out.println(answer);
+                
+                // 打印使用统计
+                System.out.println("\n=== 使用统计 ===");
+                System.out.println("Prompt tokens: " + response.usage().promptTokens());
+                System.out.println("Completion tokens: " + response.usage().completionTokens());
+                System.out.println("Total tokens: " + response.usage().totalTokens());
+            }
+            
+        } catch (Exception e) {
+            System.err.println("调用失败: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            // 5. 关闭客户端
+            client.shutdown();
+        }
+    }
+}
+```
+
+### 2. **异步调用示例**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import java.util.concurrent.CompletableFuture;
+
+public class AsyncExample {
+    public static void main(String[] args) {
+        DeepSeekClient client = DeepSeekClient.builder()
+            .openAiApiKey("sk-your-key")
+            .build();
+        
+        // 构建包含代码的请求
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .addSystemMessage("""
+                你是一个代码审查专家，请按以下格式回答：
+                1. 安全问题
+                2. 性能问题
+                3. 改进建议
+                """)
+            .addUserMessage("""
+                审查这段代码：
+                ```java
+                public void processData(List<String> data) {
+                    for (String item : data) {
+                        System.out.println(item.toUpperCase());
+                    }
+                }
+                ```
+                """)
+            .maxCompletionTokens(1500)
+            .temperature(0.3)
+            .build();
+        
+        // 异步调用
+        CompletableFuture<ChatCompletionResponse> future = client
+            .chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), request)
+            .onResponse(response -> {
+                System.out.println("异步调用完成！");
+                if (response.choices() != null) {
+                    System.out.println("回答: " + response.choices().get(0).message().content());
+                }
+                return response;
+            })
+            .onError(error -> {
+                System.err.println("异步调用失败: " + error.getMessage());
+                return null;
+            })
+            .executeAsync();
+        
+        // 等待异步调用完成（在实际应用中可能不需要）
+        try {
+            future.get(); // 阻塞等待
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        
+        client.shutdown();
+    }
+}
+```
+
+### 3. **流式响应处理**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.shared.StreamOptions;
+import reactor.core.publisher.Flux;
+
+public class StreamingExample {
+    public static void main(String[] args) throws InterruptedException {
+        DeepSeekClient client = DeepSeekClient.builder()
+            .openAiApiKey("sk-your-key")
+            .logStreamingResponses(true)  // 开启流式响应日志
+            .build();
+        
+        // 构建流式请求
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .model("deepseek-chat")
+            .addUserMessage("用Java写一个快速排序算法的实现，并逐步解释")
+            .stream(true)  // 启用流式
+            .streamOptions(StreamOptions.builder().includeUsage(true).build())
+            .maxCompletionTokens(2000)
+            .temperature(0.5)
+            .build();
+        
+        System.out.println("开始流式响应...\n");
+        
+        // 方法1: 使用 Flux（响应式编程）
+        Flux<ChatCompletionResponse> flux = client.chatFluxCompletion(request);
+        
+        flux.subscribe(
+            chunk -> {
+                // 处理每个流式块
+                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                    String delta = chunk.choices().get(0).delta().content();
+                    if (delta != null) {
+                        System.out.print(delta);  // 逐个字符输出
+                    }
+                }
+            },
+            error -> System.err.println("\n流式错误: " + error.getMessage()),
+            () -> System.out.println("\n\n流式响应完成！")
+        );
+        
+        // 方法2: 使用回调方式
+        client.chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), request)
+            .onPartialResponse(chunk -> {
+                // 实时处理部分响应
+                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                    String content = chunk.choices().get(0).delta().content();
+                    if (content != null) {
+                        System.out.print(content);
+                    }
+                }
+            })
+            .onComplete(() -> {
+                System.out.println("\n\n流式调用完成");
+            })
+            .onError(error -> {
+                System.err.println("流式调用错误: " + error.getMessage());
+            })
+            .execute();
+        
+        // 等待流式响应完成
+        Thread.sleep(10000);
+        client.shutdown();
+    }
+}
+```
+
+## 🖼️ 多模态文件处理示例
+
+### 4. **图片分析完整流程**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.chat.ImageDetail;
+import java.io.File;
+import java.nio.file.Files;
+import java.util.Base64;
+
+public class ImageAnalysisExample {
+    
+    public static void main(String[] args) {
+        try {
+            DeepSeekClient client = DeepSeekClient.builder()
+                .openAiApiKey("sk-your-key")
+                .build();
+            
+            // 1. 本地图片转base64
+            File imageFile = new File("architecture.png");
+            byte[] imageBytes = Files.readAllBytes(imageFile.toPath());
+            String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+            String dataUrl = "data:image/png;base64," + base64Image;
+            
+            // 2. 构建多模态请求
+            ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .model("deepseek-chat")  // 或使用专门的视觉模型
+                .addSystemMessage("""
+                    你是软件架构分析专家，请分析架构图的：
+                    1. 组件设计
+                    2. 数据流向
+                    3. 潜在的性能瓶颈
+                    4. 改进建议
+                    """)
+                .messages(
+                    UserMessage.builder()
+                        .addText("请分析这个系统架构图")
+                        .addImageUrl(dataUrl, ImageDetail.HIGH)
+                        .name("架构师")
+                        .build()
+                )
+                .maxCompletionTokens(3000)
+                .temperature(0.3)
+                .responseFormat(ResponseFormatType.TEXT)
+                .build();
+            
+            // 3. 执行请求
+            System.out.println("开始分析图片...");
+            ChatCompletionResponse response = client
+                .chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), request)
+                .execute();
+            
+            // 4. 处理结果
+            if (response.choices() != null && !response.choices().isEmpty()) {
+                System.out.println("\n=== 图片分析结果 ===");
+                System.out.println(response.choices().get(0).message().content());
+                
+                // 打印推理信息（如果支持）
+                if (response.choices().get(0).reasoningContent() != null) {
+                    System.out.println("\n=== 推理过程 ===");
+                    System.out.println(response.choices().get(0).reasoningContent());
+                }
+            }
+            
+            client.shutdown();
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+## 🔧 工具调用完整示例
+
+### 5. **Function Calling 工作流**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.tool.*;
+import java.util.List;
+import java.util.Map;
+
+public class ToolCallingExample {
+    
+    public static void main(String[] args) {
+        DeepSeekClient client = DeepSeekClient.builder()
+            .openAiApiKey("sk-your-key")
+            .build();
+        
+        // 1. 定义工具函数
+        Function weatherFunction = Function.builder()
+            .name("get_weather")
+            .description("获取指定城市的天气信息")
+            .addParameter("city", Parameter.builder()
+                .type("string")
+                .description("城市名称，如：北京、上海")
+                .required(true)
+                .build())
+            .addParameter("unit", Parameter.builder()
+                .type("string")
+                .description("温度单位：celsius 或 fahrenheit")
+                .enumValues(List.of("celsius", "fahrenheit"))
+                .defaultValue("celsius")
+                .build())
+            .build();
+        
+        Tool weatherTool = Tool.builder()
+            .function(weatherFunction)
+            .build();
+        
+        // 2. 构建工具调用请求
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .model("deepseek-chat")
+            .addUserMessage("北京今天的天气怎么样？")
+            .tools(weatherTool)
+            .toolChoice(ToolChoiceMode.AUTO)
+            .parallelToolCalls(true)
+            .maxCompletionTokens(2000)
+            .temperature(0.2)
+            .build();
+        
+        // 3. 执行请求
+        System.out.println("发送工具调用请求...");
+        ChatCompletionResponse response = client
+            .chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), request)
+            .execute();
+        
+        // 4. 处理工具调用响应
+        if (response.choices() != null && !response.choices().isEmpty()) {
+            ChatCompletionChoice choice = response.choices().get(0);
+            
+            if (choice.message().toolCalls() != null && !choice.message().toolCalls().isEmpty()) {
+                System.out.println("检测到工具调用请求:");
+                
+                for (ToolCall toolCall : choice.message().toolCalls()) {
+                    System.out.println("\n工具调用ID: " + toolCall.id());
+                    System.out.println("函数名称: " + toolCall.function().name());
+                    System.out.println("函数参数: " + toolCall.function().arguments());
+                    
+                    // 5. 实际执行工具函数（模拟）
+                    String functionName = toolCall.function().name();
+                    Map<String, Object> args = parseArguments(toolCall.function().arguments());
+                    
+                    if ("get_weather".equals(functionName)) {
+                        String city = (String) args.get("city");
+                        String unit = (String) args.getOrDefault("unit", "celsius");
+                        String weatherResult = getWeather(city, unit);
+                        
+                        System.out.println("执行结果: " + weatherResult);
+                        
+                        // 6. 将结果发送回AI继续对话
+                        ChatCompletionRequest followUp = ChatCompletionRequest.builder()
+                            .model("deepseek-chat")
+                            .messages(
+                                SystemMessage.from("你是一个天气助手"),
+                                UserMessage.from("北京今天的天气怎么样？"),
+                                choice.message(),  // AI的初始响应（包含工具调用）
+                                ToolMessage.from(toolCall.id(), weatherResult)  // 工具执行结果
+                            )
+                            .build();
+                        
+                        ChatCompletionResponse finalResponse = client
+                            .chatCompletion(new io.github.pigmesh.ai.deepseek.core.OpenAiClientContext(), followUp)
+                            .execute();
+                        
+                        if (finalResponse.choices() != null) {
+                            System.out.println("\n=== 最终回答 ===");
+                            System.out.println(finalResponse.choices().get(0).message().content());
+                        }
+                    }
+                }
+            } else {
+                System.out.println("直接回答: " + choice.message().content());
+            }
+        }
+        
+        client.shutdown();
+    }
+    
+    private static Map<String, Object> parseArguments(String jsonArgs) {
+        // 实际项目中应使用JSON解析库
+        // 这里简化为返回模拟数据
+        return Map.of("city", "北京", "unit", "celsius");
+    }
+    
+    private static String getWeather(String city, String unit) {
+        // 模拟天气查询
+        return String.format("""
+            {
+                "city": "%s",
+                "temperature": 22,
+                "unit": "%s",
+                "condition": "晴朗",
+                "humidity": "45%%",
+                "wind_speed": "10 km/h"
+            }
+            """, city, unit);
+    }
+}
+```
+
+## 🔍 搜索增强对话
+
+### 6. **联网搜索功能**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.search.SearchRequest;
+import reactor.core.publisher.Flux;
+
+public class SearchEnhancedChat {
+    
+    public static void main(String[] args) throws InterruptedException {
+        // 需要配置搜索API密钥
+        DeepSeekClient client = DeepSeekClient.builder()
+            .openAiApiKey("sk-your-deepseek-key")
+            .searchApiKey("your-search-api-key")  // 搜索功能的API密钥
+            .searchEndpoint("https://api.bochaai.com/v1/")
+            .build();
+        
+        String userMessage = "DeepSeek公司最新发布了什么产品？";
+        
+        System.out.println("用户问题: " + userMessage);
+        System.out.println("开始搜索增强对话...\n");
+        
+        // 方法1: 使用Flux流式响应
+        Flux<io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse> flux = 
+            client.chatSearchCompletion(userMessage);
+        
+        flux.subscribe(
+            chunk -> {
+                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                    String content = chunk.choices().get(0).delta().content();
+                    if (content != null) {
+                        System.out.print(content);
+                    }
+                }
+            },
+            error -> System.err.println("错误: " + error.getMessage()),
+            () -> System.out.println("\n\n对话完成")
+        );
+        
+        // 方法2: 自定义搜索请求
+        SearchRequest searchRequest = SearchRequest.builder()
+            .enable(true)
+            .query(userMessage)
+            .searchDepth("advanced")  // 搜索深度
+            .location("中国")          // 地理位置
+            .timePeriod("week")       // 时间范围
+            .build();
+        
+        Flux<io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse> customSearch = 
+            client.chatSearchCompletion(userMessage, searchRequest);
+        
+        // 等待响应
+        Thread.sleep(5000);
+        client.shutdown();
+    }
+}
+```
+
+## 🏗️ 生产级封装示例
+
+### 7. **服务类封装**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.OpenAiClientContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+
+/**
+ * DeepSeek服务封装类
+ */
+public class DeepSeekService {
+    
+    private static final Logger log = LoggerFactory.getLogger(DeepSeekService.class);
+    
+    private final DeepSeekClient client;
+    private final String defaultModel;
+    
+    public DeepSeekService(String apiKey, String baseUrl) {
+        this.client = DeepSeekClient.builder()
+            .openAiApiKey(apiKey)
+            .baseUrl(baseUrl)
+            .model("deepseek-chat")
+            .connectTimeout(java.time.Duration.ofSeconds(30))
+            .readTimeout(java.time.Duration.ofSeconds(60))
+            .logRequests(log.isDebugEnabled())
+            .logResponses(log.isDebugEnabled())
+            .build();
+        this.defaultModel = "deepseek-chat";
+    }
+    
+    /**
+     * 同步对话
+     */
+    public ChatResult chatSync(String systemPrompt, String userMessage) {
+        try {
+            ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .model(defaultModel)
+                .addSystemMessage(systemPrompt)
+                .addUserMessage(userMessage)
+                .maxCompletionTokens(2000)
+                .temperature(0.7)
+                .build();
+            
+            ChatCompletionResponse response = client
+                .chatCompletion(new OpenAiClientContext(), request)
+                .execute();
+            
+            return extractResult(response);
+            
+        } catch (Exception e) {
+            log.error("同步对话失败", e);
+            return ChatResult.error(e.getMessage());
+        }
+    }
+    
+    /**
+     * 流式对话
+     */
+    public void chatStream(String systemPrompt, String userMessage, 
+                          Consumer<String> onChunk, 
+                          Runnable onComplete, 
+                          Consumer<Exception> onError) {
+        
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .model(defaultModel)
+            .addSystemPrompt(systemPrompt)
+            .addUserMessage(userMessage)
+            .stream(true)
+            .maxCompletionTokens(2000)
+            .temperature(0.7)
+            .build();
+        
+        client.chatCompletion(new OpenAiClientContext(), request)
+            .onPartialResponse(chunk -> {
+                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                    String content = chunk.choices().get(0).delta().content();
+                    if (content != null) {
+                        onChunk.accept(content);
+                    }
+                }
+            })
+            .onComplete(onComplete)
+            .onError(onError)
+            .execute();
+    }
+    
+    /**
+     * 异步对话
+     */
+    public CompletableFuture<ChatResult> chatAsync(String systemPrompt, String userMessage) {
+        CompletableFuture<ChatResult> future = new CompletableFuture<>();
+        
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .model(defaultModel)
+            .addSystemMessage(systemPrompt)
+            .addUserMessage(userMessage)
+            .maxCompletionTokens(2000)
+            .build();
+        
+        client.chatCompletion(new OpenAiClientContext(), request)
+            .onResponse(response -> {
+                future.complete(extractResult(response));
+                return response;
+            })
+            .onError(error -> {
+                future.completeExceptionally(error);
+                return null;
+            })
+            .executeAsync();
+        
+        return future;
+    }
+    
+    /**
+     * 代码审查
+     */
+    public ChatResult codeReview(String code, String language, String userId) {
+        String systemPrompt = String.format("""
+            你是%s代码审查专家，请按以下顺序分析：
+            1. 安全问题（SQL注入、XSS等）
+            2. 性能问题（复杂度、内存泄漏等）
+            3. 代码规范（命名、注释、格式等）
+            4. 改进建议（具体代码示例）
+            
+            用户ID: %s
+            """, language, userId);
+        
+        String userMessage = String.format("""
+            请审查以下%s代码：
+            
+            ```%s
+            %s
+            ```
+            """, language, language, code);
+        
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .model("deepseek-chat")
+            .addSystemMessage(systemPrompt)
+            .addUserMessage(userMessage)
+            .maxCompletionTokens(3000)
+            .temperature(0.3)
+            .metadata(Map.of("type", "code_review", "language", language, "user", userId))
+            .build();
+        
+        try {
+            ChatCompletionResponse response = client
+                .chatCompletion(new OpenAiClientContext(), request)
+                .execute();
+            
+            return extractResult(response);
+            
+        } catch (Exception e) {
+            log.error("代码审查失败", e);
+            return ChatResult.error(e.getMessage());
+        }
+    }
+    
+    /**
+     * 文件内容分析
+     */
+    public ChatResult analyzeFile(String fileName, String fileContent, String analysisType) {
+        String systemPrompt = String.format("""
+            你是文档分析专家，进行%s分析。
+            要求：结构化输出、关键点提取、具体建议。
+            """, analysisType);
+        
+        String userMessage = String.format("""
+            文件名：%s
+            分析类型：%s
+            
+            文件内容：
+            %s
+            """, fileName, analysisType, 
+            fileContent.length() > 10000 ? 
+                fileContent.substring(0, 10000) + "\n\n[内容已截断]" : 
+                fileContent);
+        
+        return chatSync(systemPrompt, userMessage);
+    }
+    
+    /**
+     * 获取可用模型列表
+     */
+    public List<String> getAvailableModels() {
+        try {
+            return client.models().data().stream()
+                .map(model -> model.id())
+                .toList();
+        } catch (Exception e) {
+            log.error("获取模型列表失败", e);
+            return List.of("deepseek-chat", "deepseek-reasoner"); // 返回已知模型
+        }
+    }
+    
+    /**
+     * 关闭客户端
+     */
+    public void shutdown() {
+        if (client != null) {
+            client.shutdown();
+        }
+    }
+    
+    // 辅助方法
+    private ChatResult extractResult(ChatCompletionResponse response) {
+        if (response == null || response.choices() == null || response.choices().isEmpty()) {
+            return ChatResult.error("Empty response");
+        }
+        
+        String content = response.choices().get(0).message().content();
+        Usage usage = response.usage();
+        
+        return ChatResult.success(
+            content,
+            usage.promptTokens(),
+            usage.completionTokens(),
+            usage.totalTokens()
+        );
+    }
+    
+    // 结果封装类
+    public static class ChatResult {
+        private final boolean success;
+        private final String content;
+        private final String error;
+        private final int promptTokens;
+        private final int completionTokens;
+        private final int totalTokens;
+        
+        private ChatResult(boolean success, String content, String error, 
+                          int promptTokens, int completionTokens, int totalTokens) {
+            this.success = success;
+            this.content = content;
+            this.error = error;
+            this.promptTokens = promptTokens;
+            this.completionTokens = completionTokens;
+            this.totalTokens = totalTokens;
+        }
+        
+        public static ChatResult success(String content, int promptTokens, 
+                                        int completionTokens, int totalTokens) {
+            return new ChatResult(true, content, null, promptTokens, completionTokens, totalTokens);
+        }
+        
+        public static ChatResult error(String error) {
+            return new ChatResult(false, null, error, 0, 0, 0);
+        }
+        
+        // getters...
+        public boolean isSuccess() { return success; }
+        public String getContent() { return content; }
+        public String getError() { return error; }
+        public int getPromptTokens() { return promptTokens; }
+        public int getCompletionTokens() { return completionTokens; }
+        public int getTotalTokens() { return totalTokens; }
+    }
+}
+
+// 使用示例
+class ServiceExample {
+    public static void main(String[] args) {
+        DeepSeekService service = new DeepSeekService(
+            System.getenv("DEEPSEEK_API_KEY"),
+            "https://api.deepseek.com"
+        );
+        
+        try {
+            // 1. 同步调用
+            DeepSeekService.ChatResult result = service.chatSync(
+                "你是一个技术文档编写助手",
+                "请帮我写一个Redis缓存的Java使用指南"
+            );
+            
+            if (result.isSuccess()) {
+                System.out.println("回答: " + result.getContent());
+                System.out.println("Token使用: " + result.getTotalTokens());
+            }
+            
+            // 2. 代码审查
+            String javaCode = """
+                public class UserService {
+                    public User getUser(String id) {
+                        String sql = "SELECT * FROM users WHERE id = '" + id + "'";
+                        return jdbcTemplate.queryForObject(sql, User.class);
+                    }
+                }
+                """;
+            
+            DeepSeekService.ChatResult review = service.codeReview(javaCode, "Java", "dev_001");
+            System.out.println("代码审查结果: " + review.getContent());
+            
+            // 3. 获取可用模型
+            System.out.println("可用模型: " + service.getAvailableModels());
+            
+        } finally {
+            service.shutdown();
+        }
+    }
+}
+```
+
+## 🎯 完整工作流示例
+
+### 8. **从初始化到响应的完整流程**
+
+```java
+import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
+import io.github.pigmesh.ai.deepseek.core.chat.*;
+import io.github.pigmesh.ai.deepseek.core.OpenAiClientContext;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+/**
+ * 完整的对话式应用示例
+ */
+public class CompleteWorkflowExample {
+    
+    private DeepSeekClient client;
+    private List<Message> conversationHistory;
+    
+    public CompleteWorkflowExample(String apiKey) {
+        // 1. 初始化客户端
+        this.client = DeepSeekClient.builder()
+            .openAiApiKey(apiKey)
+            .baseUrl("https://api.deepseek.com")
+            .model("deepseek-chat")
+            .systemMessage("你是一个有帮助的AI助手")
+            .connectTimeout(java.time.Duration.ofSeconds(30))
+            .logRequests(true)
+            .build();
+        
+        // 2. 初始化对话历史
+        this.conversationHistory = new ArrayList<>();
+        this.conversationHistory.add(
+            SystemMessage.builder()
+                .content("你是一个友好的AI助手，回答要简洁明了。")
+                .build()
+        );
+    }
+    
+    /**
+     * 发送消息并获取响应
+     */
+    public String sendMessage(String userMessage) {
+        try {
+            // 3. 添加用户消息到历史
+            conversationHistory.add(UserMessage.from(userMessage));
+            
+            // 4. 构建请求
+            ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .messages(conversationHistory)
+                .maxCompletionTokens(2000)
+                .temperature(0.7)
+                .build();
+            
+            // 5. 执行请求
+            System.out.println("正在与DeepSeek通信...");
+            ChatCompletionResponse response = client
+                .chatCompletion(new OpenAiClientContext(), request)
+                .execute();
+            
+            // 6. 处理响应
+            if (response.choices() != null && !response.choices().isEmpty()) {
+                String aiResponse = response.choices().get(0).message().content();
+                
+                // 7. 添加AI响应到历史
+                conversationHistory.add(AssistantMessage.from(aiResponse));
+                
+                // 8. 限制历史长度
+                if (conversationHistory.size() > 20) {
+                    conversationHistory = conversationHistory.subList(
+                        conversationHistory.size() - 10, conversationHistory.size()
+                    );
+                }
+                
+                // 9. 返回结果
+                return aiResponse + 
+                    "\n\n[Tokens: " + response.usage().totalTokens() + "]";
+            }
+            
+            return "抱歉，没有收到响应";
+            
+        } catch (Exception e) {
+            // 移除失败的用户消息
+            conversationHistory.remove(conversationHistory.size() - 1);
+            return "错误: " + e.getMessage();
+        }
+    }
+    
+    /**
+     * 流式对话
+     */
+    public void streamConversation(String userMessage) {
+        conversationHistory.add(UserMessage.from(userMessage));
+        
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+            .messages(conversationHistory)
+            .stream(true)
+            .maxCompletionTokens(2000)
+            .build();
+        
+        StringBuilder fullResponse = new StringBuilder();
+        
+        client.chatCompletion(new OpenAiClientContext(), request)
+            .onPartialResponse(chunk -> {
+                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                    String content = chunk.choices().get(0).delta().content();
+                    if (content != null) {
+                        System.out.print(content);
+                        fullResponse.append(content);
+                    }
+                }
+            })
+            .onComplete(() -> {
+                System.out.println("\n\n[流式响应完成]");
+                conversationHistory.add(AssistantMessage.from(fullResponse.toString()));
+            })
+            .onError(error -> {
+                System.err.println("流式错误: " + error.getMessage());
+                conversationHistory.remove(conversationHistory.size() - 1);
+            })
+            .execute();
+    }
+    
+    /**
+     * 清空对话历史
+     */
+    public void clearHistory() {
+        this.conversationHistory.clear();
+        this.conversationHistory.add(
+            SystemMessage.builder()
+                .content("你是一个友好的AI助手")
+                .build()
+        );
+        System.out.println("对话历史已清空");
+    }
+    
+    /**
+     * 关闭客户端
+     */
+    public void shutdown() {
+        if (client != null) {
+            client.shutdown();
+        }
+    }
+    
+    /**
+     * 交互式控制台
+     */
+    public void startInteractiveConsole() {
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("=== DeepSeek 交互式控制台 ===");
+        System.out.println("命令: /clear 清空历史, /quit 退出, /stream 流式模式");
+        
+        while (true) {
+            System.out.print("\n你: ");
+            String input = scanner.nextLine().trim();
+            
+            if (input.isEmpty()) continue;
+            
+            if ("/quit".equalsIgnoreCase(input)) {
+                break;
+            } else if ("/clear".equalsIgnoreCase(input)) {
+                clearHistory();
+                continue;
+            } else if ("/stream".equalsIgnoreCase(input)) {
+                System.out.print("流式消息: ");
+                String streamMsg = scanner.nextLine();
+                System.out.print("AI: ");
+                streamConversation(streamMsg);
+                continue;
+            }
+            
+            System.out.print("AI: ");
+            String response = sendMessage(input);
+            System.out.println(response);
+        }
+        
+        scanner.close();
+        shutdown();
+        System.out.println("再见！");
+    }
+    
+    public static void main(String[] args) {
+        String apiKey = System.getenv("DEEPSEEK_API_KEY");
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            System.err.println("请设置 DEEPSEEK_API_KEY 环境变量");
+            return;
+        }
+        
+        CompleteWorkflowExample app = new CompleteWorkflowExample(apiKey);
+        app.startInteractiveConsole();
+    }
+}
+```
+
+## 📝 关键点总结
+
+### **客户端使用流程：**
+
+1. **初始化**：`DeepSeekClient.builder().openAiApiKey().build()`
+2. **构建请求**：使用 `ChatCompletionRequest.builder()` 
+3. **执行调用**：
+   - 同步：`.execute()`
+   - 异步：`.executeAsync()`
+   - 流式：`.onPartialResponse()` + `.execute()`
+4. **处理响应**：从 `ChatCompletionResponse` 提取内容
+5. **资源清理**：`client.shutdown()`
+
+### **最佳实践：**
+
+- 从环境变量获取 API 密钥
+- 设置合理的超时时间
+- 启用日志便于调试
+- 使用 `finally` 块确保 `shutdown()` 被调用
+- 流式响应适合长文本生成
+- 异步调用适合 UI 应用
+
+这个完整的示例展示了从客户端初始化到请求构建、执行和响应处理的完整流程。你可以根据具体需求选择合适的调用方式。
