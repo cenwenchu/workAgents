@@ -260,7 +260,7 @@ public class PodCastUtil {
 
             UserMessage userMessage = UserMessage.builder()
                         .addText("针对这个播客的内容，首先可以去掉很多寒暄，日常聊天，以及一些无关紧要的内容；然后根据对话，提炼出一些重点知识点，或者话题；"+
-                            "最后根据这些知识点和话题，适当的补充一些专业词汇的介绍，生成一份中文摘要。播客文字内容如下：")
+                            "最后根据这些知识点和话题，适当的补充一些专业词汇的介绍，生成一份中文摘要，直接输出摘要，不要有其他的回复信息。播客文字内容如下：")
                         .addText(pdfContent).build();
 
             ChatCompletionRequest request = ChatCompletionRequest.builder()

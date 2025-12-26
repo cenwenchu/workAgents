@@ -26,10 +26,16 @@ import com.microsoft.playwright.options.LoadState;
  */
 public class PodwiseAutoMan {
 
-    public final static String DownloadDir = "/Users/cenwenchu/Desktop/podItems/";
+    public final static String DOWNLOAD_DIR = "/Users/cenwenchu/Desktop/podcastItems/";
+    public final static String DOWNLOAD_DIR_CN = DOWNLOAD_DIR + "CN/";
+    public final static String DOWNLOAD_DIR_SUMMARY = DOWNLOAD_DIR + "summary/";
+    public final static String DOWNLOAD_DIR_IMAGE = DOWNLOAD_DIR + "Image/";
 
-    private final static int MaxProcessCount = 10;
-    private final static int ProcessSummaryCount = 1;
+    private static final int MAX_PROCESS_COUNT = 10;
+    private static final int PROCESS_SUMMARY_COUNT = 1;
+
+    Playwright playwright = null;
+    Browser browser = null;
 
     //两个模型枚举
     public enum ModelType {
@@ -40,17 +46,21 @@ public class PodwiseAutoMan {
 
 	public static void main(String[] args) {
 
+        PodwiseAutoMan autoMan = new PodwiseAutoMan();
+
         // 执行自动化操作
-        //new PodwiseAutoMan().connectAndAutomate();
+        autoMan.connectAndAutomate();
+
+        autoMan.performAutomationDownloadTasks();
 
         //对于下载的文件，通过调用gemini的api来做翻译和中文摘要
-        new PodwiseAutoMan().processDownloadedFiles(ProcessSummaryCount,ModelType.DEEPSEEK,true);
+        autoMan.processDownloadedFiles(PROCESS_SUMMARY_COUNT,ModelType.DEEPSEEK,false);
+
+        autoMan.disconnectBrowser();
 		
 	}
 
     public void connectAndAutomate() {
-        Playwright playwright = null;
-        Browser browser = null;
         
         try {
             playwright = Playwright.create();
@@ -78,42 +88,43 @@ public class PodwiseAutoMan {
             
             // 2. 连接到现有浏览器
             browser = playwright.chromium().connectOverCDP(wsEndpoint);
-            
-            // 3. 获取默认上下文
-            BrowserContext context = browser.contexts().isEmpty() ? 
-                browser.newContext() : browser.contexts().get(0);
-            
-            // 4. 使用现有页面或创建新页面
-            Page page;
-            page = context.newPage();
-            System.out.println("创建新页面");
-            
-            // 5. 导航到目标网站
-            page.navigate("https://podwise.ai/dashboard/episodes");
-            
-            // 6. 检查是否已登录
-            if (!PodCastUtil.isLoggedIn(page)) {
-               System.out.println("用户未登录，请手动登录后继续");
-                // 等待用户手动登录
-                PodCastUtil.waitForManualLogin(page);
-            }
-
-            performAutomationTasks(page,context);
                  
         } catch (Exception e) {
             e.printStackTrace();
-        } finally {
-            if (playwright != null) {
+        }
+    }
+
+
+    public void disconnectBrowser() {
+        if (playwright != null) {
                 playwright.close();
             }
 
-            // 7. 杀死占用 9222 端口的进程
-            PodCastUtil.killChromeProcess(9222);
-        }
+        PodCastUtil.killChromeProcess(9222);
     }
     
     
-    private void performAutomationTasks(Page page,BrowserContext context) {
+    private void performAutomationDownloadTasks() {
+
+        if (browser == null) {
+            System.out.println("浏览器未连接，请先连接浏览器");
+            return;
+        }
+
+        BrowserContext context = browser.contexts().isEmpty() ? 
+            browser.newContext() : browser.contexts().get(0);
+        
+        Page page;
+        page = context.newPage();
+        System.out.println("创建新页面");
+        
+        page.navigate("https://podwise.ai/dashboard/episodes");
+        
+        if (!PodCastUtil.isLoggedIn(page)) {
+            System.out.println("用户未登录，请手动登录后继续");
+            // 等待用户手动登录
+            PodCastUtil.waitForManualLogin(page);
+        }
 
         List<PodCastItem> itemList = new ArrayList<>();
         List<String> itemNameList = new ArrayList<>();
@@ -167,7 +178,7 @@ public class PodwiseAutoMan {
     {
         try {
             // 从本地文件夹载入已经处理过的item
-            File folder = new File(DownloadDir);
+            File folder = new File(DOWNLOAD_DIR);
             if (!folder.exists()) {
                 folder.mkdirs();
             }
@@ -286,7 +297,7 @@ public class PodwiseAutoMan {
                 System.out.println("滚动操作时出错: " + e.getMessage());
                 e.printStackTrace();
             }
-        } while (tryTimes <= 3 && processCount < MaxProcessCount) ;
+        } while (tryTimes <= 3 && processCount < MAX_PROCESS_COUNT) ;
         
     }
 
@@ -342,7 +353,7 @@ public class PodwiseAutoMan {
                                 });
                     
                                     // 指定保存路径
-                                String downloadPath = DownloadDir + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
+                                String downloadPath = DOWNLOAD_DIR + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
                                 download.saveAs(Paths.get(downloadPath));
 
                                  // 获取下载信息 
@@ -412,7 +423,7 @@ public class PodwiseAutoMan {
                                                     newDownloadBtn.click(); // 替换为实际的下载按钮选择器
                                                 });
 
-                                                downloadPath = DownloadDir + "CN/CN_" + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
+                                                downloadPath = DOWNLOAD_DIR_CN + "CN_" + item.channelName + "_" + item.title + ".pdf"; // 指定完整路径和文件名
                                                 download.saveAs(Paths.get(downloadPath));
 
                                                 System.out.println("中文保存路径: " + downloadPath);
@@ -516,10 +527,10 @@ public class PodwiseAutoMan {
 
         try {
             // 确保下载目录存在
-            java.io.File dir = new java.io.File(DownloadDir);
-            java.io.File outputDir = new java.io.File(DownloadDir+"summary/");
+            java.io.File dir = new java.io.File(DOWNLOAD_DIR);
+            java.io.File outputDir = new java.io.File(DOWNLOAD_DIR_SUMMARY);
             if (!dir.exists() || !dir.isDirectory()) {
-                System.out.println("下载目录不存在: " + DownloadDir);
+                System.out.println("下载目录不存在: " + DOWNLOAD_DIR);
                 return;
             }
 
@@ -592,7 +603,7 @@ public class PodwiseAutoMan {
                 if(needGenerateImage)
                 {
                     // 调用 Gemini API 生成图片摘要
-                    PodCastUtil.generateImageWithGemini(outputFile.getAbsolutePath(),DownloadDir+"image/");
+                    PodCastUtil.generateImageWithGemini(outputFile.getAbsolutePath(),DOWNLOAD_DIR_IMAGE);
                 }
 
             }
