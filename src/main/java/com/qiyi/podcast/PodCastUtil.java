@@ -1,13 +1,16 @@
 package com.qiyi.podcast;
 
 import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
 
 import org.apache.pdfbox.Loader;
@@ -39,11 +42,6 @@ public class PodCastUtil {
 
     static String GEMINI_API_KEY = "";
     static String DEEPSEEK_API_KEY = "";
-
-    static String summaryPrompt = "针对这个播客的内容，首先可以去掉很多寒暄，日常聊天，以及一些无关紧要的内容；然后根据对话，提炼出一些重点知识点，或者话题；"+
-                            "最后根据这些知识点和话题，适当的补充一些专业词汇的介绍，生成一份中文摘要；中文摘要后面，增加对于整个播客优质对话的摘录，作为原文亮点，不用在意输出内容的长度，只要好的对话内容，就保留。"
-                            +"直接输出摘要，不要有其他的回复信息。播客文字内容如下：";
-    static String imagePrompt = "针对这份播客摘要，生成一张图片，图片中包含摘要中的核心知识点";
 
     public static String getChromeWsEndpoint(int port) {
         try {
@@ -172,7 +170,7 @@ public class PodCastUtil {
     }
 
 
-    public static void generateImageWithGemini(String fileString, String outputDirectory) {
+    public static void generateImageWithGemini(String fileString, String outputDirectory,String imagePrompt) {
 
             initClientConfig();
 
@@ -241,7 +239,7 @@ public class PodCastUtil {
     }
 
 
-    public static String generateSummaryWithDeepSeek(java.io.File pdfFile) 
+    public static String generateSummaryWithDeepSeek(java.io.File pdfFile,String summaryPrompt) 
     {
         String responseText = "";
 
@@ -252,7 +250,6 @@ public class PodCastUtil {
             .baseUrl("https://api.deepseek.com")
             .model("deepseek-chat")
             .connectTimeout(java.time.Duration.ofSeconds(30))
-            .readTimeout(java.time.Duration.ofSeconds(60))
             .logRequests(true)                          // 开启请求日志
             .logResponses(true)                         // 开启响应日志
             .build();
@@ -311,7 +308,7 @@ public class PodCastUtil {
         }
     }
 
-    public static String generateSummaryWithGemini(java.io.File pdfFile) 
+    public static String generateSummaryWithGemini(java.io.File pdfFile,String summaryPrompt) 
     {
         
         String responseText = "";
@@ -358,6 +355,20 @@ public class PodCastUtil {
         }
 
         return responseText;
+    }
+
+    public static String[] readPodCastNamesFromFile(String filePath) {
+        List<String> podCastNames = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                podCastNames.add(line.trim());
+            }
+        } catch (IOException e) {
+            System.err.println("读取播客列表文件失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return podCastNames.toArray(new String[0]);
     }
 
 }
