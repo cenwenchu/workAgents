@@ -15,10 +15,10 @@ import com.qiyi.podcast.PodwiseAutoMan.ModelType;
 
 public class DownLoadPodCastTask {
 
-    public final static String DOWNLOAD_DIR = "/Users/cenwenchu/Desktop/podcastItems/";
-    public final static String DOWNLOAD_DIR_CN = DOWNLOAD_DIR + "CN/";
-    public final static String DOWNLOAD_DIR_SUMMARY = DOWNLOAD_DIR + "summary/";
-    public final static String DOWNLOAD_DIR_IMAGE = DOWNLOAD_DIR + "Image/";
+    public  String DOWNLOAD_DIR = "/Users/cenwenchu/Desktop/podcastItems/";
+    public  String DOWNLOAD_DIR_CN = DOWNLOAD_DIR + "CN/";
+    public  String DOWNLOAD_DIR_SUMMARY = DOWNLOAD_DIR + "summary/";
+    public  String DOWNLOAD_DIR_IMAGE = DOWNLOAD_DIR + "Image/";
 
     static String summaryPrompt = "针对这个播客的内容，首先可以去掉很多寒暄，日常聊天，以及一些无关紧要的内容；然后根据对话，提炼出一些重点知识点，或者话题；"+
                             "最后根据这些知识点和话题，适当的补充一些专业词汇的介绍，生成一份中文摘要；中文摘要后面，增加对于整个播客优质对话的摘录，作为原文亮点，不用在意输出内容的长度，只要好的对话内容，就保留。"
@@ -27,9 +27,13 @@ public class DownLoadPodCastTask {
 
     Browser browser = null;
 
-    public DownLoadPodCastTask(Browser browser)
+    public DownLoadPodCastTask(Browser browser,String DownLoadSaveDir)
     {
         this.browser = browser;
+        this.DOWNLOAD_DIR = DownLoadSaveDir;
+        this.DOWNLOAD_DIR_CN = DOWNLOAD_DIR + "CN/";
+        this.DOWNLOAD_DIR_SUMMARY = DOWNLOAD_DIR + "summary/";
+        this.DOWNLOAD_DIR_IMAGE = DOWNLOAD_DIR + "Image/";
     }
 
     public void performAutomationDownloadTasks(int maxprocessCount,int maxTryTimes,boolean onlyReadReadyPodCast) {
