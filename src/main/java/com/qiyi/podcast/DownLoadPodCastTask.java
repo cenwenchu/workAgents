@@ -568,7 +568,7 @@ public class DownLoadPodCastTask {
 
                         log("最大处理文件数: " + finalMaxProcessCount + 
                         " ，已经处理完成第 " + currentProcessedCount + " 个任务，已跳过 " 
-                        + currentSkipCount + " 个文件，剩余待处理 " + (finalMaxProcessCount - currentProcessedCount)
+                        + currentSkipCount + " 个文件，剩余待处理 " + (finalMaxProcessCount - currentProcessedCount - currentSkipCount)
                         + "，文件目录中文件数量为: " + files.length);
 
                         if (needGenerateImage && outputFile.exists()) {

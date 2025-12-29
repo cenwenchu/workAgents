@@ -65,7 +65,7 @@ public class PodwiseAutoMan {
             maxDuplicatePages = Integer.parseInt(input.trim());
         }
 
-        System.out.print("请输入 处理多少下载后的文件 (默认 " + downloadMaxProcessCount + "): ");
+        System.out.print("请输入 处理多少下载后的文件 (默认 " + downloadMaxProcessCount + "，0为目录下所有未处理的文件): ");
         input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             downloadMaxProcessCount = Integer.parseInt(input.trim());
