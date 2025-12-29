@@ -47,35 +47,37 @@ public class PodwiseAutoMan {
         
         System.out.println("请输入参数 (直接回车使用默认值):");
         
-        System.out.print("请输入 maxProcessCount (默认 " + maxProcessCount + "): ");
+        System.out.print("请输入 播客最大新下载条数 (默认 " + maxProcessCount + "): ");
         String input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             maxProcessCount = Integer.parseInt(input.trim());
         }
 
-        System.out.print("请输入 maxTryTimes (默认 " + maxTryTimes + "): ");
+        System.out.print("请输入 播客下载翻页，最大尝试次数 (默认 " + maxTryTimes + "): ");
         input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             maxTryTimes = Integer.parseInt(input.trim());
         }
 
-        System.out.print("请输入 downloadMaxProcessCount (默认 " + downloadMaxProcessCount + "): ");
+        System.out.print("请输入 多少页面全量数据已经处理，自动结束播客下载 (默认 " + maxDuplicatePages + "): ");
+        input = scanner.nextLine();
+        if (!input.trim().isEmpty()) {
+            maxDuplicatePages = Integer.parseInt(input.trim());
+        }
+
+        System.out.print("请输入 处理多少下载后的文件 (默认 " + downloadMaxProcessCount + "): ");
         input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             downloadMaxProcessCount = Integer.parseInt(input.trim());
         }
         
-        System.out.print("请输入 threadPoolSize (默认 " + threadPoolSize + "): ");
+        System.out.print("请输入 处理下载后的文件，最大线程数 (默认 " + threadPoolSize + "): ");
         input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             threadPoolSize = Integer.parseInt(input.trim());
         }
 
-        System.out.print("请输入 maxDuplicatePages (默认 " + maxDuplicatePages + "): ");
-        input = scanner.nextLine();
-        if (!input.trim().isEmpty()) {
-            maxDuplicatePages = Integer.parseInt(input.trim());
-        }
+        
 
         // 执行自动化操作
         autoMan.connectAndAutomate();
