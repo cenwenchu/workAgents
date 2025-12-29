@@ -513,7 +513,7 @@ public class DownLoadPodCastTask {
                 String pdfFileName = pdfFile.getName();
                 log("正在处理文件: " + pdfFileName);
 
-                String outputFileName = pdfFileName.replace(".pdf", "_cn_summary.txt");
+                String outputFileName = pdfFileName.replace(".pdf", "[_summary].txt");
                 String outputFilePath = outputDir.getPath() + "/" + outputFileName;
                 File outputFile = new File(outputFilePath);
 

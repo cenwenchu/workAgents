@@ -50,7 +50,7 @@ public class PodwiseAutoMan {
          //对于下载的文件，通过调用gemini的api来做翻译和中文摘要
          downLoadPodCastTask.processDownloadedFiles(downLoadPodCastTask.DOWNLOAD_DIR_CN,
             downLoadPodCastTask.DOWNLOAD_DIR_SUMMARY,downLoadPodCastTask.DOWNLOAD_DIR_IMAGE,
-            5,ModelType.DEEPSEEK,false,true);
+            2,ModelType.DEEPSEEK,false,true);
 
 
 

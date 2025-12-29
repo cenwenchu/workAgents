@@ -366,8 +366,8 @@ public class PodCastUtil {
 
             responseText = sb.toString();
 
-            System.out.println("\n=== DeepSeek 回答 ===");
-            System.out.println(responseText);
+            //System.out.println("\n=== DeepSeek 回答 ===");
+            //System.out.println(responseText);
 
         }
         else
@@ -394,14 +394,14 @@ public class PodCastUtil {
                 // 4. 处理响应
                 if (response != null && response.choices() != null && !response.choices().isEmpty()) {
                     responseText = response.choices().get(0).message().content();
-                    System.out.println("\n=== DeepSeek 回答 ===");
-                    System.out.println(responseText);
+                    //System.out.println("\n=== DeepSeek 回答 ===");
+                    //System.out.println(responseText);
                     
                     // 打印使用统计
-                    System.out.println("\n=== 使用统计 ===");
-                    System.out.println("Prompt tokens: " + response.usage().promptTokens());
-                    System.out.println("Completion tokens: " + response.usage().completionTokens());
-                    System.out.println("Total tokens: " + response.usage().totalTokens());
+                    //System.out.println("\n=== 使用统计 ===");
+                    //System.out.println("Prompt tokens: " + response.usage().promptTokens());
+                    //System.out.println("Completion tokens: " + response.usage().completionTokens());
+                    //System.out.println("Total tokens: " + response.usage().totalTokens());
                 }
                 else {
                     System.out.println("未收到有效响应");
@@ -483,7 +483,7 @@ public class PodCastUtil {
 
             responseText = response.text();
             
-            System.out.println(responseText);
+            //System.out.println(responseText);
         }
         catch (Exception ex) {
             System.out.println("调用 Gemini API 失败: " + ex.getMessage());
