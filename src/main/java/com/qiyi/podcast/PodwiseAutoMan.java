@@ -4,7 +4,6 @@
 package com.qiyi.podcast;
 
 
-import java.io.File;
 import java.io.IOException;
 
 import com.microsoft.playwright.Browser;
@@ -36,6 +35,17 @@ public class PodwiseAutoMan {
         
         PodwiseAutoMan autoMan = new PodwiseAutoMan();
 
+        int maxProcessCount = 5;
+        int maxTryTimes = 5;
+        int downloadMaxProcessCount = 0;
+
+        // 从main入参读取上面的几个参数，支持提示后输入
+        if (args.length >= 4) {
+            maxProcessCount = Integer.parseInt(args[0]);
+            maxTryTimes = Integer.parseInt(args[1]);
+            downloadMaxProcessCount = Integer.parseInt(args[2]);
+        }
+
         // 执行自动化操作
         autoMan.connectAndAutomate();
 
@@ -45,12 +55,12 @@ public class PodwiseAutoMan {
          //downLoadPodCastTask.batchRenameChineseFiles(ModelType.DEEPSEEK, 30);
 
          //下载关注的播客节目的文本文件
-         downLoadPodCastTask.performAutomationDownloadTasks(5,5,true, ModelType.DEEPSEEK,20);
+         downLoadPodCastTask.performAutomationDownloadTasks(maxProcessCount,maxTryTimes,true, ModelType.DEEPSEEK,20);
 
          //对于下载的文件，通过调用gemini的api来做翻译和中文摘要
          downLoadPodCastTask.processDownloadedFiles(downLoadPodCastTask.DOWNLOAD_DIR_CN,
             downLoadPodCastTask.DOWNLOAD_DIR_SUMMARY,downLoadPodCastTask.DOWNLOAD_DIR_IMAGE,
-            1,ModelType.DEEPSEEK,false,true);
+            downloadMaxProcessCount,ModelType.DEEPSEEK,false,true);
 
 
 

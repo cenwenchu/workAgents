@@ -494,7 +494,7 @@ public class DownLoadPodCastTask {
     /**
      * 处理已下载的文件（生成摘要、图片等）
      * 
-     * @param maxProcessCount 最大处理文件数量
+     * @param maxProcessCount 最大处理文件数量，0表示处理所有文件
      * @param modelType 使用的大模型类型 (DEEPSEEK / GEMINI)
      * @param needGenerateImage 是否需要生成配图 (使用 Gemini)
      * @param isStreamingProcess 是否使用流式输出 (针对 DeepSeek)
@@ -525,6 +525,10 @@ public class DownLoadPodCastTask {
             }
 
             log("找到 " + files.length + " 个 PDF 文件，开始生成中文摘要...");
+
+            if (maxProcessCount == 0) {
+                maxProcessCount = files.length;
+            }
 
             for (File pdfFile : files) {
                 if (processedCount >= maxProcessCount) break;
