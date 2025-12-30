@@ -1,15 +1,13 @@
 package com.qiyi;
 
-import org.junit.Test;
-
+import java.io.IOException;
 import com.qiyi.podcast.PlayWrightUtil;
 import com.qiyi.podcast.PodCastToWechatTask;
 
 public class PodCastToWechatTaskTest {
 
     
-    public static void main(String[] args) {
-
+    public static void main(String[] args) throws IOException {
 
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();

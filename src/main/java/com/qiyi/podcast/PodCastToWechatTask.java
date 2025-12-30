@@ -1,5 +1,7 @@
 package com.qiyi.podcast;
 
+import java.io.IOException;
+
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.ElementHandle;
@@ -19,7 +21,7 @@ public class PodCastToWechatTask {
     }
     
     //根据指定文件，自动发布微信公众号文章
-    public void publishPodcastToWechat(String podcastFilePath,boolean isDraft) {
+    public void publishPodcastToWechat(String podcastFilePath,boolean isDraft) throws IOException {
 
         if (browser == null) {
             log("浏览器未连接，请先连接浏览器");
@@ -38,6 +40,22 @@ public class PodCastToWechatTask {
 
         // 填写播客信息
         WechatArticle article = PodCastUtil.generateWechatArticleFromDeepseek(podcastFilePath);
+
+        // 验证文章是否符合要求
+        if (!PodCastUtil.validateArticle(article)) {
+            log("文章不符合要求，无法发布");
+            return;
+        }
+
+
+        //需要吧content里面的内容，如果有两行及以上的回车换行要压缩为一行
+        article.setContent(article.getContent()
+            .replaceAll("\n{2,}", "\n")
+            .replace("（深度研究版）", "")
+            .replace("（快速传播版）", "")
+            .replace("#", ""));
+        
+        System.out.println(article.getContent());
 
         // 发布播客
         publishPodcast(context,page,article,isDraft);
@@ -81,18 +99,28 @@ public class PodCastToWechatTask {
         publishPage.click("//div/span[contains(@class,'js_article_tags_content') and contains(text(),'未添加')]");
         //在新打开的浮层页面上，点击分类
         publishPage.click("//input[contains(@placeholder,'选择合集')]");
+
+        //等待选项的出来
+        publishPage.waitForSelector("//li[contains(@class,'select-opt-li')]");
+
         //点击以后，会展开一个下拉菜单，如果分类存在，则点击分类
         if (publishPage.isVisible("//li[contains(text(),'" + article.getCategory() + "')]")) {
             publishPage.click("//li[contains(text(),'" + article.getCategory() + "')]");
 
             //点击浮层上的按钮叫做确定
             publishPage.click("//button[contains(text(),'确认')]");
+
+            System.out.println("设置了分类为："+article.getCategory());
         } 
         else
         {
             //分类不存在就关闭浮层,并且按钮可见
             publishPage.click("//h3[contains(text(),'合集')]/../button[contains(@class,'dialog__close-btn')]");
+            
+            System.out.println("分类不存在："+article.getCategory());
         }
+
+        
 
         //修改一下留言的配置
         publishPage.click("//div[@class='setting-group__content']");

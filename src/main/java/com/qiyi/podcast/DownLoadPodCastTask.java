@@ -694,11 +694,11 @@ public class DownLoadPodCastTask {
                     summary = PodCastUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
                     break;
                 case DEEPSEEK:
-                    summary = PodCastUtil.generateSummaryWithDeepSeek(pdfFile,SUMMARY_PROMPT,isStreamingProcess);
+                    summary = PodCastUtil.generateContentWithDeepSeekByFile(pdfFile,SUMMARY_PROMPT,isStreamingProcess);
                     break;
                 case ALL:
                     summary = "-- DeepSeek摘要 --\n" + 
-                              PodCastUtil.generateSummaryWithDeepSeek(pdfFile,SUMMARY_PROMPT,isStreamingProcess) +
+                              PodCastUtil.generateContentWithDeepSeekByFile(pdfFile,SUMMARY_PROMPT,isStreamingProcess) +
                               "\n\n\n\n-- Gemini 摘要 --\n" +
                               PodCastUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
                     break;

@@ -5,6 +5,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Paths;
@@ -20,6 +21,8 @@ import org.apache.pdfbox.text.PDFTextStripper;
 
 import java.nio.file.Files;
 
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -303,25 +306,25 @@ public class PodCastUtil {
 
 
     /**
-     * 使用 DeepSeek 模型生成摘要
+     * 使用 DeepSeek 模型生成文件内容
      * 
-     * @param pdfFile PDF文件对象
+     * @param file 文件对象
      * @param summaryPrompt 摘要提示词
      * @param isStreamingProcess 是否使用流式输出
-     * @return 生成的摘要文本
+     * @return 生成的文本
      * @throws IOException IO异常
      */
-    public static String generateSummaryWithDeepSeek(java.io.File pdfFile,String summaryPrompt,boolean isStreamingProcess) throws IOException 
+    public static String generateContentWithDeepSeekByFile(java.io.File file,String summaryPrompt,boolean isStreamingProcess) throws IOException 
     {
         String responseText = "";
 
         initClientConfig();
 
-        String pdfContent = readFileContent(pdfFile);
+        String content = readFileContent(file);
 
         UserMessage userMessage = UserMessage.builder()
                     .addText(summaryPrompt)
-                    .addText(pdfContent).build();
+                    .addText(content).build();
 
 
         if (isStreamingProcess)
@@ -443,12 +446,26 @@ public class PodCastUtil {
      */
     public static String readFileContent(java.io.File file) throws IOException {
 
-        try (PDDocument document = Loader.loadPDF(file)) {
-            // 2. 创建PDF文本提取器
-            PDFTextStripper stripper = new PDFTextStripper();
-            
-            // 3. 提取文本
-            return stripper.getText(document);
+        //判断如果是pdf用这种方式，如果是txt文件，就用其他方式读取
+        if (file.getName().toLowerCase().endsWith(".pdf")) {
+            try (PDDocument document = Loader.loadPDF(file)) {
+                // 2. 创建PDF文本提取器
+                PDFTextStripper stripper = new PDFTextStripper();
+                
+                // 3. 提取文本
+                return stripper.getText(document);
+            }
+        }
+        else {
+            // 读取普通文本文件
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                StringBuilder content = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    content.append(line).append("\n");
+                }
+                return content.toString();
+            }
         }
     }
 
@@ -640,24 +657,137 @@ public class PodCastUtil {
      * 
      * @param podcastFilePath 播客文件路径
      * @return 微信公众号文章对象
+     * @throws IOException 
      */
-    public static WechatArticle generateWechatArticleFromDeepseek(String podcastFilePath) {
+    public static WechatArticle generateWechatArticleFromDeepseek(String podcastFilePath) throws IOException {
+
+        String promptString = "根据以下的播客摘要，帮忙生成一个适合微信公众号的文章，返回内容请分成四部分：文章标题，文章摘要（控制在100字以内），文章分类（从生活、健康、科学、财经、科技、商业、其他中选一个），文章完整内容;返回格式如下：文章标题:xxx\n" + //
+                        "文章摘要:xxx\n" + //
+                        "文章分类:xxx\n" + //
+                        "文章完整内容:xxx\n，播客内容如下：:";
+
+        
+        String content = generateContentWithDeepSeekByFile(new java.io.File(podcastFilePath),promptString,true);
+
+
+        //System.out.println(content);
+
+        WechatArticle article =  parseFromString(content);
+        article.setAuthor("Curcuma");
+
+        article.setContent(
+            new StringBuilder().append(article.getContent()).
+            append("\n").append("-- 延伸阅读 --").append("\n")
+                .append(readFileContent(new java.io.File(podcastFilePath)).replace("*", " ")
+                .replace("**", "  ")).toString());
+
+        
+
+        return article;
+    }
+
+    public static WechatArticle parseFromString(String formattedText) {
 
         WechatArticle article = new WechatArticle();
 
-        article.setAuthor("放翁");
-        article.setTitle("放翁的播客"); 
-        article.setSummary("放翁的播客摘要。");
-        article.setContent("放翁的播客，分享技术、生活、思考等内容。");
-        article.setCategory("科技");
-
-        // String podcastContent = readFileToString(podcastFilePath);
-        // String prompt = String.format(DEEPSEEK_PROMPT_TEMPLATE, podcastContent);
-        // String responseText = chatWithDeepSeek(prompt);
+        BufferedReader reader = new BufferedReader(new StringReader(formattedText));
+        StringBuilder contentBuilder = new StringBuilder();
+        boolean inContentSection = false;
         
-        // article = parseWechatArticleFromResponse(responseText);
+        try {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                
+                if (line.startsWith("文章标题:")) {
+                    article.setTitle(extractValue(line, "文章标题:"));
+                } else if (line.startsWith("文章摘要:")) {
+                    article.setSummary(extractValue(line, "文章摘要:"));
+                } else if (line.startsWith("文章分类:")) {
+                    article.setCategory(extractValue(line, "文章分类:"));
+                } else if (line.startsWith("文章完整内容:")) {
+                    // 内容部分开始
+                    inContentSection = true;
+                    // 可能有冒号后的内容
+                    String afterColon = line.substring(line.indexOf(':') + 1).trim();
+                    if (!afterColon.isEmpty()) {
+                        contentBuilder.append(afterColon).append("\n");
+                    }
+                } else if (inContentSection) {
+                    // 如果line有换行，则去掉换行
+                    line = line.replace("\n", "");
 
+                    //如果单行长度超过20个字符的，且开头不是两个空格
+                    if (line.length() > 30 && !line.startsWith("  ")) {
+                        line = "    " + line;
+                    }
+                    contentBuilder.append(line).append("\n");
+                }
+            }
+
+            // 设置内容
+            article.setContent(contentBuilder.toString().trim());
+
+            article.setContent(article.getContent().replace("**", ""));
+            article.setContent(article.getContent().replace("*", ""));
+            
+        } catch (Exception e) {
+            System.err.println("解析文章时出错: " + e.getMessage());
+            e.printStackTrace();
+        }
         return article;
+    }
+
+    /**
+     * 提取字段值
+     * @param line 包含字段的行
+     * @param prefix 字段前缀（如"文章标题:"）
+     * @return 字段值
+     */
+    private static String extractValue(String line, String prefix) {
+        if (line == null || prefix == null) {
+            return "";
+        }
+        return line.substring(prefix.length()).trim();
+    }
+
+    /**
+     * 验证解析结果
+     * @param article 解析后的文章对象
+     * @return 验证结果
+     */
+    public static boolean validateArticle(WechatArticle article) {
+        if (article == null) {
+            return false;
+        }
+        
+        if (article.getTitle() == null || article.getTitle().isEmpty()) {
+            System.err.println("文章标题为空");
+            return false;
+        }
+        
+        if (article.getSummary() == null || article.getSummary().isEmpty()) {
+            System.err.println("文章摘要为空");
+            return false;
+        }
+        
+        if (article.getCategory() == null || article.getCategory().isEmpty()) {
+            System.err.println("文章分类为空");
+            return false;
+        }
+        
+        if (article.getContent() == null || article.getContent().isEmpty()) {
+            System.err.println("文章内容为空");
+            return false;
+        }
+        
+        // 验证摘要长度
+        if (article.getSummary().length() > 200) {
+            System.err.println("文章摘要超过限制: " + article.getSummary().length() + "字");
+            return false;
+        }
+        
+        return true;
     }
 
 }
