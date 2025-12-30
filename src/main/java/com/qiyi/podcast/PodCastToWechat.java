@@ -7,12 +7,49 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 
-public class PodCastToWechatTask {
+public class PodCastToWechat {
 
     private Browser browser;
     private static final int DEFAULT_TIMEOUT_MS = 60*1000;
 
-    public PodCastToWechatTask(Browser browser) {
+
+    public static void main(String[] args) throws IOException {
+
+        // 支持从命令行里面输入 publishPodcastDir，通过交互的方式提示用户输入
+        String publishPodcastDir = "/Users/cenwenchu/Desktop/podCastItems/publish/";
+        java.util.Scanner scanner = new java.util.Scanner(System.in);
+        System.out.print("请输入 播客发布目录 (默认 " + publishPodcastDir + "): ");
+        String input = scanner.nextLine();
+        if (!input.trim().isEmpty()) {
+            publishPodcastDir = input.trim();
+        }
+        
+        // 执行自动化操作
+        PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
+        if (connection == null){
+            System.out.println("无法连接到浏览器，程序退出");
+            return;
+        }
+
+        PodCastToWechat task = new PodCastToWechat(connection.browser);
+
+
+        // 从 publishPodcastDir 目录下，读取所有文件，然后分别发送到微信公众号
+        java.util.List<String> podcastFilePaths = java.nio.file.Files.walk(java.nio.file.Paths.get(publishPodcastDir))
+            .filter(p -> java.nio.file.Files.isRegularFile(p))
+            .map(p -> p.toString())
+            .collect(java.util.stream.Collectors.toList());
+        
+        // 发布播客到微信公众号
+        for (String podcastFilePath : podcastFilePaths) {
+            task.publishPodcastToWechat(podcastFilePath, true);
+        }
+
+        // 断开浏览器连接
+        PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
+    }
+
+    public PodCastToWechat(Browser browser) {
         this.browser = browser;
     }
 
@@ -54,8 +91,8 @@ public class PodCastToWechatTask {
             .replace("（深度研究版）", "")
             .replace("（快速传播版）", "")
             .replace("#", ""));
-        
-        System.out.println(article.getContent());
+
+        //System.out.println(article.getContent());
 
         // 发布播客
         publishPodcast(context,page,article,isDraft);

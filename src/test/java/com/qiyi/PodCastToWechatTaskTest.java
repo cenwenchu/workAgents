@@ -2,7 +2,7 @@ package com.qiyi;
 
 import java.io.IOException;
 import com.qiyi.podcast.PlayWrightUtil;
-import com.qiyi.podcast.PodCastToWechatTask;
+import com.qiyi.podcast.PodCastToWechat;
 
 public class PodCastToWechatTaskTest {
 
@@ -17,7 +17,7 @@ public class PodCastToWechatTaskTest {
         }
 
 
-        PodCastToWechatTask task = new PodCastToWechatTask(connection.browser);
+        PodCastToWechat task = new PodCastToWechat(connection.browser);
 
         task.publishPodcastToWechat("/Users/cenwenchu/Desktop/podCastItems/summary/2026年投资趋势：DeFi、代币化、资本形成、投机与人工智能_summary.txt", true);
 

@@ -77,7 +77,6 @@ public class PodwiseAutoMan {
             threadPoolSize = Integer.parseInt(input.trim());
         }
 
-        
 
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
