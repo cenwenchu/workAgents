@@ -20,9 +20,6 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 
 import java.nio.file.Files;
-
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,6 +38,7 @@ import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
 import io.github.pigmesh.ai.deepseek.core.OpenAiClient.OpenAiClientContext;
 import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionRequest;
 import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse;
+import io.github.pigmesh.ai.deepseek.core.chat.Message;
 import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
 import io.github.pigmesh.ai.deepseek.core.shared.StreamOptions;
 import reactor.core.publisher.Flux;
@@ -316,16 +314,29 @@ public class PodCastUtil {
      */
     public static String generateContentWithDeepSeekByFile(java.io.File file,String summaryPrompt,boolean isStreamingProcess) throws IOException 
     {
-        String responseText = "";
-
-        initClientConfig();
-
         String content = readFileContent(file);
 
         UserMessage userMessage = UserMessage.builder()
                     .addText(summaryPrompt)
                     .addText(content).build();
 
+        List<Message> messages = new ArrayList<>();
+        messages.add(userMessage);
+
+        return chatWithDeepSeek(messages, isStreamingProcess);
+    }
+
+    /**
+     * 与 DeepSeek 模型进行多轮对话
+     * 
+     * @param messages 消息历史列表
+     * @param isStreamingProcess 是否使用流式输出
+     * @return 模型回复的文本
+     */
+    public static String chatWithDeepSeek(List<Message> messages, boolean isStreamingProcess) {
+        String responseText = "";
+
+        initClientConfig();
 
         if (isStreamingProcess)
         {
@@ -343,7 +354,7 @@ public class PodCastUtil {
             {
                 ChatCompletionRequest request = ChatCompletionRequest.builder()
                     .model("deepseek-chat")
-                    .messages(userMessage)
+                    .messages(messages)
                     .stream(true)  // 启用流式
                     .streamOptions(StreamOptions.builder().includeUsage(true).build())
                     .build();
@@ -384,9 +395,6 @@ public class PodCastUtil {
 
             responseText = sb.toString();
 
-            //System.out.println("\n=== DeepSeek 回答 ===");
-            //System.out.println(responseText);
-
         }
         else
         {
@@ -403,7 +411,7 @@ public class PodCastUtil {
             try
             {
                 ChatCompletionRequest request = ChatCompletionRequest.builder()
-                        .messages(userMessage).build();
+                        .messages(messages).build();
 
                 ChatCompletionResponse response = deepseekClient
                     .chatCompletion(new OpenAiClientContext(), request)
@@ -412,14 +420,6 @@ public class PodCastUtil {
                 // 4. 处理响应
                 if (response != null && response.choices() != null && !response.choices().isEmpty()) {
                     responseText = response.choices().get(0).message().content();
-                    //System.out.println("\n=== DeepSeek 回答 ===");
-                    //System.out.println(responseText);
-                    
-                    // 打印使用统计
-                    //System.out.println("\n=== 使用统计 ===");
-                    //System.out.println("Prompt tokens: " + response.usage().promptTokens());
-                    //System.out.println("Completion tokens: " + response.usage().completionTokens());
-                    //System.out.println("Total tokens: " + response.usage().totalTokens());
                 }
                 else {
                     System.out.println("未收到有效响应");

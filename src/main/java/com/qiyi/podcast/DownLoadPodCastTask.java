@@ -91,7 +91,7 @@ public class DownLoadPodCastTask {
     private static final String RENAME_PROMPT = "你是一个专业的文件名翻译助手。我有一组播客文件名，格式为 'CN_{ChannelName}_{Title}.pdf'。请识别每个文件名中的 '{Title}' 部分，如果是英文，将其翻译成中文；如果是中文，保持不变。请按以下格式返回翻译结果：\n1. 识别 '{Title}' 并翻译。\n2. 新文件名**只保留翻译后的 Title**，去掉 'CN_' 前缀和 '{ChannelName}' 部分。\n3. 确保新文件名以 .pdf 结尾。\n\n返回格式（每行一个）：\n原始文件名=新的文件名\n\n文件名列表如下：\n";
 
     // Selectors
-    private static final String XPATH_LIBRARY = "//div/span[contains(text(),'Library')]";
+    private static final String XPATH_LIBRARY = "//a[contains(@href,'dashboard/episodes')]";
     private static final String XPATH_FOLLOWING = "//div/button[contains(text(),'Following')]";
     private static final String XPATH_PODCAST_ITEM = "//div[./img[contains(@alt, 'Podcast Cover')] and .//a[contains(@href, 'dashboard')]]";
     private static final String XPATH_READY_STATUS = "//div/span[contains(text(),'Ready')]";
@@ -197,7 +197,9 @@ public class DownLoadPodCastTask {
             ElementHandle libraryButton = page.waitForSelector(XPATH_LIBRARY, new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
             if (libraryButton != null) {
                 log("找到Library按钮");
-                libraryButton.click();
+                // libraryButton.click(); 
+                // 使用 evaluate 执行 click 以避免 Playwright 严格的可交互性检查导致阻塞
+                libraryButton.evaluate("node => node.click()");
                 ElementHandle followingBtn = page.waitForSelector(XPATH_FOLLOWING, new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
                 if (followingBtn != null) {
                     followingBtn.evaluate("node => node.click()");
@@ -670,12 +672,18 @@ public class DownLoadPodCastTask {
                             }
                         }
 
+                        //保存的新文件的目录是老文件目录的下级目录，目录名为中文版
                         if (fileToRename != null && fileToRename.exists()) {
-                            File newFile = new File(fileToRename.getParent(), newName);
-                            if (fileToRename.renameTo(newFile)) {
-                                log("重命名成功: " + originalName + " -> " + newName);
-                            } else {
-                                log("重命名失败: " + originalName + " -> " + newName);
+                            File cnDir = new File(fileToRename.getParent(), "中文版");
+                            if (!cnDir.exists()) {
+                                cnDir.mkdirs();
+                            }
+                            File newFile = new File(cnDir, newName);
+                            try {
+                                java.nio.file.Files.copy(fileToRename.toPath(), newFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                log("复制并重命名成功: " + originalName + " -> " + newFile.getPath());
+                            } catch (Exception e) {
+                                log("复制并重命名失败: " + originalName + " -> " + newName + " Error:" + e.getMessage());
                             }
                         }
                     }
@@ -689,6 +697,7 @@ public class DownLoadPodCastTask {
     private void processSingleSummary(File pdfFile, File outputFile, ModelType modelType, boolean isStreamingProcess) {
         try {
             String summary = null;
+
             switch (modelType) {
                 case GEMINI:
                     summary = PodCastUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
