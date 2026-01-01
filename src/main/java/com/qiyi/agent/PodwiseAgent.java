@@ -1,14 +1,14 @@
 /**
  * 
  */
-package com.qiyi.podcast;
+package com.qiyi.agent;
 
 
 import java.io.IOException;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
-import com.qiyi.podcast.task.DownLoadPodCast;
+import com.qiyi.podcast.tools.DownLoadPodCast;
 import com.qiyi.util.PlayWrightUtil;
 
 //先要运行这个启动可信任浏览器
@@ -19,7 +19,7 @@ import com.qiyi.util.PlayWrightUtil;
 /**
  * 
  */
-public class PodwiseAutoMan {
+public class PodwiseAgent {
 
     Playwright playwright = null;
     Browser browser = null;
@@ -35,7 +35,7 @@ public class PodwiseAutoMan {
 	public static void main(String[] args) throws IOException {
 
         
-        PodwiseAutoMan autoMan = new PodwiseAutoMan();
+        PodwiseAgent autoMan = new PodwiseAgent();
 
         int maxProcessCount = 50;
         int maxTryTimes = 7;

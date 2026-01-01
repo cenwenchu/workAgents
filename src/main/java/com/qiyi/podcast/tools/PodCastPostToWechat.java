@@ -1,4 +1,4 @@
-package com.qiyi.podcast.task;
+package com.qiyi.podcast.tools;
 
 import java.io.IOException;
 
@@ -14,6 +14,8 @@ public class PodCastPostToWechat {
 
     private Browser browser;
     private static final int DEFAULT_TIMEOUT_MS = 60*1000;
+    public static final String SUCCESS_MSG = "成功发布:";
+    public static final String WECHAT_LOGIN_URL = "https://mp.weixin.qq.com/cgi-bin/home";
 
 
     public static void main(String[] args) throws IOException {
@@ -61,11 +63,11 @@ public class PodCastPostToWechat {
     }
     
     //根据指定文件，自动发布微信公众号文章
-    public void publishPodcastToWechat(String podcastFilePath,boolean isDraft) throws IOException {
+    public String publishPodcastToWechat(String podcastFilePath,boolean isDraft) throws IOException {
 
         if (browser == null) {
             log("浏览器未连接，请先连接浏览器");
-            return;
+            return "浏览器未连接，请先连接浏览器";
         }
 
         // 创建新页面
@@ -79,12 +81,18 @@ public class PodCastPostToWechat {
         openWechatPodcastBackground(page);
 
         // 填写播客信息
-        WechatArticle article = PodCastUtil.generateWechatArticleFromDeepseek(podcastFilePath);
+        WechatArticle article = null;
+        try {
+            showLoadingTip(page, "正在调用大模型处理将要发布的文章，请稍等...");
+            article = PodCastUtil.generateWechatArticleFromDeepseek(podcastFilePath);
+        } finally {
+            removeLoadingTip(page);
+        }
 
         // 验证文章是否符合要求
         if (!PodCastUtil.validateArticle(article)) {
             log("文章不符合要求，无法发布");
-            return;
+            return "文章不符合要求，无法发布";
         }
 
 
@@ -98,13 +106,17 @@ public class PodCastPostToWechat {
         //System.out.println(article.getContent());
 
         // 发布播客
-        publishPodcast(context,page,article,isDraft);
+        String result = publishPodcast(context,page,article,isDraft);
+
+        return result;
     }
 
 
     //发布播客
-    private void publishPodcast(BrowserContext context,Page page,WechatArticle article,boolean isDraft) {
+    private String publishPodcast(BrowserContext context,Page page,WechatArticle article,boolean isDraft) {
         
+        String result = SUCCESS_MSG + article.getTitle();
+
         //检查发布按钮是否可见
         ElementHandle publishButton = page.waitForSelector("//div[@class='new-creation__menu-title' and contains(text(),'文章')]",
              new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
@@ -172,23 +184,62 @@ public class PodCastPostToWechat {
         // //点击AI 配图
         // publishPage.click("//button[contains(@class,'js_cover_btn_area')]");
 
-        //点击发布按钮
+        //尝试点击一键排版
+        Page operationPage = publishPage;
+        // boolean isFormatPage = false;
+        // try {
+        //     // 检查"一键排版"按钮是否存在并可见
+        //     if (publishPage.isVisible("//div[contains(text(),'一键排版')]")) {
+        //         Page publishFromatNewPage = context.waitForPage(() -> {
+        //             // 点击发布按钮
+        //             publishPage.click("//div[contains(text(),'一键排版')]");
+        //         });
+                
+        //         // 等待新页面加载完成
+        //         publishFromatNewPage.waitForLoadState();
+                
+        //         // 点击使用此排版
+        //         publishFromatNewPage.click("//button[contains(text(),'使用此排版')]");
+
+        //         //等待页面加载完成，确保操作页面切换到新页面
+        //         publishFromatNewPage.waitForSelector("//button/span[contains(text(),'草稿')]", 
+        //             new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
+                
+        //         // 切换操作页面为新打开的排版页面
+        //         operationPage = publishFromatNewPage;
+        //         isFormatPage = true;
+                
+        //         // 关闭原来的发布页面，因为操作已经转移到新页面
+        //         publishPage.close();
+        //     } else {
+        //         log("一键排版按钮不可见，跳过");
+        //     }
+            
+        // } catch (Exception e) {
+        //     log("一键排版操作异常或按钮不存在: " + e.getMessage());
+        //     // 发生异常时，确保 operationPage 仍然指向可用的页面 (publishPage)
+        //     // 如果 publishPage 已经被关闭（虽然在异常块前只在成功切换时关闭），则需要小心
+        //     // 但这里逻辑是如果成功打开新页面并切换了 operationPage 才会关闭 publishPage
+        //     // 所以异常情况下 publishPage 应该还是打开的
+        // }
+
+        //点击发布按钮 (在当前操作页面上操作)
         if (isDraft) {
-            publishPage.click("//button/span[contains(text(),'草稿')]");
+            operationPage.click("//button/span[contains(text(),'草稿')]");
         } else {
-            publishPage.click("//button/span[contains(text(),'发表')]");
+            operationPage.click("//button/span[contains(text(),'发表')]");
         }
 
         try {
-            publishPage.waitForSelector("//div[contains(text(),'已保存') and @class='inner']", 
+            operationPage.waitForSelector("//div[contains(text(),'已保存') and @class='inner']", 
                 new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
             log("发布成功：" + article.getTitle());
         } catch (Exception e) {
             e.printStackTrace();
         }
 
-        //关闭publishPage，回到打开前的页面
-        publishPage.close();
+        //关闭当前操作页面 (可能是原页面，也可能是排版后的新页面)
+        operationPage.close();
 
         if (isDraft) {
 
@@ -205,22 +256,73 @@ public class PodCastPostToWechat {
             }
             catch(Exception ex){
                 log("草稿箱没有新的草稿：" + article.getTitle());
+                result = "草稿箱没有新的草稿：" + article.getTitle();
             }
         }
+
+        return result;
     }
 
     //打开微信公众号后台，判断是否登陆，登陆后，进入发布页面
     public void openWechatPodcastBackground(Page page) {
-        page.navigate("https://mp.weixin.qq.com/cgi-bin/home");
+        page.navigate(WECHAT_LOGIN_URL);
+        page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
 
-        if (!PodCastUtil.isWechatLoggedIn(page)) {
-            log("用户未登录，请手动登录后继续");
-            PodCastUtil.waitForManualLogin(page);
+        long maxWaitTime = 5 * 60 * 1000; // 5 minutes
+        long startTime = System.currentTimeMillis();
+        boolean isLogged = PodCastUtil.isWechatLoggedIn(page);
+
+        while (!isLogged) {
+            if (System.currentTimeMillis() - startTime > maxWaitTime) {
+                log("登录超时，请重新运行任务。");
+                throw new RuntimeException("微信公众号登录超时");
+            }
+            
+            log("用户未登录公众号后台，请在浏览器中手动扫码登录...");
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("等待登录被中断");
+            }
+            isLogged = PodCastUtil.isWechatLoggedIn(page);
         }
 
         //点击首页的按钮，进入发布页面
-        page.click("//div//a[contains(@title,'首页')]");
+        try {
+            // 等待首页按钮出现，确保页面加载完成
+            page.waitForSelector("//div//a[contains(@title,'首页')]", 
+                new Page.WaitForSelectorOptions().setTimeout(10000));
+            page.click("//div//a[contains(@title,'首页')]");
+        } catch (Exception e) {
+            log("注意：未能点击'首页'按钮，可能是已在首页或页面结构变化，尝试继续执行...");
+        }
 
+    }
+
+    private void showLoadingTip(Page page, String message) {
+        String js = "const tip = document.createElement('div');" +
+                    "tip.id = 'ai-loading-tip';" +
+                    "tip.style.position = 'fixed';" +
+                    "tip.style.top = '20px';" +
+                    "tip.style.left = '50%';" +
+                    "tip.style.transform = 'translateX(-50%)';" +
+                    "tip.style.padding = '15px 25px';" +
+                    "tip.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';" +
+                    "tip.style.color = 'white';" +
+                    "tip.style.borderRadius = '5px';" +
+                    "tip.style.zIndex = '99999';" +
+                    "tip.style.fontSize = '16px';" +
+                    "tip.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';" +
+                    "tip.innerText = '" + message + "';" +
+                    "document.body.appendChild(tip);";
+        page.evaluate(js);
+    }
+
+    private void removeLoadingTip(Page page) {
+        String js = "const tip = document.getElementById('ai-loading-tip');" +
+                    "if (tip) tip.remove();";
+        page.evaluate(js);
     }
     
 }

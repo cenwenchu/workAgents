@@ -5,11 +5,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.dingtalk.api.DefaultDingTalkClient;
 import com.dingtalk.api.DingTalkClient;
 import com.dingtalk.api.request.OapiRobotSendRequest;
-import com.dingtalk.api.request.OapiUserListidRequest;
 import com.dingtalk.api.request.OapiUserListsimpleRequest;
 import com.dingtalk.api.request.OapiV2DepartmentListsubRequest;
 import com.dingtalk.api.response.OapiRobotSendResponse;
-import com.dingtalk.api.response.OapiUserListidResponse;
 import com.dingtalk.api.response.OapiUserListsimpleResponse;
 import com.dingtalk.api.response.OapiV2DepartmentListsubResponse;
 import com.dingtalk.open.app.api.OpenDingTalkClient;
@@ -20,6 +18,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiyi.dingtalk.DingTalkDepartment;
 import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.podcast.tools.PodCastPostToWechat;
 import com.aliyun.dingtalkoauth2_1_0.models.GetAccessTokenResponse;
 import com.aliyun.dingtalkrobot_1_0.models.*;
 import com.aliyun.tea.TeaException;
@@ -42,96 +41,67 @@ import com.aliyun.teautil.models.RuntimeOptions;
 
 public class DingTalkUtil {
 
-    // 机器人配置信息（建议放在配置文件中）
-    private static final String ROBOT_TOKEN = "24144058d4cd5c936cd00b0df90bceb5d675869442d948d855898e90e480890d";
-    private static final String ROBOT_SECRET = "SEC44e2bf5873b1445bd536d0ed46324a601338542ff2fcf9f7729d183fba9defe3";
+    // 机器人配置信息（从配置文件加载）
+    private static String ROBOT_TOKEN = "";
+    private static String ROBOT_SECRET = "";
 
-    private static final String ROBOT_CLIENT_ID = "dinga0isowzajgy9g4d4";
-    private static final String ROBOT_CLIENT_SECRET = "kgR27JbC0plMISfb0ul812LU8OA6PMnYGAEKXy2zpVY_V5Mky6sfTk6Qki5dgMpI";
+    private static String ROBOT_CLIENT_ID = "";
+    private static String ROBOT_CLIENT_SECRET = "";
 
-    private static final String ROBOT_CODE = "dinga0isowzajgy9g4d4";
+    private static String ROBOT_CODE = "";
+    private static String PODCAST_PUBLISH_DIR = "";
+    private static List<String> PODCAST_ADMIN_USERS = new ArrayList<>();
 
-    public static void main(String[] args) throws Exception {
-        DingTalkUtil dingTalkUtil = new DingTalkUtil();
+    static {
+        initClientConfig();
+    }
 
-        // 获取所有部门列表
-        List<DingTalkDepartment> allDepartments = dingTalkUtil.getAllDepartments(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET,true,true);
-        System.out.println("获取到部门总数: " + allDepartments.size());
-        for (DingTalkDepartment dept : allDepartments) {
-            System.out.println("部门: " + dept.getName() + ", ID: " + dept.getDeptId() + ", 用户数量: " + dept.getUserList().size());
-
-            for(DingTalkUser user : dept.getUserList())
-            {
-                System.out.println("用户: " + user.getName() + ", ID: " + user.getUserid());
+    public static void initClientConfig() {
+        java.util.Properties props = new java.util.Properties();
+        try (java.io.InputStream input = DingTalkUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
+            if (input == null) {
+                System.out.println("配置文件 podcast.cfg 未找到");
+            } else {
+                props.load(input);
             }
+        } catch (java.io.IOException ex) {
+            System.out.println("加载配置文件失败: " + ex.getMessage());
+            ex.printStackTrace();
         }
 
-        DingTalkUser user = dingTalkUtil.findUserFromDepartmentByName("岑文初");
-        System.out.println("用户: " + user.getName() + ", ID: " + user.getUserid());
-
-
-        dingTalkUtil.startRobotMsgCallbackConsumer(ROBOT_CLIENT_ID,ROBOT_CLIENT_SECRET);
-
-        //0.发送文本给单用户
-        dingTalkUtil.sendTextMessageToEmployees(ROBOT_CLIENT_ID,ROBOT_CLIENT_SECRET,ROBOT_CODE,Arrays.asList(user.getUserid()),"发送单聊测试消息！");
-
-        // 1. 发送文本消息
-        dingTalkUtil.sendTextMessageToGroup("测试文本消息：钉钉，让进步发生", Arrays.asList(user.getUserid()), false);
-
-        // 2. 发送 Link 消息 (带图片)
-        dingTalkUtil.sendLinkMessageToGroup(
-                "时代的火车向前开",
-                "这个即将发布的新版本，创始人xx称它为红树林。",
-                "https://www.dingtalk.com/",
-                "https://img.alicdn.com/tfs/TB1NwmBEL9TBuNjy1zbXXXpepXa-2400-1218.png"
-        );
-
-        // 3. 发送 Markdown 消息 (支持正文插入图片)
-        String markdownText = "#### 杭州天气 \n" +
-                "> 9度，西北风1级，空气良89，相对温度73%\n\n" +
-                "> ![screenshot](https://img.alicdn.com/tfs/TB1NwmBEL9TBuNjy1zbXXXpepXa-2400-1218.png)\n" +
-                "> ###### 10点20分发布 [天气](https://www.dingtalk.com/) \n";
-        dingTalkUtil.sendMarkdownMessageToGroup("杭州天气", markdownText, Arrays.asList(user.getUserid()), false);
+        if (props.containsKey("dingtalk.robot.token")) {
+            ROBOT_TOKEN = props.getProperty("dingtalk.robot.token");
+            ROBOT_SECRET = props.getProperty("dingtalk.robot.secret");
+            ROBOT_CLIENT_ID = props.getProperty("dingtalk.robot.client.id");
+            ROBOT_CLIENT_SECRET = props.getProperty("dingtalk.robot.client.secret");
+            ROBOT_CODE = props.getProperty("dingtalk.robot.code");
+        }
         
-        // 4. 发送 ActionCard (独立跳转卡片)
-        dingTalkUtil.sendActionCardMessageToGroup(
-                "乔布斯 20 年前想打造一间苹果咖啡厅",
-                "![screenshot](https://img.alicdn.com/tfs/TB1NwmBEL9TBuNjy1zbXXXpepXa-2400-1218.png) \n\n ### 乔布斯 20 年前想打造的苹果咖啡厅 \n\n Apple Store 的设计正从原来满满的科技感走向生活化，而其生活化的走向其实可以追溯到 20 年前苹果一个建立咖啡馆的计划",
-                "阅读全文",
-                "https://www.dingtalk.com/"
-        );
-
-        //交互的读取控制台消息，来判断是否要暂停机器人消息回调
-        // dingTalkUtil.stopRobotMsgCallbackConsumer();
-
-        System.out.println("\n机器人监听已启动。在控制台输入 'exit' 并回车以停止程序...");
-        java.util.Scanner scanner = new java.util.Scanner(System.in);
-        while (true) {
-            if (scanner.hasNextLine()) {
-                String input = scanner.nextLine();
-                if ("exit".equalsIgnoreCase(input.trim())) {
-                    dingTalkUtil.stopRobotMsgCallbackConsumer();
-                    System.out.println("程序已退出。");
-                    break;
-                }
-            }
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
+        if (props.containsKey("podcast.publish.dir")) {
+            PODCAST_PUBLISH_DIR = props.getProperty("podcast.publish.dir");
+        }
+        
+        if (props.containsKey("podcast.admin.users")) {
+            String users = props.getProperty("podcast.admin.users");
+            if (users != null && !users.isEmpty()) {
+                PODCAST_ADMIN_USERS = Arrays.asList(users.split(","));
             }
         }
-        scanner.close();
-        System.exit(0);
     }
 
 
-    private OpenDingTalkClient streamClient;
+    // 任务锁，确保同一时间只有一个发布任务执行，避免争抢浏览器资源
+    private static final java.util.concurrent.locks.ReentrantLock PUBLISH_LOCK = new java.util.concurrent.locks.ReentrantLock();
+
+    private static volatile OpenDingTalkClient streamClient;
 
     //启动监听机器人消息回调本地线程，搭配RobotMsgCallbackConsumer来使用
     //注意：这里是阻塞线程，需要在单独的线程中调用
-    public void startRobotMsgCallbackConsumer(String clientId,String clientSecret) {
+    public static synchronized void startRobotMsgCallbackConsumer() {
+        startRobotMsgCallbackConsumer(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
+    }
+
+    public static synchronized void startRobotMsgCallbackConsumer(String clientId,String clientSecret) {
         if (streamClient != null) {
             System.out.println("Robot callback consumer is already running.");
             return;
@@ -139,17 +109,23 @@ public class DingTalkUtil {
 
         Thread thread = new Thread(() -> {
             try {
-                streamClient = OpenDingTalkStreamClientBuilder
+                // 在线程内部创建并赋值，但在外部通过 synchronized 保证不会多次触发创建线程
+                // 注意：这里存在一个小的时间窗口（线程启动但 streamClient 尚未赋值），
+                // 但由于 start 是 synchronized 的，且通常只调用一次，风险可控。
+                OpenDingTalkClient client = OpenDingTalkStreamClientBuilder
                         .custom()
                         .credential(new AuthClientCredential(clientId, clientSecret))
                         .registerCallbackListener("/v1.0/im/bot/messages/get", new RobotMsgCallbackConsumer())
                         .build();
 
                 System.out.println("DingTalk Stream Client starting...");
-                streamClient.start();
+                client.start();
+                streamClient = client;
             } catch (Exception e) {
                 System.err.println("DingTalk Stream Client Error: " + e.getMessage());
                 e.printStackTrace();
+                // 如果启动失败，重置 streamClient 以便允许重试
+                streamClient = null; 
             }
         });
         
@@ -160,7 +136,7 @@ public class DingTalkUtil {
     }
 
     // 显示调用关闭函数
-    public void stopRobotMsgCallbackConsumer() {
+    public static synchronized void stopRobotMsgCallbackConsumer() {
         if (streamClient != null) {
             try {
                 streamClient.stop();
@@ -183,21 +159,208 @@ public class DingTalkUtil {
             System.out.println(JSON.toJSONString(request));
             try {
                 JSONObject text = request.getJSONObject("text");
+                String senderStaffId = request.getString("senderStaffId");
+
                 if (text != null) {
                     //机器人接收消息内容
                     String msg = text.getString("content").trim();
-                    String openConversationId = request.getString("conversationId");
+                    // String openConversationId = request.getString("conversationId");
+
+                    // 权限校验
+                    if (!PODCAST_ADMIN_USERS.isEmpty() && (senderStaffId != null && !PODCAST_ADMIN_USERS.contains(senderStaffId))) {
+                        // 如果设置了管理员且发送者不是管理员，忽略
+                        System.out.println("User " + senderStaffId + " is not authorized.");
+                        return new JSONObject();
+                    }
 
                     // 做一些业务处理，实现对于群聊中的功能响应
-                    
+                    if(msg.startsWith("发布"))
+                    {
+
+                        // 解析 @ 人列表
+                        List<String> atUserIds = parseAtUserIds(msg);
+
+                        // 异步执行发布任务，避免阻塞回调
+                        java.util.concurrent.CompletableFuture.runAsync(() -> {
+                            handlePublishTask(senderStaffId,atUserIds);
+                        });
+                    }
+                    else if(msg.startsWith("ping"))
+                    {
+                        // 可选：回复 pong
+                    }
                 }
             } catch (Exception e) {
                 System.out.println("receive group message by robot error:" +e.getMessage());
+                e.printStackTrace();
             }
             return new JSONObject();
         }
+
+        private void handlePublishTask(String operatorId,List<String> atUserIds) {
+             List<String> notifyUsers = new ArrayList<>();
+             if (operatorId != null) notifyUsers.add(operatorId);
+             if (atUserIds != null && !atUserIds.isEmpty()) {
+                 notifyUsers.addAll(atUserIds);
+             }
+
+             // 如果没有操作者ID（不太可能），或者想通知所有人，可以调整这里
+             // 如果没有配置管理员，且 operatorId 为空，可能需要默认通知列表
+
+             // 尝试获取锁，如果获取失败说明有任务正在执行
+             if (!PUBLISH_LOCK.tryLock()) {
+                 try {
+                     sendTextMessageToEmployees(notifyUsers, "当前已有发布任务正在执行，请稍后再试。");
+                 } catch (Exception e) {
+                     e.printStackTrace();
+                 }
+                 return;
+             }
+
+             try {
+                 if (PODCAST_PUBLISH_DIR == null || PODCAST_PUBLISH_DIR.isEmpty()) {
+                     sendTextMessageToEmployees(notifyUsers, "发布目录未配置，请检查 podcast.cfg");
+                     return;
+                 }
+                 
+                 sendTextMessageToEmployees(notifyUsers, "开始执行发布任务...");
+                 
+                 PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
+                 if (connection == null){
+                      sendTextMessageToEmployees(notifyUsers, "无法连接到浏览器，任务终止");
+                      return;
+                 }
+                 
+                 // 检查微信是否登录，仅做提醒，不阻断流程
+                 try {
+                     com.microsoft.playwright.BrowserContext context = connection.browser.contexts().isEmpty() ? 
+                             connection.browser.newContext() : connection.browser.contexts().get(0);
+                     com.microsoft.playwright.Page checkPage = context.newPage();
+                     try {
+                         checkPage.navigate(PodCastPostToWechat.WECHAT_LOGIN_URL);
+                         checkPage.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+                         if (!PodCastUtil.isWechatLoggedIn(checkPage)) {
+                             sendTextMessageToEmployees(notifyUsers, "检测到微信公众号未登录，请及时在服务器浏览器完成扫码登录，任务将继续执行等待。");
+                         }
+                     } finally {
+                         if (!checkPage.isClosed()) {
+                             checkPage.close();
+                         }
+                     }
+                 } catch (Exception e) {
+                     e.printStackTrace();
+                 }
+                 
+                 try {
+                     PodCastPostToWechat task = new PodCastPostToWechat(connection.browser);
+                     
+                     java.util.List<String> podcastFilePaths = java.nio.file.Files.walk(java.nio.file.Paths.get(PODCAST_PUBLISH_DIR))
+                                .filter(p -> java.nio.file.Files.isRegularFile(p) && !p.getFileName().toString().startsWith(".")) // 忽略隐藏文件
+                                .map(p -> p.toString())
+                                .collect(java.util.stream.Collectors.toList());
+                     
+                     if (podcastFilePaths.isEmpty()) {
+                         sendTextMessageToEmployees(notifyUsers, "目录中没有找到文件: " + PODCAST_PUBLISH_DIR);
+                     }
+                     
+                     for (String podcastFilePath : podcastFilePaths) {
+                          try {
+                              String result = task.publishPodcastToWechat(podcastFilePath, true);
+                              if (result.startsWith(PodCastPostToWechat.SUCCESS_MSG)){
+                                  sendTextMessageToEmployees(notifyUsers, "文件 " + new java.io.File(podcastFilePath).getName() + "， " + result);
+                              }
+                              else
+                                  sendTextMessageToEmployees(notifyUsers, "文件 " + new java.io.File(podcastFilePath).getName() + "，发布失败: " + result);
+                              
+                          } catch (Exception e) {
+                              sendTextMessageToEmployees(notifyUsers, "文件 " + new java.io.File(podcastFilePath).getName() + " 发布失败: " + e.getMessage());
+                              e.printStackTrace();
+                          }
+                     }
+                 } finally {
+                     PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
+                 }
+                 
+                 sendTextMessageToEmployees(notifyUsers, "所有发布任务执行完毕");
+                 
+             } catch (Exception e) {
+                 e.printStackTrace();
+                 try {
+                     sendTextMessageToEmployees(notifyUsers, "发布任务执行异常: " + e.getMessage());
+                 } catch (Exception ex) {
+                     ex.printStackTrace();
+                 }
+             } finally {
+                 PUBLISH_LOCK.unlock();
+             }
+        }
     } 
 
+    /**
+     * 解析消息中的 @ 人员列表
+     * 通过 DeepSeek 分析消息内容，结合企业通讯录，识别出需要通知的用户 ID
+     */
+    private static List<String> parseAtUserIds(String msg) {
+        List<String> atUserIds = new ArrayList<>();
+        try {
+            // 1. 获取全量用户列表 (带缓存)
+            List<DingTalkDepartment> departments = getAllDepartments(true, true);
+            List<DingTalkUser> allUsers = new ArrayList<>();
+            for (DingTalkDepartment dept : departments) {
+                if (dept.getUserList() != null) {
+                    allUsers.addAll(dept.getUserList());
+                }
+            }
+            
+            // 去重
+            java.util.Map<String, String> userMap = new java.util.HashMap<>();
+            for (DingTalkUser user : allUsers) {
+                userMap.put(user.getName(), user.getUserid());
+            }
+            
+            if (userMap.isEmpty()) {
+                return atUserIds;
+            }
+
+            // 2. 构造提示词给 DeepSeek
+            // 优化：不再发送全量用户列表，仅让 AI 提取消息中的人名，后续再本地匹配
+            String prompt = String.format(
+                "请分析以下消息内容，提取出其中提到的人员姓名（可能是中文名或英文名）。只返回姓名列表，用逗号分隔。不要包含任何解释性文字。如果没有提到特定人员，返回空字符串。消息内容：'%s'",
+                msg
+            );
+            
+            // 3. 调用 DeepSeek
+            List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages = new ArrayList<>();
+            messages.add(io.github.pigmesh.ai.deepseek.core.chat.UserMessage.builder().addText(prompt).build());
+            
+            String response = PodCastUtil.chatWithDeepSeek(messages, false);
+            
+            // 4. 解析结果并匹配 UserID
+            if (response != null && !response.trim().isEmpty()) {
+                // 去除可能存在的 Markdown 代码块标记
+                response = response.replace("```", "").trim();
+                
+                String[] names = response.split("[,，]"); // 支持中英文逗号
+                for (String name : names) {
+                    String trimmedName = name.trim();
+                    if (trimmedName.isEmpty()) continue;
+                    
+                    // 尝试精确匹配
+                    if (userMap.containsKey(trimmedName)) {
+                        atUserIds.add(userMap.get(trimmedName));
+                        System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 匹配到用户ID: " + userMap.get(trimmedName));
+                    } else {
+                         System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 未在用户列表中找到");
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            System.err.println("解析 @ 人员失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return atUserIds;
+    }
 
     public static com.aliyun.dingtalkrobot_1_0.Client createClient() throws Exception {
         Config config = new Config();
@@ -253,7 +416,7 @@ public class DingTalkUtil {
         dingTalkCache = cache;
     }
 
-    public String getDingTalkRobotAccessToken(String appKey,String appSecret) throws Exception
+    public static String getDingTalkRobotAccessToken(String appKey,String appSecret) throws Exception
     {
         // 尝试从缓存获取
         String cacheKey = "dingtalk_access_token_" + appKey;
@@ -304,7 +467,7 @@ public class DingTalkUtil {
     /**
      * 简单的辅助方法：处理JSON特殊字符转义 (简单实现，建议使用 Jackson/Gson 替代)
      */
-    private String escapeJson(String text) {
+    private static String escapeJson(String text) {
         if (text == null) return "";
         return text.replace("\\", "\\\\")
                    .replace("\"", "\\\"")
@@ -321,7 +484,7 @@ public class DingTalkUtil {
      * @param dataExtractor 数据提取函数
      * @return 所有数据列表
      */
-    public <T> List<T> getAllDataByPagination(
+    public static <T> List<T> getAllDataByPagination(
             String appKey, 
             String appSecret, 
             String departmentId,
@@ -368,7 +531,7 @@ public class DingTalkUtil {
     /**
      * 获取部门下所有用户的通用方法
      */
-    public List<DingTalkUser> getAllUsersInDepartment(String appKey, String appSecret, String departmentId) throws Exception {
+    public static List<DingTalkUser> getAllUsersInDepartment(String appKey, String appSecret, String departmentId) throws Exception {
 
         String accessToken = getDingTalkRobotAccessToken(appKey, appSecret);
         if (accessToken == null || accessToken.isEmpty()) {
@@ -401,7 +564,7 @@ public class DingTalkUtil {
     }
 
 
-    public List<DingTalkDepartment> getDingTalkDepartmentList(String appKey, String appSecret,String departmentId) throws Exception {
+    public static List<DingTalkDepartment> getDingTalkDepartmentList(String appKey, String appSecret,String departmentId) throws Exception {
 
         List<DingTalkDepartment> departmentList = new ArrayList<DingTalkDepartment>();
 
@@ -451,7 +614,11 @@ public class DingTalkUtil {
      * 获取公司所有部门列表（从根部门 ID 1 开始递归遍历），支持缓存指定时间
      * @param cacheSeconds 缓存时间（秒），如果 <= 0 则不使用缓存
      */
-    public List<DingTalkDepartment> getAllDepartments(String appKey, String appSecret, boolean isNeedUserList, boolean needCache) throws Exception {
+    public static List<DingTalkDepartment> getAllDepartments(boolean isNeedUserList, boolean needCache) throws Exception {
+        return getAllDepartments(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, isNeedUserList, needCache);
+    }
+
+    public static List<DingTalkDepartment> getAllDepartments(String appKey, String appSecret, boolean isNeedUserList, boolean needCache) throws Exception {
         String cacheKey = "dingtalk_departments_v2_" + appKey + "_" + isNeedUserList;
         
         if (needCache) {
@@ -496,7 +663,7 @@ public class DingTalkUtil {
         return allDepartments;
     }
 
-    private void traverseDepartments(String appKey, String appSecret, String parentId, List<DingTalkDepartment> result) throws Exception {
+    private static void traverseDepartments(String appKey, String appSecret, String parentId, List<DingTalkDepartment> result) throws Exception {
         // 获取当前部门的子部门列表
         List<DingTalkDepartment> children = getDingTalkDepartmentList(appKey, appSecret, parentId);
         
@@ -509,7 +676,7 @@ public class DingTalkUtil {
         }
     }
 
-    public DingTalkUser findUserFromDepartmentByName(String name) throws Exception {
+    public static DingTalkUser findUserFromDepartmentByName(String name) throws Exception {
         List<DingTalkDepartment> allDepartments = getAllDepartments(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, true, true);
         
         for (DingTalkDepartment dept : allDepartments) {
@@ -530,7 +697,11 @@ public class DingTalkUtil {
      * 1. 发送【文本消息】
      * 模板Key: sampleText
      */
-    public boolean sendTextMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String content) throws Exception {
+    public static boolean sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
+        return sendTextMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, content);
+    }
+
+    public static boolean sendTextMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String content) throws Exception {
         String msgKey = "sampleText";
         // 构造JSON: {"content": "具体的文本内容"}
         String msgParam = String.format("{\"content\": \"%s\"}", escapeJson(content));
@@ -542,7 +713,11 @@ public class DingTalkUtil {
      * 模板Key: sampleImageMsg
      * 注意: photoURL 必须是公网可访问的图片链接
      */
-    public boolean sendImageMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String photoUrl) throws Exception {
+    public static boolean sendImageMessageToEmployees(List<String> userIds, String photoUrl) throws Exception {
+        return sendImageMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, photoUrl);
+    }
+
+    public static boolean sendImageMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String photoUrl) throws Exception {
         String msgKey = "sampleImageMsg";
         // 构造JSON: {"photoURL": "https://..."}
         String msgParam = String.format("{\"photoURL\": \"%s\"}", photoUrl);
@@ -553,7 +728,11 @@ public class DingTalkUtil {
      * 3. 发送【Markdown消息】
      * 模板Key: sampleMarkdown
      */
-    public boolean sendMarkdownMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String title, String markdownText) throws Exception {
+    public static boolean sendMarkdownMessageToEmployees(List<String> userIds, String title, String markdownText) throws Exception {
+        return sendMarkdownMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, markdownText);
+    }
+
+    public static boolean sendMarkdownMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, String title, String markdownText) throws Exception {
         String msgKey = "sampleMarkdown";
         // 构造JSON: {"title": "标题", "text": "markdown内容"}
         // 注意：实际生产中请使用 JSON 库 (如 Gson/Jackson) 来避免拼接字符串时的转义问题
@@ -565,7 +744,11 @@ public class DingTalkUtil {
      * 4. 发送【链接消息】
      * 模板Key: sampleLink
      */
-    public boolean sendLinkMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, 
+    public static boolean sendLinkMessageToEmployees(List<String> userIds, String title, String text, String messageUrl, String picUrl) throws Exception {
+        return sendLinkMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, text, messageUrl, picUrl);
+    }
+
+    public static boolean sendLinkMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, 
                                    String title, String text, String messageUrl, String picUrl) throws Exception {
         String msgKey = "sampleLink";
         // 构造JSON
@@ -580,7 +763,11 @@ public class DingTalkUtil {
      * 5. 发送【ActionCard 卡片消息】
      * 模板Key: sampleActionCard
      */
-    public boolean sendActionCardMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, 
+    public static boolean sendActionCardMessageToEmployees(List<String> userIds, String title, String text, String singleTitle, String singleUrl) throws Exception {
+        return sendActionCardMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, text, singleTitle, singleUrl);
+    }
+
+    public static boolean sendActionCardMessageToEmployees(String appKey, String appSecret, String robotCode, List<String> userIds, 
                                          String title, String text, String singleTitle, String singleUrl) throws Exception {
         String msgKey = "sampleActionCard";
         // 构造JSON: 支持 markdown 格式的 text
@@ -603,7 +790,7 @@ public class DingTalkUtil {
      * @param msgKey    消息模板Key (如 sampleText, sampleMarkdown, sampleImageMsg 等)
      * @param msgParam  消息模板参数 (JSON字符串)
      */
-    public boolean sendBatchMessageToEmployees (String appKey, String appSecret, String robotCode, List<String> userIds, String msgKey, String msgParam) throws Exception {
+    public static boolean sendBatchMessageToEmployees (String appKey, String appSecret, String robotCode, List<String> userIds, String msgKey, String msgParam) throws Exception {
         boolean result = false;
         
         // 假设 DingTalkUtil.createClient() 已经实现了 client 初始化
@@ -637,7 +824,7 @@ public class DingTalkUtil {
     /**
      * 发送文本消息 (Text)
      */
-    public boolean sendTextMessageToGroup(String content, List<String> atUserIds, boolean isAtAll) {
+    public static boolean sendTextMessageToGroup(String content, List<String> atUserIds, boolean isAtAll) {
         OapiRobotSendRequest request = new OapiRobotSendRequest();
         request.setMsgtype("text");
         
@@ -651,7 +838,7 @@ public class DingTalkUtil {
     /**
      * 发送链接消息 (Link) - 支持封面图
      */
-    public boolean sendLinkMessageToGroup(String title, String text, String messageUrl, String picUrl) {
+    public static boolean sendLinkMessageToGroup(String title, String text, String messageUrl, String picUrl) {
         OapiRobotSendRequest request = new OapiRobotSendRequest();
         request.setMsgtype("link");
         
@@ -669,7 +856,7 @@ public class DingTalkUtil {
      * 发送 Markdown 消息 - 推荐用于发送带图详情
      * 图片语法: ![alt](url)
      */
-    public boolean sendMarkdownMessageToGroup(String title, String markdownText, List<String> atUserIds, boolean isAtAll) {
+    public static boolean sendMarkdownMessageToGroup(String title, String markdownText, List<String> atUserIds, boolean isAtAll) {
         OapiRobotSendRequest request = new OapiRobotSendRequest();
         request.setMsgtype("markdown");
         
@@ -684,7 +871,7 @@ public class DingTalkUtil {
     /**
      * 发送 ActionCard (整体跳转)
      */
-    public boolean sendActionCardMessageToGroup(String title, String markdownText, String btnTitle, String btnUrl) {
+    public static boolean sendActionCardMessageToGroup(String title, String markdownText, String btnTitle, String btnUrl) {
         OapiRobotSendRequest request = new OapiRobotSendRequest();
         request.setMsgtype("actionCard");
         
@@ -702,7 +889,7 @@ public class DingTalkUtil {
     /**
      * 核心发送逻辑：签名、设置@对象、执行发送
      */
-    private boolean sendRobotMessageToGroup(OapiRobotSendRequest request, List<String> atUserIds, boolean isAtAll) {
+    private static boolean sendRobotMessageToGroup(OapiRobotSendRequest request, List<String> atUserIds, boolean isAtAll) {
         try {
             Long timestamp = System.currentTimeMillis();
             String stringToSign = timestamp + "\n" + ROBOT_SECRET;

@@ -99,9 +99,12 @@ public class PodCastUtil {
     public static boolean isWechatLoggedIn(Page page) {
         try {
             //尝试点击一下登录按钮，看是否会有弹窗
-            page.click("//a[contains(text(),'登录')]");
-            //等待页面加载完毕
-            page.waitForLoadState(LoadState.NETWORKIDLE);
+            // Fix: 先检查是否存在，避免抛出异常导致直接返回 false
+            if (page.isVisible("//a[contains(text(),'登录')]")) {
+                page.click("//a[contains(text(),'登录')]");
+                //等待页面加载完毕
+                page.waitForLoadState(LoadState.NETWORKIDLE);
+            }
 
             // 检查是否有登录状态的元素
             ElementHandle userElement = page.querySelector("//div/span[contains(@class,'acount_box-nickname')]");

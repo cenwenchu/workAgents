@@ -2,7 +2,7 @@ package com.qiyi;
 
 import java.io.IOException;
 
-import com.qiyi.podcast.task.PodCastPostToWechat;
+import com.qiyi.podcast.tools.PodCastPostToWechat;
 import com.qiyi.util.PlayWrightUtil;
 
 public class PodCastToWechatTaskTest {
