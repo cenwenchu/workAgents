@@ -49,13 +49,13 @@ public class DingTalkUtil {
     private static String ROBOT_TOKEN = "";
     private static String ROBOT_SECRET = "";
 
-    private static String ROBOT_CLIENT_ID = "";
-    private static String ROBOT_CLIENT_SECRET = "";
+    public static String ROBOT_CLIENT_ID = "";
+    public static String ROBOT_CLIENT_SECRET = "";
 
     private static String ROBOT_CODE = "";
     private static Long AGENT_ID = 0L; // AgentId 用于发送工作通知（如本地图片）
     private static String PODCAST_PUBLISH_DIR = "";
-    private static List<String> PODCAST_ADMIN_USERS = new ArrayList<>();
+    public static List<String> PODCAST_ADMIN_USERS = new ArrayList<>();
 
     static {
         initClientConfig();
@@ -178,23 +178,17 @@ public class DingTalkUtil {
                     String msg = text.getString("content").trim();
                     // String openConversationId = request.getString("conversationId");
 
-                    // 权限校验
-                    if (!PODCAST_ADMIN_USERS.isEmpty() && (senderStaffId != null && !PODCAST_ADMIN_USERS.contains(senderStaffId))) {
-                        // 如果设置了管理员且发送者不是管理员，忽略
-                        System.out.println("User " + senderStaffId + " is not authorized.");
-                        return new JSONObject();
-                    }
-
                     // 做一些业务处理，实现对于群聊中的功能响应
                     if(msg.startsWith("发布"))
                     {
 
                         // 解析 @ 人列表
                         List<String> atUserIds = parseAtUserIds(msg);
+                        boolean isDraft = msg.contains("草稿");
 
                         // 异步执行发布任务，避免阻塞回调
                         java.util.concurrent.CompletableFuture.runAsync(() -> {
-                            handlePublishTask(senderStaffId,atUserIds);
+                            handlePublishTask(senderStaffId,atUserIds,isDraft);
                         });
                     }
                     else if(msg.startsWith("ping"))
@@ -209,7 +203,7 @@ public class DingTalkUtil {
             return new JSONObject();
         }
 
-        private void handlePublishTask(String operatorId,List<String> atUserIds) {
+        private void handlePublishTask(String operatorId,List<String> atUserIds,boolean isDraft) {
              List<String> notifyUsers = new ArrayList<>();
              if (operatorId != null) notifyUsers.add(operatorId);
              if (atUserIds != null && !atUserIds.isEmpty()) {
@@ -332,7 +326,7 @@ public class DingTalkUtil {
                      
                      for (String podcastFilePath : podcastFilePaths) {
                           try {
-                              String result = task.publishPodcastToWechat(podcastFilePath, true);
+                              String result = task.publishPodcastToWechat(podcastFilePath, isDraft);
                               if (result.startsWith(PodCastPostToWechat.SUCCESS_MSG)){
                                   sendTextMessageToEmployees(notifyUsers, "文件 " + new java.io.File(podcastFilePath).getName() + "， " + result);
                               }

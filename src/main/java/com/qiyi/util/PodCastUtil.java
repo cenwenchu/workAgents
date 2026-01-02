@@ -666,7 +666,7 @@ public class PodCastUtil {
      */
     public static WechatArticle generateWechatArticleFromDeepseek(String podcastFilePath) throws IOException {
 
-        String promptString = "根据以下的播客摘要，帮忙生成一个适合微信公众号的文章，返回内容请分成四部分：文章标题，文章摘要（控制在100字以内），文章分类（从生活、健康、科学、财经、科技、商业、其他中选一个），文章完整内容;返回格式如下：文章标题:xxx\n" + //
+        String promptString = "根据以下的播客摘要，帮忙生成一个适合微信公众号的文章，返回内容请分成四部分：文章标题（必填，绝对不能为空），文章摘要（控制在100字以内），文章分类（从生活、健康、科学、财经、科技、商业、其他中选一个），文章完整内容;返回格式如下：文章标题:xxx\n" + //
                         "文章摘要:xxx\n" + //
                         "文章分类:xxx\n" + //
                         "文章完整内容:xxx\n，播客内容如下：:";
@@ -675,7 +675,7 @@ public class PodCastUtil {
         String content = generateContentWithDeepSeekByFile(new java.io.File(podcastFilePath),promptString,true);
 
 
-        //System.out.println(content);
+        System.out.println(content);
 
         WechatArticle article =  parseFromString(content);
         article.setAuthor("Curcuma");
@@ -704,20 +704,15 @@ public class PodCastUtil {
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
                 
-                if (line.startsWith("文章标题:")) {
-                    article.setTitle(extractValue(line, "文章标题:"));
-                } else if (line.startsWith("文章摘要:")) {
-                    article.setSummary(extractValue(line, "文章摘要:"));
-                } else if (line.startsWith("文章分类:")) {
-                    article.setCategory(extractValue(line, "文章分类:"));
-                } else if (line.startsWith("文章完整内容:")) {
+                if (line.startsWith("文章标题")) {
+                    article.setTitle(extractValue(line, "文章标题").replace(":", "").replace("：", ""));
+                } else if (line.startsWith("文章摘要")) {
+                    article.setSummary(extractValue(line, "文章摘要").replace(":", "").replace("：", ""));
+                } else if (line.startsWith("文章分类")) {
+                    article.setCategory(extractValue(line, "文章分类").replace(":", "").replace("：", ""));
+                } else if (line.startsWith("文章完整内容")) {
                     // 内容部分开始
                     inContentSection = true;
-                    // 可能有冒号后的内容
-                    String afterColon = line.substring(line.indexOf(':') + 1).trim();
-                    if (!afterColon.isEmpty()) {
-                        contentBuilder.append(afterColon).append("\n");
-                    }
                 } else if (inContentSection) {
                     // 如果line有换行，则去掉换行
                     line = line.replace("\n", "");

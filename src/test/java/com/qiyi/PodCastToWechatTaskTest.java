@@ -1,14 +1,15 @@
 package com.qiyi;
 
-import java.io.IOException;
-
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Page;
 import com.qiyi.podcast.tools.PodCastPostToWechat;
 import com.qiyi.util.PlayWrightUtil;
+import com.qiyi.wechat.WechatArticle;
 
 public class PodCastToWechatTaskTest {
 
     
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
 
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
@@ -20,8 +21,19 @@ public class PodCastToWechatTaskTest {
 
         PodCastPostToWechat task = new PodCastPostToWechat(connection.browser);
 
-        task.publishPodcastToWechat("/Users/cenwenchu/Desktop/podCastItems/summary/2026年投资趋势：DeFi、代币化、资本形成、投机与人工智能_summary.txt", true);
+        WechatArticle article = new WechatArticle();
+        article.setTitle("测试播客标题");
+        article.setAuthor("测试作者");
+        article.setContent("这是测试播客的内容");
+        article.setSummary("这是测试播客的摘要");
+        article.setCategory("测试分类");
 
+        BrowserContext context = connection.browser.contexts().isEmpty() ? connection.browser.newContext() : connection.browser.contexts().get(0);
+        Page page = context.newPage();
+
+        task.openWechatPodcastBackground(page);
+
+        task.publishPodcast(context, page, article, false,"/Users/cenwenchu/Desktop/podCastItems/publish/");
         PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
     }
     

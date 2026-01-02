@@ -1,11 +1,15 @@
 package com.qiyi.podcast.tools;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.options.ScreenshotScale;
+import com.qiyi.util.DingTalkUtil;
 import com.qiyi.util.PlayWrightUtil;
 import com.qiyi.util.PodCastUtil;
 import com.qiyi.wechat.WechatArticle;
@@ -13,7 +17,7 @@ import com.qiyi.wechat.WechatArticle;
 public class PodCastPostToWechat {
 
     private Browser browser;
-    private static final int DEFAULT_TIMEOUT_MS = 60*1000;
+    private static final int DEFAULT_TIMEOUT_MS = 30*1000;
     public static final String SUCCESS_MSG = "成功发布:";
     public static final String WECHAT_LOGIN_URL = "https://mp.weixin.qq.com/cgi-bin/home";
 
@@ -47,7 +51,14 @@ public class PodCastPostToWechat {
         
         // 发布播客到微信公众号
         for (String podcastFilePath : podcastFilePaths) {
-            task.publishPodcastToWechat(podcastFilePath, true);
+            try
+            {
+                task.publishPodcastToWechat(podcastFilePath, true);
+            }
+            catch(Exception ex){
+                System.out.println("发布播客到微信公众号失败：" + podcastFilePath);
+                ex.printStackTrace();
+            }
         }
 
         // 断开浏览器连接
@@ -63,7 +74,7 @@ public class PodCastPostToWechat {
     }
     
     //根据指定文件，自动发布微信公众号文章
-    public String publishPodcastToWechat(String podcastFilePath,boolean isDraft) throws IOException {
+    public String publishPodcastToWechat(String podcastFilePath,boolean isDraft) throws Exception {
 
         if (browser == null) {
             log("浏览器未连接，请先连接浏览器");
@@ -92,6 +103,7 @@ public class PodCastPostToWechat {
         // 验证文章是否符合要求
         if (!PodCastUtil.validateArticle(article)) {
             log("文章不符合要求，无法发布");
+            System.out.println(article.toString());
             return "文章不符合要求，无法发布";
         }
 
@@ -106,14 +118,14 @@ public class PodCastPostToWechat {
         //System.out.println(article.getContent());
 
         // 发布播客
-        String result = publishPodcast(context,page,article,isDraft);
+        String result = publishPodcast(context,page,article,isDraft,podcastFilePath);
 
         return result;
     }
 
 
     //发布播客
-    private String publishPodcast(BrowserContext context,Page page,WechatArticle article,boolean isDraft) {
+    public String publishPodcast(BrowserContext context,Page page,WechatArticle article,boolean isDraft,String podcastFilePath) throws Exception {
         
         String result = SUCCESS_MSG + article.getTitle();
 
@@ -153,7 +165,8 @@ public class PodCastPostToWechat {
         publishPage.click("//input[contains(@placeholder,'选择合集')]");
 
         //等待选项的出来
-        publishPage.waitForSelector("//li[contains(@class,'select-opt-li')]");
+        publishPage.waitForSelector("//li[contains(@class,'select-opt-li')]",
+             new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
 
         //点击以后，会展开一个下拉菜单，如果分类存在，则点击分类
         if (publishPage.isVisible("//li[contains(text(),'" + article.getCategory() + "')]")) {
@@ -173,82 +186,124 @@ public class PodCastPostToWechat {
         }
 
         
-
         //修改一下留言的配置
         publishPage.click("//div[@class='setting-group__content']");
         publishPage.click("//label[contains(text(),'留言开关')]/..//div[contains(@class,'weui-desktop-switch__box')]");
         publishPage.click("//button[contains(text(),'确定')]");
         
-        //鼠标移动到封面图片上传区域，然后上传图片
-        // ElementHandle coverUploadArea = publishPage.waitForSelector("//div[contains(@class,'select-cover__mask')]");
-        // //点击AI 配图
-        // publishPage.click("//button[contains(@class,'js_cover_btn_area')]");
+        //鼠标移动到coverUploadArea，然后上传图片
+        ElementHandle coverUploadArea = publishPage.querySelector("//div[contains(@class,'select-cover__mask')]");
+        if (coverUploadArea != null) {
+            coverUploadArea.hover();
 
-        //尝试点击一键排版
-        Page operationPage = publishPage;
-        // boolean isFormatPage = false;
-        // try {
-        //     // 检查"一键排版"按钮是否存在并可见
-        //     if (publishPage.isVisible("//div[contains(text(),'一键排版')]")) {
-        //         Page publishFromatNewPage = context.waitForPage(() -> {
-        //             // 点击发布按钮
-        //             publishPage.click("//div[contains(text(),'一键排版')]");
-        //         });
-                
-        //         // 等待新页面加载完成
-        //         publishFromatNewPage.waitForLoadState();
-                
-        //         // 点击使用此排版
-        //         publishFromatNewPage.click("//button[contains(text(),'使用此排版')]");
+            publishPage.waitForSelector("//li/a[contains(text(),'图片库')] >> visible=true",
+             new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS)).click();
 
-        //         //等待页面加载完成，确保操作页面切换到新页面
-        //         publishFromatNewPage.waitForSelector("//button/span[contains(text(),'草稿')]", 
-        //             new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
-                
-        //         // 切换操作页面为新打开的排版页面
-        //         operationPage = publishFromatNewPage;
-        //         isFormatPage = true;
-                
-        //         // 关闭原来的发布页面，因为操作已经转移到新页面
-        //         publishPage.close();
-        //     } else {
-        //         log("一键排版按钮不可见，跳过");
-        //     }
-            
-        // } catch (Exception e) {
-        //     log("一键排版操作异常或按钮不存在: " + e.getMessage());
-        //     // 发生异常时，确保 operationPage 仍然指向可用的页面 (publishPage)
-        //     // 如果 publishPage 已经被关闭（虽然在异常块前只在成功切换时关闭），则需要小心
-        //     // 但这里逻辑是如果成功打开新页面并切换了 operationPage 才会关闭 publishPage
-        //     // 所以异常情况下 publishPage 应该还是打开的
-        // }
+
+            publishPage.waitForSelector("//div[contains(@class,'img-picker__item')]",
+             new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS)).click();
+
+             publishPage.click("//button[contains(text(),'下一步')]");
+             publishPage.click("//button[contains(text(),'确认')]");
+
+        }
 
         //点击发布按钮 (在当前操作页面上操作)
         if (isDraft) {
-            operationPage.click("//button/span[contains(text(),'草稿')]");
+            publishPage.click("//button/span[contains(text(),'草稿')]");
+
+            try {
+                publishPage.waitForSelector("//div[contains(text(),'已保存') and @class='inner']", 
+                    new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
+                log("发布成功：" + article.getTitle());
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            //关闭当前操作页面 (可能是原页面，也可能是排版后的新页面)
+            publishPage.close();
+
         } else {
-            operationPage.click("//button/span[contains(text(),'发表')]");
-        }
+            publishPage.click("//button/span[contains(text(),'发表')]");
 
-        try {
-            operationPage.waitForSelector("//div[contains(text(),'已保存') and @class='inner']", 
+            //无需声明并发表
+            publishPage.click("//button[contains(text(),'无需声明并发表')]");
+
+            publishPage.waitForSelector("//button[contains(text(),'发表')] >> visible=true",
+                new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS)).click();
+
+            if (publishPage.isVisible("//button[contains(text(),'继续发表')]")) {
+                publishPage.click("//button[contains(text(),'继续发表')]");
+            } 
+
+            
+            // 增加等待时间，确保二维码完全加载
+            publishPage.waitForSelector("//p[contains(text(),'请联系管理员进行验证')]", 
                 new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
-            log("发布成功：" + article.getTitle());
-        } catch (Exception e) {
-            e.printStackTrace();
+
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            
+            String fileName = "publish_screenshot_" + System.currentTimeMillis() + ".png";
+
+            //podcastFilePath 如果是目录则直接用，如果是文件，则取他的目录
+            String podcastDirPath = podcastFilePath;
+            if (Files.isRegularFile(Paths.get(podcastFilePath))) {
+                podcastDirPath = Paths.get(podcastFilePath).getParent().toString();
+            }
+
+            java.nio.file.Path screenshotPath = java.nio.file.Paths.get(podcastDirPath, fileName);
+            
+            // 尝试定位登录框截图，清晰度更高
+            com.microsoft.playwright.Locator qrcodeScanElement = publishPage.locator(".qrcode_scan");
+
+            if (qrcodeScanElement.isVisible()) {
+                qrcodeScanElement.screenshot(new com.microsoft.playwright.Locator.ScreenshotOptions()
+                    .setPath(screenshotPath).setScale(ScreenshotScale.DEVICE)); 
+            } else {
+                publishPage.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions().setPath(screenshotPath));
+            }
+            
+            String mediaId = DingTalkUtil.uploadMedia(DingTalkUtil.ROBOT_CLIENT_ID, DingTalkUtil.ROBOT_CLIENT_SECRET, screenshotPath.toFile());
+
+            DingTalkUtil.sendAsyncWorkTextMessage(DingTalkUtil.PODCAST_ADMIN_USERS, "微信公众号文章需要扫码发布，请扫描下方二维码： --" + System.currentTimeMillis());
+            DingTalkUtil.sendAsyncWorkImageMessage(DingTalkUtil.PODCAST_ADMIN_USERS, mediaId);
+            
+            // 上传成功后删除本地文件
+            screenshotPath.toFile().delete();
+
+            //等待operationPage被关闭 或者 发表按钮消失（代表发布成功），给予足够的时间扫码
+            //使用轮询方式，以便在页面关闭时能立即感知，避免 waitForSelector 在页面关闭后长时间等待
+            long maxWait = DEFAULT_TIMEOUT_MS * 3; 
+            long start = System.currentTimeMillis();
+            while (System.currentTimeMillis() - start < maxWait) {
+                if (publishPage.isClosed() || !publishPage.isVisible("//p[contains(text(),'请联系管理员进行验证')]")) {
+                    break;
+                }
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+
+            Thread.sleep(3000);
+
+            // 确保页面被关闭，才继续向下执行
+            if (!publishPage.isClosed()) {
+                publishPage.close();
+            }
         }
 
-        //关闭当前操作页面 (可能是原页面，也可能是排版后的新页面)
-        operationPage.close();
 
         if (isDraft) {
-
             page.waitForSelector("//span[@title='内容管理']").click();
-
             ElementHandle draftBox = page.waitForSelector("//a[@title='草稿箱']");
             draftBox.click();
 
-            //检查草稿箱是否有新的草稿
             try
             {
                 page.waitForSelector("//a/span[contains(text(),'" + article.getTitle() + "')]", new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS));
@@ -259,6 +314,24 @@ public class PodCastPostToWechat {
                 result = "草稿箱没有新的草稿：" + article.getTitle();
             }
         }
+        else
+        {
+            page.waitForSelector("//a[@title='首页']").click();
+            page.waitForSelector("//span[@title='内容管理']").click();
+            ElementHandle publicRecord = page.waitForSelector("//a[@title='发表记录']");
+            publicRecord.click();
+
+            try
+            {
+                page.waitForSelector("//div[@class='weui-desktop-block'][.//a/span[contains(text(),'" + article.getTitle() + "')] and .//span[contains(text(),'已发表')]]", 
+                    new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS*4));
+                log("发布文章成功：" + article.getTitle());
+            }
+            catch(Exception ex){
+                log("没有新的发布内容：" + article.getTitle());
+                result = "没有新的发布内容：" + article.getTitle();
+            }
+        } 
 
         return result;
     }
