@@ -2,6 +2,7 @@ package com.qiyi.util;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
+import com.qiyi.config.AppConfig;
 
 public class PlayWrightUtil {
 
@@ -15,22 +16,23 @@ public class PlayWrightUtil {
      */
     public static Connection connectAndAutomate() {
         Connection connection = new Connection();
+        int port = AppConfig.getInstance().getChromeDebugPort();
         try {
             connection.playwright = Playwright.create();
             
             // 1. 获取 Chrome 的 WebSocket 调试 URL
-            String wsEndpoint = PodCastUtil.getChromeWsEndpoint(9222);
+            String wsEndpoint = PodCastUtil.getChromeWsEndpoint(port);
             
             if (wsEndpoint == null) {
                 
-                PodCastUtil.startChromeBrowser();
+                PodCastUtil.startChromeBrowser(port);
 
-                wsEndpoint = PodCastUtil.getChromeWsEndpoint(9222);
+                wsEndpoint = PodCastUtil.getChromeWsEndpoint(port);
 
                 if (wsEndpoint == null) 
                 {
                     System.out.println("未找到运行的 Chrome 实例，请先以调试模式启动 Chrome");
-                    System.out.println("启动命令：chrome --remote-debugging-port=9222");
+                    System.out.println("启动命令：chrome --remote-debugging-port=" + port);
 
                     return null;
                 }
@@ -66,7 +68,7 @@ public class PlayWrightUtil {
                 playwright.close();
             }
 
-        PodCastUtil.killChromeProcess(9222);
+        PodCastUtil.killChromeProcess(AppConfig.getInstance().getChromeDebugPort());
     }
     
 }

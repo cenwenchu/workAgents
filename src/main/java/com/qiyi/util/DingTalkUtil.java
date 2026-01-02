@@ -315,13 +315,20 @@ public class DingTalkUtil {
                  try {
                      PodCastPostToWechat task = new PodCastPostToWechat(connection.browser);
                      
-                     java.util.List<String> podcastFilePaths = java.nio.file.Files.walk(java.nio.file.Paths.get(PODCAST_PUBLISH_DIR))
+                     java.nio.file.Path publishDirPath = java.nio.file.Paths.get(PODCAST_PUBLISH_DIR);
+                     if (!java.nio.file.Files.exists(publishDirPath) || !java.nio.file.Files.isDirectory(publishDirPath)) {
+                         sendTextMessageToEmployees(notifyUsers, "发布目录不存在或无效: " + PODCAST_PUBLISH_DIR);
+                         return;
+                     }
+
+                     java.util.List<String> podcastFilePaths = java.nio.file.Files.walk(publishDirPath)
                                 .filter(p -> java.nio.file.Files.isRegularFile(p) && !p.getFileName().toString().startsWith(".")) // 忽略隐藏文件
                                 .map(p -> p.toString())
                                 .collect(java.util.stream.Collectors.toList());
                      
                      if (podcastFilePaths.isEmpty()) {
-                         sendTextMessageToEmployees(notifyUsers, "目录中没有找到文件: " + PODCAST_PUBLISH_DIR);
+                         sendTextMessageToEmployees(notifyUsers, "目录中没有找到待发布的文件: " + PODCAST_PUBLISH_DIR);
+                         return;
                      }
                      
                      for (String podcastFilePath : podcastFilePaths) {
@@ -338,7 +345,11 @@ public class DingTalkUtil {
                               e.printStackTrace();
                           }
                      }
-                 } finally {
+                 }
+                 catch (Exception e) {
+                     e.printStackTrace();
+                 }
+                 finally {
                      PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
                  }
                  

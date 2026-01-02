@@ -3,7 +3,6 @@ package com.qiyi.util;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.net.HttpURLConnection;
@@ -12,7 +11,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
 import org.apache.pdfbox.Loader;
@@ -45,10 +43,11 @@ import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
 import io.github.pigmesh.ai.deepseek.core.shared.StreamOptions;
 import reactor.core.publisher.Flux;
 
+import com.qiyi.config.AppConfig;
+
 public class PodCastUtil {
 
-    static String GEMINI_API_KEY = "";
-    static String DEEPSEEK_API_KEY = "";
+    // Removed static API keys to use AppConfig instead
 
     /**
      * 获取 Chrome 浏览器的 WebSocket 调试端点 URL
@@ -142,10 +141,12 @@ public class PodCastUtil {
     public static void killChromeProcess(int port) {
         //  先杀死占用 9222 端口的进程等待一段时间，确保进程已完全终止
         try {
-            System.out.println("正在杀死占用 9222 端口的进程...");
-            Process killProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", "lsof -ti:9222 | xargs kill -9"});
+            System.out.println("正在杀死占用 " + port + " 端口的进程...");
+            // 只杀死处于 LISTEN 状态的进程（即 Chrome 服务端），避免误杀连接到该端口的客户端（即本 Java 进程）
+            String cmd = "lsof -n -i:" + port + " | grep LISTEN | awk '{print $2}' | xargs kill -9";
+            Process killProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", cmd});
             killProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-            System.out.println("已杀死占用 9222 端口的进程");
+            System.out.println("已杀死占用 " + port + " 端口的进程");
             
             Thread.sleep(1000);
         } catch (Exception ex) {
@@ -157,19 +158,30 @@ public class PodCastUtil {
     /**
      * 启动带有远程调试端口的 Chrome 浏览器
      * 
+     * @param port 调试端口号
      * @throws IOException IO异常
      * @throws InterruptedException 中断异常
      */
-    public static void startChromeBrowser() throws IOException, InterruptedException {
+    public static void startChromeBrowser(int port) throws IOException, InterruptedException {
         // 启动 Chrome 浏览器
-        System.out.println("正在启动 Chrome 浏览器...");
-        String command = "nohup /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=\"/tmp/chrome-debug\" > /tmp/chrome-debug.log 2>&1 &";
+        System.out.println("正在启动 Chrome 浏览器 (Port: " + port + ")...");
+        String command = "nohup /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=" + port + " --user-data-dir=\"/tmp/chrome-debug\" > /tmp/chrome-debug.log 2>&1 &";
         Process chromeProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", command});
         chromeProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
         System.out.println("Chrome 浏览器已启动");
         
         // 等待 Chrome 完全启动
         Thread.sleep(3000);
+    }
+
+    /**
+     * 启动带有远程调试端口的 Chrome 浏览器 (使用默认端口)
+     * 
+     * @throws IOException IO异常
+     * @throws InterruptedException 中断异常
+     */
+    public static void startChromeBrowser() throws IOException, InterruptedException {
+        startChromeBrowser(AppConfig.getInstance().getChromeDebugPort());
     }
 
     /**
@@ -208,24 +220,7 @@ public class PodCastUtil {
 
 
     public static void initClientConfig() {
-        if (GEMINI_API_KEY.equals("") || DEEPSEEK_API_KEY.equals(""))
-        {
-            Properties props = new Properties();
-            try (InputStream input = PodCastUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
-                if (input == null) {
-                    System.out.println("配置文件 podcast.cfg 未找到");
-                } else {
-                    props.load(input);
-                    System.out.println("配置文件加载成功");
-                }
-            } catch (IOException ex) {
-                System.out.println("加载配置文件失败: " + ex.getMessage());
-                ex.printStackTrace();
-            }
-
-            GEMINI_API_KEY = props.getProperty("GEMINI_API_KEY");
-            DEEPSEEK_API_KEY = props.getProperty("deepseek.api-key");
-        }
+        // Configuration is now handled by AppConfig
     }
 
 
@@ -240,7 +235,7 @@ public class PodCastUtil {
 
             initClientConfig();
 
-            try (Client client =Client.builder().apiKey(GEMINI_API_KEY).build();) {
+            try (Client client =Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build();) {
 
             GenerateContentConfig config = GenerateContentConfig.builder()
                 .responseModalities(Arrays.asList("IMAGE"))
@@ -346,7 +341,7 @@ public class PodCastUtil {
         if (isStreamingProcess)
         {
             DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(DEEPSEEK_API_KEY)
+            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
             .baseUrl("https://api.deepseek.com")
             .model("deepseek-chat")
             .logStreamingResponses(true)                        // 开启响应日志
@@ -404,7 +399,7 @@ public class PodCastUtil {
         else
         {
             DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(DEEPSEEK_API_KEY)
+            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
             .baseUrl("https://api.deepseek.com")
             .model("deepseek-chat")
             .connectTimeout(java.time.Duration.ofSeconds(30))
@@ -491,7 +486,7 @@ public class PodCastUtil {
             initClientConfig();
 
             Client client = Client.builder()
-            .apiKey(GEMINI_API_KEY)
+            .apiKey(AppConfig.getInstance().getGeminiApiKey())
             .build();
 
 
@@ -541,7 +536,7 @@ public class PodCastUtil {
         String responseText = "";
         
         DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(DEEPSEEK_API_KEY)
+            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
             .baseUrl("https://api.deepseek.com")
             .model("deepseek-chat")
             .build();
@@ -575,7 +570,7 @@ public class PodCastUtil {
     public static String chatWithGemini(String prompt) {
         initClientConfig();
         String responseText = "";
-        try (Client client = Client.builder().apiKey(GEMINI_API_KEY).build()) {
+        try (Client client = Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build()) {
             GenerateContentResponse response = client.models.generateContent("gemini-3-flash-preview", prompt, null);
             responseText = response.text();
         } catch (Exception e) {

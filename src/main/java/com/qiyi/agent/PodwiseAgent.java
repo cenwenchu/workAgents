@@ -8,7 +8,8 @@ import java.io.IOException;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
-import com.qiyi.podcast.tools.DownLoadPodCast;
+import com.qiyi.podcast.ModelType;
+import com.qiyi.podcast.service.PodcastManager;
 import com.qiyi.util.PlayWrightUtil;
 
 //先要运行这个启动可信任浏览器
@@ -23,13 +24,6 @@ public class PodwiseAgent {
 
     Playwright playwright = null;
     Browser browser = null;
-
-    //两个模型枚举
-    public enum ModelType {
-        ALL,
-        DEEPSEEK,
-        GEMINI
-    }
 
 
 	public static void main(String[] args) throws IOException {
@@ -90,27 +84,19 @@ public class PodwiseAgent {
             return;
         }
 
-        //下载关注的播客节目的文本文件
-         DownLoadPodCast downLoadPodCastTask = new DownLoadPodCast(autoMan.browser,"/Users/cenwenchu/Desktop/podCastItems/");
-         
-         //downLoadPodCastTask.batchRenameChineseFiles(ModelType.DEEPSEEK, 30);
+        // 使用新的 PodcastManager
+        PodcastManager podcastManager = new PodcastManager(autoMan.browser);
+        
+        // 1. 下载任务
+        // maxBatchSize 默认为 20
+        podcastManager.runDownloadTask(maxProcessCount, maxTryTimes, maxDuplicatePages, true, ModelType.DEEPSEEK, 20);
 
-         //下载关注的播客节目的文本文件
-         downLoadPodCastTask.performAutomationDownloadTasks(maxProcessCount,maxTryTimes,true, ModelType.DEEPSEEK,20,maxDuplicatePages);
+        // 2. 处理任务 (摘要、翻译、图片)
+        // isStreamingProcess=true, needGenerateImage=false (as per original code call: false, true -> needGenerateImage=false?? Wait)
+        // Original: processDownloadedFiles(..., needGenerateImage=false, isStreamingProcess=true, ...)
+        podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize);
 
-         //对于下载的文件，通过调用gemini的api来做翻译和中文摘要
-         downLoadPodCastTask.processDownloadedFiles(downLoadPodCastTask.DOWNLOAD_DIR_CN,
-            downLoadPodCastTask.DOWNLOAD_DIR_SUMMARY,downLoadPodCastTask.DOWNLOAD_DIR_IMAGE,
-            downloadMaxProcessCount,ModelType.DEEPSEEK,false,true,threadPoolSize);
-
-
-
-        // 从本地文件中读取播客列表,并且搜索和关注这些播客
-        //AddPodCastTask addPodCastTask = new AddPodCastTask(autoMan.browser);
-        //String[] podCastNames = PodCastUtil.readPodCastNamesFromFile("/Users/cenwenchu/Desktop/podcasts.txt");
-        //addPodCastTask.addPodCast(podCastNames);
-
-         
+        
          PlayWrightUtil.disconnectBrowser(autoMan.playwright, autoMan.browser);
 
 	}

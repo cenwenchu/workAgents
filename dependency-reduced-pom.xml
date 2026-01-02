@@ -61,7 +61,7 @@
             <configuration>
               <transformers>
                 <transformer>
-                  <mainClass>com.qiyi.podcast.PodwiseAutoMan</mainClass>
+                  <mainClass>com.qiyi.agent.PodwiseAgent</mainClass>
                 </transformer>
               </transformers>
             </configuration>

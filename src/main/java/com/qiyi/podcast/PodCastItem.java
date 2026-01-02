@@ -7,4 +7,14 @@ public class PodCastItem {
     public String dateTimeString;
     public boolean isProcessed;
 
+    public String toString() {
+        return "PodCastItem{" +
+                "title='" + title + '\'' +
+                ", linkString='" + linkString + '\'' +
+                ", channelName='" + channelName + '\'' +
+                ", dateTimeString='" + dateTimeString + '\'' +
+                ", isProcessed=" + isProcessed +
+                '}';
+    }
+
 }
