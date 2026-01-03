@@ -24,8 +24,9 @@ public class PodcastManager {
         this.processor = new PodcastProcessor(fileService);
     }
 
-    public void runDownloadTask(int maxProcessCount, int maxTryTimes, int maxDuplicatePages, boolean onlyReadReady, ModelType modelType, int maxRenameBatchSize) {
+    public int runDownloadTask(int maxProcessCount, int maxTryTimes, int maxDuplicatePages, boolean onlyReadReady, ModelType modelType, int maxRenameBatchSize) {
         System.out.println("Starting Download Task...");
+        int downloadedCount = 0;
         
         List<String> processedNames = fileService.getProcessedItemNames();
         List<PodCastItem> itemsToDownload = new ArrayList<>();
@@ -59,14 +60,18 @@ public class PodcastManager {
                  cnPath = fileService.getDownloadDirCn() + cnFilename;
                  
                  crawler.downloadEpisode(item, downloadPath, cnPath);
+
+                 downloadedCount++;
              }
         }
         
         fileService.deleteFileList();
         
-        if (modelType != null) {
+        if (modelType != null && downloadedCount > 0) {
             runRenameTask(modelType, maxRenameBatchSize);
         }
+
+        return downloadedCount;
     }
 
     public void runRenameTask(ModelType modelType, int maxBatchSize) {
@@ -133,8 +138,12 @@ public class PodcastManager {
             processedCount++;
             futures.add(executor.submit(() -> {
                 processor.generateSummary(file, summaryFile, modelType, isStreaming);
-                if (needGenerateImage && summaryFile.exists()) {
-                    processor.generateImage(summaryFile, fileService.getDownloadDirImage());
+                if (summaryFile.exists()) {
+                    if (needGenerateImage) {
+                        processor.generateImage(summaryFile, fileService.getDownloadDirImage());
+                    }
+                    // Move source file to processed directory
+                    fileService.moveFileToProcessed(file);
                 }
             }));
         }

@@ -167,7 +167,13 @@ public class DingTalkUtil {
                     .filter(p -> p.toString().endsWith("_summary.txt")) // 假设只处理摘要文件
                     .filter(p -> !publishedFiles.contains(p.getFileName().toString()))
                     .filter(p -> !existingPublishFiles.contains(p.getFileName().toString()))
-                    .sorted() // 可以按需改为按修改时间排序
+                    .sorted((p1, p2) -> {
+                        try {
+                            return java.nio.file.Files.getLastModifiedTime(p2).compareTo(java.nio.file.Files.getLastModifiedTime(p1));
+                        } catch (java.io.IOException e) {
+                            return 0;
+                        }
+                    })
                     .limit(needed)
                     .collect(java.util.stream.Collectors.toList());
 

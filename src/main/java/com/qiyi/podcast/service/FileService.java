@@ -17,6 +17,7 @@ public class FileService {
     private final String downloadDirOriginal;
     private final String downloadDirCn;
     private final String downloadDirSummary;
+    private final String downloadDirProcessed;
     private final String downloadDirImage;
     private final String filelistFile;
 
@@ -25,6 +26,7 @@ public class FileService {
         this.downloadDirOriginal = this.downloadDirTop + "original/";
         this.downloadDirCn = this.downloadDirTop + "cn/";
         this.downloadDirSummary = this.downloadDirTop + "summary/";
+        this.downloadDirProcessed = this.downloadDirTop + "processed/";
         this.downloadDirImage = this.downloadDirTop + "Image/";
         this.filelistFile = this.downloadDirTop + "filelist.txt";
         
@@ -36,6 +38,7 @@ public class FileService {
         createDirIfNotExist(downloadDirOriginal);
         createDirIfNotExist(downloadDirCn);
         createDirIfNotExist(downloadDirSummary);
+        createDirIfNotExist(downloadDirProcessed);
         createDirIfNotExist(downloadDirImage);
     }
 
@@ -56,6 +59,10 @@ public class FileService {
 
     public String getDownloadDirSummary() {
         return downloadDirSummary;
+    }
+
+    public String getDownloadDirProcessed() {
+        return downloadDirProcessed;
     }
 
     public String getDownloadDirImage() {
@@ -140,6 +147,19 @@ public class FileService {
             } catch (IOException e) {
                 System.err.println("复制并重命名失败: " + originalFile.getName() + " -> " + newName + " Error:" + e.getMessage());
             }
+        }
+    }
+
+    public void moveFileToProcessed(File file) {
+        if (file == null || !file.exists()) return;
+        File destDir = new File(downloadDirProcessed);
+        if (!destDir.exists()) destDir.mkdirs();
+        File destFile = new File(destDir, file.getName());
+        try {
+            Files.move(file.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Moved processed file to: " + destFile.getPath());
+        } catch (IOException e) {
+            System.err.println("Failed to move file to processed: " + e.getMessage());
         }
     }
 }

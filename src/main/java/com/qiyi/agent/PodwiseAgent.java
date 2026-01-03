@@ -32,7 +32,7 @@ public class PodwiseAgent {
         PodwiseAgent autoMan = new PodwiseAgent();
 
         int maxProcessCount = 50;
-        int maxTryTimes = 7;
+        int maxTryTimes = 15;
         int downloadMaxProcessCount = 0;
         int threadPoolSize = 15;
         int maxDuplicatePages = 10;
@@ -86,16 +86,19 @@ public class PodwiseAgent {
 
         // 使用新的 PodcastManager
         PodcastManager podcastManager = new PodcastManager(autoMan.browser);
-        
+
         // 1. 下载任务
         // maxBatchSize 默认为 20
-        podcastManager.runDownloadTask(maxProcessCount, maxTryTimes, maxDuplicatePages, true, ModelType.DEEPSEEK, 20);
+        int downloadedCount = podcastManager.runDownloadTask(maxProcessCount, maxTryTimes, maxDuplicatePages, true, ModelType.DEEPSEEK, 20);
 
         // 2. 处理任务 (摘要、翻译、图片)
         // isStreamingProcess=true, needGenerateImage=false (as per original code call: false, true -> needGenerateImage=false?? Wait)
         // Original: processDownloadedFiles(..., needGenerateImage=false, isStreamingProcess=true, ...)
-        podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize);
-
+        if (downloadedCount > 0) {
+            podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize);
+        }
+        else
+            System.out.println("没有新下载的文件，无需处理");
         
          PlayWrightUtil.disconnectBrowser(autoMan.playwright, autoMan.browser);
 
