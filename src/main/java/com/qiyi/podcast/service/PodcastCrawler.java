@@ -150,6 +150,9 @@ public class PodcastCrawler {
 
                 if (!hasNewValidItemInThisBatch) {
                     consecutiveDuplicatePages++;
+
+                    System.out.println("连续 " + consecutiveDuplicatePages + " 次下拉未发现新数据");
+
                     if (consecutiveDuplicatePages >= maxDuplicatePages) {
                         System.out.println("连续 " + maxDuplicatePages + " 次下拉未发现新数据，提前结束");
                         break;
