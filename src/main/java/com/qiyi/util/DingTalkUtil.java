@@ -7,9 +7,11 @@ import com.dingtalk.api.DingTalkClient;
 import com.dingtalk.api.request.OapiRobotSendRequest;
 import com.dingtalk.api.request.OapiUserListsimpleRequest;
 import com.dingtalk.api.request.OapiV2DepartmentListsubRequest;
+import com.dingtalk.api.request.OapiV2UserGetRequest;
 import com.dingtalk.api.response.OapiRobotSendResponse;
 import com.dingtalk.api.response.OapiUserListsimpleResponse;
 import com.dingtalk.api.response.OapiV2DepartmentListsubResponse;
+import com.dingtalk.api.response.OapiV2UserGetResponse;
 import com.dingtalk.open.app.api.OpenDingTalkClient;
 import com.dingtalk.open.app.api.OpenDingTalkStreamClientBuilder;
 import com.dingtalk.open.app.api.callback.OpenDingTalkCallbackListener;
@@ -22,6 +24,7 @@ import com.qiyi.podcast.tools.PodCastPostToWechat;
 import com.taobao.api.FileItem;
 import com.aliyun.dingtalkoauth2_1_0.models.GetAccessTokenResponse;
 import com.aliyun.dingtalkrobot_1_0.models.*;
+import com.aliyun.dingtalkcalendar_1_0.models.*;
 import com.aliyun.tea.TeaException;
 
 import org.apache.commons.codec.binary.Base64;
@@ -74,7 +77,14 @@ public class DingTalkUtil {
         PARAM_NAME_MAPPING.put("userIds", "接收人用户ID列表");
         PARAM_NAME_MAPPING.put("names", "接收人姓名列表");
         PARAM_NAME_MAPPING.put("content", "消息内容");
-        PARAM_NAME_MAPPING.put("departments", "部门列表");
+        PARAM_NAME_MAPPING.put("summary", "日程标题");
+        PARAM_NAME_MAPPING.put("startTime", "开始时间");
+        PARAM_NAME_MAPPING.put("endTime", "结束时间");
+        PARAM_NAME_MAPPING.put("description", "日程描述");
+        PARAM_NAME_MAPPING.put("location", "地点");
+        PARAM_NAME_MAPPING.put("attendees", "参与人");
+
+        initClientConfig();PARAM_NAME_MAPPING.put("departments", "部门列表");
 
         initClientConfig();
         registerTools();
@@ -118,11 +128,24 @@ public class DingTalkUtil {
             public String getName() { return "send_message"; }
             @Override
             public String getDescription() {
-                return "Send direct DingTalk text message. Parameters: content (string, mandatory). Choose ONE of: departments (string or List, department names) OR names (string or List, user names). If both provided, departments take precedence.";
+                return "Send direct DingTalk text message to specific users. Parameters: content (string, mandatory). Choose ONE of: departments (string/List, names or IDs) OR names (string/List). If both provided, departments take precedence.";
             }
             @Override
             public void execute(JSONObject params, String senderId, List<String> atUserIds) {
                 DingTalkUtil.handleSendMessageTask(senderId, atUserIds, params);
+            }
+        });
+
+        tools.put("create_event", new ToolHandler() {
+            @Override
+            public String getName() { return "create_event"; }
+            @Override
+            public String getDescription() {
+                return "Create a calendar event. Parameters: summary (string, mandatory), startTime (string, mandatory, yyyy-MM-dd HH:mm:ss), endTime (string, mandatory, yyyy-MM-dd HH:mm:ss), attendees (string/List, mandatory, names/userIds), description (string, optional), location (string, optional).";
+            }
+            @Override
+            public void execute(JSONObject params, String senderId, List<String> atUserIds) {
+                DingTalkUtil.handleCreateEventTask(senderId, atUserIds, params);
             }
         });
     }
@@ -828,6 +851,220 @@ public class DingTalkUtil {
                 }
             }
         }
+    private static void handleCreateEventTask(String operatorId, List<String> atUserIds, JSONObject params) {
+        String summary = params.getString("summary");
+        String startTimeStr = params.getString("startTime");
+        String endTimeStr = params.getString("endTime");
+        String description = params.getString("description");
+        String location = params.getString("location");
+        Object attendeesObj = params.get("attendees");
+
+        List<String> notifyUsers = new ArrayList<>();
+        if (operatorId != null) notifyUsers.add(operatorId);
+
+        // 1. Resolve Attendees
+        List<String> attendeeUserIds = new ArrayList<>();
+        List<String> notFoundNames = new ArrayList<>();
+
+        if (attendeesObj != null) {
+            List<String> inputNames = new ArrayList<>();
+            if (attendeesObj instanceof com.alibaba.fastjson2.JSONArray) {
+                for (Object o : (com.alibaba.fastjson2.JSONArray) attendeesObj) {
+                    if (o != null) inputNames.add(String.valueOf(o));
+                }
+            } else if (attendeesObj instanceof java.util.Collection) {
+                for (Object o : (java.util.Collection<?>) attendeesObj) {
+                    if (o != null) inputNames.add(String.valueOf(o));
+                }
+            } else if (attendeesObj instanceof String) {
+                String s = (String) attendeesObj;
+                if (!s.trim().isEmpty()) {
+                    String[] parts = s.split("[,，\\s]+");
+                    for (String p : parts) {
+                        if (!p.trim().isEmpty()) inputNames.add(p.trim());
+                    }
+                }
+            }
+
+            if (!inputNames.isEmpty()) {
+                 try {
+                    // Try to resolve names to IDs
+                    List<DingTalkDepartment> departments = getAllDepartments(true, true);
+                    java.util.Map<String, String> userMap = new java.util.HashMap<>();
+                    for (DingTalkDepartment dept : departments) {
+                        if (dept.getUserList() != null) {
+                            for (DingTalkUser user : dept.getUserList()) {
+                                userMap.put(user.getName(), user.getUserid());
+                            }
+                        }
+                    }
+                    
+                    for (String name : inputNames) {
+                        if (userMap.containsKey(name)) {
+                            String uid = userMap.get(name);
+                            if (!attendeeUserIds.contains(uid)) {
+                                attendeeUserIds.add(uid);
+                            }
+                        } else if (userMap.containsValue(name)) { // Check if input is already an ID (less likely for name field but possible)
+                             if (!attendeeUserIds.contains(name)) {
+                                attendeeUserIds.add(name);
+                             }
+                        } else {
+                            notFoundNames.add(name);
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        
+        // Add atUserIds if any
+        if (atUserIds != null) {
+             for(String uid : atUserIds) {
+                 if(!attendeeUserIds.contains(uid)) attendeeUserIds.add(uid);
+             }
+        }
+
+        if (!notFoundNames.isEmpty()) {
+             try {
+                sendTextMessageToEmployees(notifyUsers, "创建日程警告: 未找到以下参与人: " + String.join("，", notFoundNames) + "。");
+             } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        if (attendeeUserIds.isEmpty()) {
+            try {
+                sendTextMessageToEmployees(notifyUsers, "创建日程失败: 未指定有效的参与人。");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+
+        // 2. Validate Time
+        if (startTimeStr == null || endTimeStr == null) {
+             try {
+                sendTextMessageToEmployees(notifyUsers, "创建日程失败: 开始时间或结束时间缺失。");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+
+        // 3. Convert Time to ISO 8601 (yyyy-MM-dd'T'HH:mm:ss+08:00)
+        String isoStartTime;
+        String isoEndTime;
+        try {
+            java.time.format.DateTimeFormatter inputFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            java.time.LocalDateTime localStart = java.time.LocalDateTime.parse(startTimeStr, inputFormatter);
+            java.time.LocalDateTime localEnd = java.time.LocalDateTime.parse(endTimeStr, inputFormatter);
+            
+            java.time.ZonedDateTime zonedStart = localStart.atZone(java.time.ZoneId.of("Asia/Shanghai"));
+            java.time.ZonedDateTime zonedEnd = localEnd.atZone(java.time.ZoneId.of("Asia/Shanghai"));
+            
+            isoStartTime = zonedStart.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+            isoEndTime = zonedEnd.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        } catch (Exception e) {
+             // Fallback or rethrow, but better to let the user know input was bad if it fails here
+             // However, for safety if simple replace was working before (but getting 400), we stick to new logic
+             throw new RuntimeException("时间格式解析错误，请确保使用 yyyy-MM-dd HH:mm:ss 格式。Input: " + startTimeStr + " / " + endTimeStr);
+        }
+
+        // 4. Create Event
+        try {
+            // Using operatorId as the user to create event for
+            String unionId = getUnionIdByUserId(operatorId);
+            if (unionId == null) {
+                 throw new RuntimeException("无法获取操作人的 UnionId，无法创建日程。UserId: " + operatorId);
+            }
+            
+            // Convert attendeeUserIds to UnionIds
+            List<String> attendeeUnionIds = new ArrayList<>();
+            List<String> failedConversionUsers = new ArrayList<>();
+            for (String uid : attendeeUserIds) {
+                try {
+                    String uUnionId = getUnionIdByUserId(uid);
+                    if (uUnionId != null) {
+                        attendeeUnionIds.add(uUnionId);
+                    } else {
+                        failedConversionUsers.add(uid);
+                    }
+                } catch (Exception e) {
+                    failedConversionUsers.add(uid);
+                    e.printStackTrace();
+                }
+            }
+            
+            if (!failedConversionUsers.isEmpty()) {
+                 sendTextMessageToEmployees(notifyUsers, "警告: 无法获取以下用户的 UnionId，将被忽略: " + String.join(", ", failedConversionUsers));
+            }
+
+            if (attendeeUnionIds.isEmpty() && !attendeeUserIds.isEmpty()) {
+                 throw new RuntimeException("没有有效的参与人 (UnionId 获取失败)");
+            }
+            
+            String eventId = createCalendarEvent(unionId, summary, description, isoStartTime, isoEndTime, attendeeUnionIds, location);
+            sendTextMessageToEmployees(notifyUsers, "日程创建成功！标题: " + summary + "，时间: " + startTimeStr + " - " + endTimeStr + "，参与人数: " + attendeeUnionIds.size());
+        } catch (Exception e) {
+            e.printStackTrace();
+            try {
+                sendTextMessageToEmployees(notifyUsers, "创建日程失败: " + e.getMessage());
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    public static String getUnionIdByUserId(String userId) throws Exception {
+        DingTalkClient client = new DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/v2/user/get");
+        com.dingtalk.api.request.OapiV2UserGetRequest req = new com.dingtalk.api.request.OapiV2UserGetRequest();
+        req.setUserid(userId);
+        req.setLanguage("zh_CN");
+        com.dingtalk.api.response.OapiV2UserGetResponse rsp = client.execute(req, getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET));
+        if (rsp.getResult() != null) {
+            return rsp.getResult().getUnionid();
+        }
+        return null;
+    }
+
+    public static com.aliyun.dingtalkcalendar_1_0.Client createCalendarClient() throws Exception {
+        com.aliyun.teaopenapi.models.Config config = new com.aliyun.teaopenapi.models.Config();
+        config.protocol = "https";
+        config.regionId = "central";
+        return new com.aliyun.dingtalkcalendar_1_0.Client(config);
+    }
+
+    public static String createCalendarEvent(String userId, String summary, String description, String startTime, String endTime, List<String> attendeeUnionIds, String location) throws Exception {
+        com.aliyun.dingtalkcalendar_1_0.Client client = createCalendarClient();
+        com.aliyun.dingtalkcalendar_1_0.models.CreateEventHeaders headers = new com.aliyun.dingtalkcalendar_1_0.models.CreateEventHeaders();
+        headers.xAcsDingtalkAccessToken = getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
+
+        com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest request = new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest()
+            .setSummary(summary)
+            .setDescription(description)
+            .setStart(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestStart().setDateTime(startTime).setTimeZone("Asia/Shanghai"))
+            .setEnd(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestEnd().setDateTime(endTime).setTimeZone("Asia/Shanghai"));
+            
+        if (location != null && !location.isEmpty()) {
+            request.setLocation(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestLocation().setDisplayName(location));
+        }
+            
+        List<com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestAttendees> attendees = new ArrayList<>();
+        for (String uid : attendeeUnionIds) {
+            attendees.add(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestAttendees().setId(uid));
+        }
+        request.setAttendees(attendees);
+
+        // createEventWithOptions(userId, calendarId, request, headers, runtime)
+        CreateEventResponse response = client.createEventWithOptions(userId, "primary", request, headers, new com.aliyun.teautil.models.RuntimeOptions());
+        if (response.getBody() != null) {
+            return response.getBody().getId();
+        }
+        return null;
+    }
+
     private static boolean checkWechatLogin(PlayWrightUtil.Connection connection, List<String> notifyUsers) {
         try {
             com.microsoft.playwright.BrowserContext context = connection.browser.contexts().isEmpty() ? 
