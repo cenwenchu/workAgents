@@ -199,6 +199,8 @@ public class CreateEventTool implements Tool {
             
             String eventId = DingTalkUtil.createCalendarEvent(unionId, summary, description, isoStartTime, isoEndTime, attendeeUnionIds, location);
             DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "日程创建成功！标题: " + summary + "，时间: " + startTimeStr + " - " + endTimeStr + "，参与人数: " + attendeeUnionIds.size());
+
+            System.out.println("Event ID: " + eventId);
         } catch (Exception e) {
             e.printStackTrace();
             try {

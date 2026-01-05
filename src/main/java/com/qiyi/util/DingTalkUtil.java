@@ -197,7 +197,6 @@ public class DingTalkUtil {
             if (globalReply != null) notification.append(globalReply);
 
             List<JSONObject> validTasks = new ArrayList<>();
-            boolean hasMissingInfo = false;
 
             for (int i = 0; i < tasks.size(); i++) {
                 JSONObject task = tasks.getJSONObject(i);
@@ -221,7 +220,6 @@ public class DingTalkUtil {
                     }
 
                     if (missingInfo != null && !missingInfo.isEmpty()) {
-                        hasMissingInfo = true;
                         notification.append("\n[任务：").append(toolName).append("] 缺少必选参数：").append(missingInfo);
                         if (!defaultEntries.isEmpty()) {
                             notification.append("。可选参数默认值：").append(String.join("，", defaultEntries));

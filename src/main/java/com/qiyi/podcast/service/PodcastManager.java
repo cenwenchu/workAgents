@@ -101,7 +101,7 @@ public class PodcastManager {
     public void runProcessingTask(int maxProcessCount, ModelType modelType, boolean needGenerateImage, boolean isStreaming, int threadPoolSize) {
         System.out.println("Starting Processing (Summary/Image) Task...");
         
-        File[] files = fileService.getOriginalFiles(); // Or get CN files?
+        //File[] files = fileService.getOriginalFiles(); // Or get CN files?
         // Original logic: `downLoadPodCastTask.processDownloadedFiles(downLoadPodCastTask.DOWNLOAD_DIR_CN, ...)`
         // So it processes CN files or Original? 
         // Wait, `PodwiseAgent` called it with `DOWNLOAD_DIR_CN`.

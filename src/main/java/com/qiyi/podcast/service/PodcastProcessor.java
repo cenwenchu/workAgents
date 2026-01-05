@@ -5,7 +5,6 @@ import com.qiyi.util.PodCastUtil;
 
 import java.io.File;
 import java.io.FileWriter;
-import java.util.ArrayList;
 import java.util.List;
 
 public class PodcastProcessor {
