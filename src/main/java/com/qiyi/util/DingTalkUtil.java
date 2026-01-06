@@ -47,6 +47,7 @@ import com.qiyi.tools.SendMessageTool;
 import com.qiyi.tools.CreateEventTool;
 import com.qiyi.tools.ShutdownAgentTool;
 import com.qiyi.tools.QueryErpOrderTool;
+import com.qiyi.tools.ErpAfterSaleTool;
 
 //机器人方面的配置，可以参考这里：最好是企业机器人 https://open-dev.dingtalk.com/fe/app?hash=%23%2Fcorp%2Fapp#/corp/app
 //接口方面的说明可以参考这里：https://open.dingtalk.com/document/development/development-basic-concepts
@@ -98,6 +99,7 @@ public class DingTalkUtil {
         ToolRegistry.register(new CreateEventTool());
         ToolRegistry.register(new ShutdownAgentTool());
         ToolRegistry.register(new QueryErpOrderTool());
+        ToolRegistry.register(new ErpAfterSaleTool());
     }
 
     private static void analyzeAndExecute(String text, String senderId, List<String> atUserIds) {

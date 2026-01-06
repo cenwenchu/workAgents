@@ -13,18 +13,13 @@ import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.util.DingTalkUtil;
 import com.qiyi.util.PlayWrightUtil;
 
-import java.util.Map;
-import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.concurrent.locks.ReentrantLock;
 
-public class QueryErpOrderTool implements Tool {
-    private static final ReentrantLock TOOL_LOCK = new ReentrantLock();
+public class QueryErpOrderTool extends ErpBaseTool {
     private static final String ERP_ORDER_PAGE_URL = "https://sc.scm121.com/tradeManage/tower/distribute";
     private static final String API_URL = "https://innerapi.scm121.com/api/inner/order/list";
-    private final Map<String, String> capturedApiHeaders = new HashMap<>();
 
     @Override
     public String getName() {
@@ -82,8 +77,8 @@ public class QueryErpOrderTool implements Tool {
 
             Page page = context.newPage();
             try {
-                // 1. Check Login
-                if (!checkLogin(page, notifyUsers)) {
+                // 1. Check Login using base class method
+                if (!ensureLogin(page, ERP_ORDER_PAGE_URL, notifyUsers)) {
                     return "Error: Login failed";
                 }
 
@@ -110,88 +105,24 @@ public class QueryErpOrderTool implements Tool {
         }
     }
 
-    private boolean checkLogin(Page page, List<String> notifyUsers) {
+    @Override
+    protected boolean isLoginSuccess(Page page) {
+        // Override with specific logic for Order page if needed, 
+        // or just rely on base class. 
+        // For safety, let's keep the original logic which was specific to "全部订单"
         try {
-            // Setup network interception to capture headers from real requests
-            capturedApiHeaders.clear();
-            page.onRequest(request -> {
-                String url = request.url();
-                if (url.contains("innerapi.scm121.com") && !url.contains(".js") && !url.contains(".css")) {
-                    Map<String, String> headers = request.headers();
-                    // Store headers if we haven't already, or overwrite
-                    // We prefer headers from POST requests as they are likely API calls
-                    if (request.method().equalsIgnoreCase("POST") || capturedApiHeaders.isEmpty()) {
-                        capturedApiHeaders.putAll(headers);
-                        // Remove content-specific headers that we will regenerate
-                        capturedApiHeaders.remove("content-length");
-                        capturedApiHeaders.remove("content-type");
-                    }
-                }
-            });
-
-            page.navigate(ERP_ORDER_PAGE_URL);
-            page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
-            
-            // Simple check: if URL contains "login" or title contains "登录"
-            // Or if we are redirected away from the target URL (assuming target URL is protected)
-            // The user said: "according to whether it is accessible"
-            // Let's assume if we are NOT at the target URL, we are not logged in.
-            // But sometimes URLs have query params. Let's check if path starts with expected.
-            
-            boolean isLoggedIn = isPageAccessible(page);
-            
-            if (!isLoggedIn) {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "检测到ERP系统未登录，请在打开的浏览器中完成登录，任务将等待您的操作。");
-                
-                // Wait loop
-                long maxWaitTime = 5 * 60 * 1000; // 5 minutes
-                long startTime = System.currentTimeMillis();
-                
-                while (!isLoggedIn) {
-                    if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "登录等待超时，任务终止。");
-                        return false;
-                    }
-                    
-                    try {
-                        Thread.sleep(1000); 
-
-                        isLoggedIn = isPageAccessible(page);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    } catch (Exception e) {
-                        // Ignore navigation errors during wait (e.g. user interacting)
-                    }
-                }
-                
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP登录成功，继续执行任务。");
-            }
-            return true;
-        } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "检查登录状态时出错: " + e.getMessage());
-            } catch (Exception ex) { ex.printStackTrace(); }
-            return false;
-        }
-    }
-    
-    private boolean isPageAccessible(Page page) {
-        // 检查是否有登录状态的元素
-        Locator userElement = null;
-        
-        try {
-            userElement = page.frameLocator("iframe") 
+             Locator userElement = page.frameLocator("iframe") 
                     .locator("//div[contains(text(),'全部订单')]").first();
-                    
-            userElement.waitFor(new Locator.WaitForOptions().setTimeout(1000));
+             userElement.waitFor(new Locator.WaitForOptions().setTimeout(1000));
+             return true;
         } catch (Exception e) {
-            System.out.println("未检测到全部订单元素，判断为未登录。");
-            return false;
+            // If specific check fails, fallback to base class check?
+            // Or maybe the base class check is better because it handles more cases.
+            // Let's fallback to base class check if this one fails, or just return false?
+            // Original code returned false.
+            // Let's call super to see if it finds other indicators.
+            return super.isLoginSuccess(page);
         }
-
-        return true;
     }
 
     private String fetchData(Page page, List<String> notifyUsers, String orderId) {
@@ -213,80 +144,8 @@ public class QueryErpOrderTool implements Tool {
             // Use APIRequestContext
             APIRequestContext request = page.context().request();
             
-            // 1. Prepare Request Options
-            RequestOptions options = RequestOptions.create()
-                    .setData(payload)
-                    .setHeader("Content-Type", "application/json")
-                    .setHeader("Origin", "https://sc.scm121.com")
-                    .setHeader("Referer", "https://sc.scm121.com/tradeManage/tower/distribute");
-
-            // 2. Use Captured Headers from real network requests (Best Source of Truth)
-            // But be careful about header size (HTTP 431)
-            if (!capturedApiHeaders.isEmpty()) {
-                System.out.println("Using Captured Headers: " + capturedApiHeaders.keySet()); // Log keys only for privacy
-                for (Map.Entry<String, String> entry : capturedApiHeaders.entrySet()) {
-                     String key = entry.getKey();
-                     String lowerKey = key.toLowerCase();
-                     
-                     // Filter out standard/bulky headers that Playwright/Network stack will handle
-                     // or that might cause conflicts/bloat
-                     if (lowerKey.equals("content-length") || 
-                         lowerKey.equals("host") || 
-                         lowerKey.equals("connection") || 
-                         lowerKey.equals("date") ||
-                         lowerKey.equals("upgrade-insecure-requests") ||
-                         lowerKey.equals("accept-encoding") ||
-                         lowerKey.startsWith("sec-ch-ua") || // Remove browser hint headers which are verbose
-                         lowerKey.startsWith(":")) { // HTTP/2 pseudo-headers
-                         continue;
-                     }
-                     
-                     options.setHeader(key, entry.getValue());
-                }
-            } else {
-                // Fallback: Manually construct headers if capture failed
-                
-                // Get Cookies
-                List<com.microsoft.playwright.options.Cookie> cookies = page.context().cookies();
-                StringBuilder cookieHeader = new StringBuilder();
-                for (com.microsoft.playwright.options.Cookie cookie : cookies) {
-                    if (cookieHeader.length() > 0) cookieHeader.append("; ");
-                    cookieHeader.append(cookie.name).append("=").append(cookie.value);
-                }
-                if (cookieHeader.length() > 0) {
-                    options.setHeader("Cookie", cookieHeader.toString());
-                }
-
-                // Get Tokens from LocalStorage via script
-                String storageScript = "() => {" +
-                        "  let headers = {};" +
-                        "  try {" +
-                        "    for (let i = 0; i < localStorage.length; i++) {" +
-                        "      let k = localStorage.key(i);" +
-                        "      if (k.toLowerCase().includes('token') || k.toLowerCase().includes('auth') || k === 'uid') {" +
-                        "         headers[k] = localStorage.getItem(k);" +
-                        "      }" +
-                        "    }" +
-                        "    for (let i = 0; i < sessionStorage.length; i++) {" +
-                        "      let k = sessionStorage.key(i);" +
-                        "      if (k.toLowerCase().includes('token') || k.toLowerCase().includes('auth')) {" +
-                        "         headers[k] = sessionStorage.getItem(k);" +
-                        "      }" +
-                        "    }" +
-                        "  } catch (e) {}" +
-                        "  return JSON.stringify(headers);" +
-                        "}";
-                String storageJson = (String) page.evaluate(storageScript);
-                JSONObject storageHeaders = JSONObject.parseObject(storageJson);
-                
-                for (String key : storageHeaders.keySet()) {
-                    String val = storageHeaders.getString(key);
-                    options.setHeader(key, val);
-                    if (key.contains("token") || key.contains("Token")) {
-                         options.setHeader("token", val);
-                    }
-                }
-            }
+            // Create options using base class helper
+            RequestOptions options = createApiRequestOptions(page, payload, "https://sc.scm121.com/tradeManage/tower/distribute");
 
             APIResponse response = request.post(API_URL, options);
             int status = response.status();
