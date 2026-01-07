@@ -43,6 +43,7 @@ import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolRegistry;
 import com.qiyi.tools.agent.ShutdownAgentTool;
 import com.qiyi.tools.android.OpenAppTool;
+import com.qiyi.tools.agent.ListCapabilitiesTool;
 import com.qiyi.tools.dingtalk.CreateEventTool;
 import com.qiyi.tools.dingtalk.SendMessageTool;
 import com.qiyi.tools.erp.ErpAfterSaleTool;
@@ -114,6 +115,18 @@ public class DingTalkUtil {
         ToolRegistry.register(new GetUserSecurityTool());
         ToolRegistry.register(new GetGroupStockQuotesTool());
         ToolRegistry.register(new OpenAppTool());
+        ToolRegistry.register(new ListCapabilitiesTool());
+        
+        // 异步初始化 ListCapabilitiesTool 的缓存，避免首次调用时延迟
+        new Thread(() -> {
+            try {
+                System.out.println("Initializing capabilities cache...");
+                new ListCapabilitiesTool().execute(null, null, null);
+                System.out.println("Capabilities cache initialized.");
+            } catch (Exception e) {
+                System.err.println("Failed to initialize capabilities cache: " + e.getMessage());
+            }
+        }).start();
     }
 
     private static void analyzeAndExecute(String text, String senderId, List<String> atUserIds) {
@@ -132,6 +145,7 @@ public class DingTalkUtil {
         }
         selectionPrompt.append("\nUser Input: \"").append(text).append("\"\n");
         selectionPrompt.append("\nReturn JSON only. Format: { \"selected_tools\": [\"tool_name1\"] } or { \"selected_tools\": [] } if no tool matches.");
+        selectionPrompt.append("\nIf the user asks about the agent's capabilities (e.g., '你能做什么', '工具能力', 'capabilities'), select the 'list_capabilities' tool.");
 
         List<String> validSelectedTools = new ArrayList<>();
         try {
@@ -208,11 +222,11 @@ public class DingTalkUtil {
             if (senderId != null) notifyUsers.add(senderId);
 
             if (tasks == null || tasks.isEmpty()) {
-                if (globalReply != null && !globalReply.isEmpty()) {
-                    sendTextMessageToEmployees(notifyUsers, globalReply);
-                } else {
-                    sendTextMessageToEmployees(notifyUsers, "抱歉，我不理解您的指令或当前不具备该能力。");
-                }
+                String reply = (globalReply != null && !globalReply.isEmpty())
+                        ? globalReply
+                        : "抱歉，我不理解您的指令或当前不具备该能力。";
+                reply = reply + "\n\n如果需要了解当前Agent支持哪些工作，请直接问我：你能做什么";
+                sendTextMessageToEmployees(notifyUsers, reply);
                 return;
             }
 
@@ -293,7 +307,31 @@ public class DingTalkUtil {
              } catch (Exception ex) {
                  ex.printStackTrace();
              }
+         }
+    }
+    
+    private static boolean isCapabilityQuery(String text) {
+        if (text == null) return false;
+        String t = text.trim().toLowerCase();
+        String zh = text.trim();
+        if (t.contains("what can you do") || t.contains("capabilities") || t.contains("ability") || t.contains("abilities")) {
+            return true;
         }
+        String[] zhTriggers = new String[]{
+            "你能做什么",
+            "能做什么",
+            "可以做什么",
+            "工具能力",
+            "能力列表",
+            "功能",
+            "支持哪些工作",
+            "能干嘛",
+            "可以干嘛"
+        };
+        for (String s : zhTriggers) {
+            if (zh.contains(s)) return true;
+        }
+        return false;
     }
     
     private static java.util.Map<String, String> extractDefaultParamsFromDescription(String description) {

@@ -6,7 +6,6 @@ import com.qiyi.tools.Tool;
 import com.qiyi.util.DingTalkUtil;
 import com.futu.openapi.pb.QotGetUserSecurity;
 import com.futu.openapi.pb.QotGetBasicQot;
-import com.futu.openapi.pb.QotSub;
 import com.futu.openapi.pb.QotCommon;
 
 import java.util.List;

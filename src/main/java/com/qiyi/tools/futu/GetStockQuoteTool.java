@@ -4,8 +4,6 @@ import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
 import com.futu.openapi.pb.QotGetBasicQot;
-import com.futu.openapi.pb.QotGetSubInfo;
-import com.futu.openapi.pb.QotSub;
 import com.futu.openapi.pb.QotCommon;
 import com.qiyi.util.DingTalkUtil;
 
