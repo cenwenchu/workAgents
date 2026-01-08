@@ -21,6 +21,8 @@ import java.util.stream.Stream;
 public class PublishWechatTool implements Tool {
     private static final ReentrantLock PUBLISH_LOCK = new ReentrantLock();
 
+    public static final boolean PUBLISH_IS_DRAFT = false;
+
     @Override
     public String getName() {
         return "publish_wechat";
@@ -29,12 +31,12 @@ public class PublishWechatTool implements Tool {
     @Override
     public String getDescription() {
         return String.format("Publish podcast articles to WeChat Official Account. Parameters: isDraft (boolean, default %s).",
-                DingTalkUtil.Defaults.PUBLISH_IS_DRAFT);
+                PUBLISH_IS_DRAFT);
     }
 
     @Override
     public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        boolean isDraft = params != null && params.containsKey("isDraft") ? params.getBooleanValue("isDraft") : DingTalkUtil.Defaults.PUBLISH_IS_DRAFT;
+        boolean isDraft = params != null && params.containsKey("isDraft") ? params.getBooleanValue("isDraft") : PUBLISH_IS_DRAFT;
         List<String> notifyUsers = new ArrayList<>();
         if (senderId != null) notifyUsers.add(senderId);
         if (atUserIds != null && !atUserIds.isEmpty()) {

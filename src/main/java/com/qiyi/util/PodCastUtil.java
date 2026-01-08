@@ -7,43 +7,22 @@ import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 
-import java.nio.file.Files;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.genai.Client;
-import com.google.genai.types.Content;
-import com.google.genai.types.File;
-import com.google.genai.types.GenerateContentConfig;
-import com.google.genai.types.GenerateContentResponse;
-import com.google.genai.types.Part;
-import com.google.genai.types.UploadFileConfig;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
+import com.qiyi.config.AppConfig;
 import com.qiyi.podcast.PodCastItem;
 import com.qiyi.wechat.WechatArticle;
-
-import io.github.pigmesh.ai.deepseek.core.DeepSeekClient;
-import io.github.pigmesh.ai.deepseek.core.OpenAiClient.OpenAiClientContext;
-import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionRequest;
-import io.github.pigmesh.ai.deepseek.core.chat.ChatCompletionResponse;
-import io.github.pigmesh.ai.deepseek.core.chat.Message;
-import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
-import io.github.pigmesh.ai.deepseek.core.shared.StreamOptions;
-import reactor.core.publisher.Flux;
-
-import com.qiyi.config.AppConfig;
 
 public class PodCastUtil {
 
@@ -156,6 +135,23 @@ public class PodCastUtil {
     }
 
     /**
+     * 最小化 Chrome 浏览器窗口 (MacOS Only)
+     */
+    public static void minimizeChromeWindow() {
+        try {
+            System.out.println("正在最小化 Chrome 窗口...");
+            String[] script = {
+                "osascript",
+                "-e",
+                "tell application \"Google Chrome\" to set minimized of every window to true"
+            };
+            Runtime.getRuntime().exec(script);
+        } catch (Exception e) {
+            System.err.println("最小化 Chrome 窗口失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 启动带有远程调试端口的 Chrome 浏览器
      * 
      * @param port 调试端口号
@@ -219,224 +215,6 @@ public class PodCastUtil {
         }   
 
 
-    public static void initClientConfig() {
-        // Configuration is now handled by AppConfig
-    }
-
-
-    /**
-     * 使用 Gemini 模型生成图片
-     * 
-     * @param fileString 输入文件路径（摘要文本）
-     * @param outputDirectory 图片输出目录
-     * @param imagePrompt 生成图片的提示词
-     */
-    public static void generateImageWithGemini(String fileString, String outputDirectory,String imagePrompt) {
-
-            initClientConfig();
-
-            try (Client client =Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build();) {
-
-            GenerateContentConfig config = GenerateContentConfig.builder()
-                .responseModalities(Arrays.asList("IMAGE"))
-                .build();
-
-            File uploadedFile = client.files.upload(
-                fileString,
-                UploadFileConfig.builder()
-                    .mimeType("application/text") // 设置正确的 MIME 类型 (如 image/jpeg, application/pdf 等)
-                    .build()
-                );
-
-                Content content = Content.fromParts(
-                    Part.fromText(imagePrompt), // 文本部分
-                    Part.fromUri(uploadedFile.uri().get(), uploadedFile.mimeType().get()) // 文件部分
-                );
-
-                GenerateContentResponse response = client.models.generateContent(
-                    "gemini-3-pro-image-preview",
-                    content,
-                    config);
-
-                for (Part part : response.parts()) 
-                {
-                    if (part.text().isPresent()) {
-                        System.out.println(part.text().get());
-                    } 
-                    else if (part.inlineData().isPresent()) {
-
-                        try 
-                        {
-                            var blob = part.inlineData().get();
-                            if (blob.data().isPresent()) {
-                                // 确保输出目录存在
-                                java.nio.file.Path outputDirPath = Paths.get(outputDirectory);
-                                if (!Files.exists(outputDirPath)) {
-                                    Files.createDirectories(outputDirPath);
-                                    System.out.println("创建输出目录: " + outputDirectory);
-                                }
-                                
-                                // 生成唯一的文件名
-                                String timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-                                String originalFileName = Paths.get(fileString).getFileName().toString().replaceFirst("\\.[^.]+$", "");
-                                String imageFileName = String.format("%s_%s_generated_image.png", originalFileName, timestamp);
-                                
-                                // 构建完整的文件路径
-                                java.nio.file.Path imageFilePath = outputDirPath.resolve(imageFileName);
-                                
-                                // 写入图片文件
-                                Files.write(imageFilePath, blob.data().get());
-                                System.out.println("图片生成成功: " + imageFilePath);
-                            }
-                        }
-                        catch (IOException ex) {
-                            System.out.println("写入图片文件失败: " + ex.getMessage());
-                            ex.printStackTrace();
-                        }
-                    }
-                }
-        }
-
-    }
-
-
-    
-
-
-    /**
-     * 使用 DeepSeek 模型生成文件内容
-     * 
-     * @param file 文件对象
-     * @param summaryPrompt 摘要提示词
-     * @param isStreamingProcess 是否使用流式输出
-     * @return 生成的文本
-     * @throws IOException IO异常
-     */
-    public static String generateContentWithDeepSeekByFile(java.io.File file,String summaryPrompt,boolean isStreamingProcess) throws IOException 
-    {
-        String content = readFileContent(file);
-
-        UserMessage userMessage = UserMessage.builder()
-                    .addText(summaryPrompt)
-                    .addText(content).build();
-
-        List<Message> messages = new ArrayList<>();
-        messages.add(userMessage);
-
-        return chatWithDeepSeek(messages, isStreamingProcess);
-    }
-
-    /**
-     * 与 DeepSeek 模型进行多轮对话
-     * 
-     * @param messages 消息历史列表
-     * @param isStreamingProcess 是否使用流式输出
-     * @return 模型回复的文本
-     */
-    public static String chatWithDeepSeek(List<Message> messages, boolean isStreamingProcess) {
-        String responseText = "";
-
-        initClientConfig();
-
-        if (isStreamingProcess)
-        {
-            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-            .baseUrl("https://api.deepseek.com")
-            .model("deepseek-chat")
-            .logStreamingResponses(true)                        // 开启响应日志
-            .build();
-
-            StringBuilder sb = new StringBuilder();
-            CountDownLatch latch = new CountDownLatch(1);
-
-            try
-            {
-                ChatCompletionRequest request = ChatCompletionRequest.builder()
-                    .model("deepseek-chat")
-                    .messages(messages)
-                    .stream(true)  // 启用流式
-                    .streamOptions(StreamOptions.builder().includeUsage(true).build())
-                    .build();
-                
-        
-                System.out.println("开始流式响应...\n");
-                Flux<ChatCompletionResponse> flux = deepseekClient.chatFluxCompletion(request);
-
-                flux.subscribe(
-                    chunk -> {
-                        // 处理每个流式块
-                        if (chunk.choices() != null && !chunk.choices().isEmpty()) {
-                            String delta = chunk.choices().get(0).delta().content();
-                            if (delta != null) {
-                                sb.append(delta);
-                            }
-                        }
-                    },
-                    error -> {
-                        System.err.println("\n流式错误: " + error.getMessage());
-                        latch.countDown();
-                    },
-                    () -> {
-                        System.out.println("\n\n流式响应完成！");
-                        latch.countDown();
-                    }
-                );
-
-                latch.await();
-            }
-            catch (Exception ex) {
-                System.out.println("调用 DeepSeek API 失败: " + ex.getMessage());
-                ex.printStackTrace();
-            }
-            finally {
-                deepseekClient.shutdown();
-            }
-
-            responseText = sb.toString();
-
-        }
-        else
-        {
-            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-            .baseUrl("https://api.deepseek.com")
-            .model("deepseek-chat")
-            .connectTimeout(java.time.Duration.ofSeconds(30))
-            .readTimeout(java.time.Duration.ofSeconds(600))
-            .logRequests(true)                          // 开启请求日志
-            .logResponses(true)                         // 开启响应日志
-            .build();
-
-            try
-            {
-                ChatCompletionRequest request = ChatCompletionRequest.builder()
-                        .messages(messages).build();
-
-                ChatCompletionResponse response = deepseekClient
-                    .chatCompletion(new OpenAiClientContext(), request)
-                    .execute();
-
-                // 4. 处理响应
-                if (response != null && response.choices() != null && !response.choices().isEmpty()) {
-                    responseText = response.choices().get(0).message().content();
-                }
-                else {
-                    System.out.println("未收到有效响应");
-                }
-            }
-            catch (Exception ex) {
-                System.out.println("调用 DeepSeek API 失败: " + ex.getMessage());
-                ex.printStackTrace();
-            }
-            finally {
-                deepseekClient.shutdown();
-            }
-        }
-        
-        return responseText;
-    }
-
     /**
      * 读取PDF文件内容
      * 
@@ -470,119 +248,6 @@ public class PodCastUtil {
     }
 
     /**
-     * 使用 Gemini 模型生成摘要
-     * 
-     * @param pdfFile PDF文件对象
-     * @param summaryPrompt 摘要提示词
-     * @return 生成的摘要文本
-     */
-    public static String generateSummaryWithGemini(java.io.File pdfFile,String summaryPrompt) 
-    {
-        
-        String responseText = "";
-
-        try 
-        {
-            initClientConfig();
-
-            Client client = Client.builder()
-            .apiKey(AppConfig.getInstance().getGeminiApiKey())
-            .build();
-
-
-            // 2. 上传本地文件 
-            File uploadedFile = client.files.upload(
-                pdfFile.getAbsolutePath(),
-                UploadFileConfig.builder()
-                    .mimeType("application/pdf") // 设置正确的 MIME 类型 (如 image/jpeg, application/pdf 等)
-                    .build()
-            );
-
-            System.out.println("文件上传成功: " + uploadedFile.uri().get());
-
-            // 3. 构建请求内容 (文本 + 文件)
-            Content content = Content.fromParts(
-                Part.fromText(summaryPrompt), // 文本部分
-                Part.fromUri(uploadedFile.uri().get(), uploadedFile.mimeType().get()) // 文件部分
-            );
-
-
-            GenerateContentResponse response =
-                client.models.generateContent(
-            "gemini-3-flash-preview",
-            content,
-            null);
-
-            responseText = response.text();
-            
-            //System.out.println(responseText);
-        }
-        catch (Exception ex) {
-            System.out.println("调用 Gemini API 失败: " + ex.getMessage());
-            ex.printStackTrace();
-        }
-
-        return responseText;
-    }
-
-    /**
-     * 与 DeepSeek 模型进行简单对话（用于翻译等）
-     * 
-     * @param prompt 提示词
-     * @return 模型回复的文本
-     */
-    public static String chatWithDeepSeek(String prompt) {
-        initClientConfig();
-        String responseText = "";
-        
-        DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-            .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-            .baseUrl("https://api.deepseek.com")
-            .connectTimeout(java.time.Duration.ofSeconds(120))
-            .readTimeout(java.time.Duration.ofSeconds(600))
-            .model("deepseek-chat")
-            .build();
-
-        try {
-            UserMessage userMessage = UserMessage.builder().addText(prompt).build();
-            ChatCompletionRequest request = ChatCompletionRequest.builder().messages(userMessage).build();
-            
-            ChatCompletionResponse response = deepseekClient
-                .chatCompletion(new OpenAiClientContext(), request)
-                .execute();
-
-            if (response != null && response.choices() != null && !response.choices().isEmpty()) {
-                responseText = response.choices().get(0).message().content();
-            }
-        } catch (Exception e) {
-            System.out.println("DeepSeek Chat Error: " + e.getMessage());
-            e.printStackTrace();
-        } finally {
-            deepseekClient.shutdown();
-        }
-        return responseText;
-    }
-
-    /**
-     * 与 Gemini 模型进行简单对话（用于翻译等）
-     * 
-     * @param prompt 提示词
-     * @return 模型回复的文本
-     */
-    public static String chatWithGemini(String prompt) {
-        initClientConfig();
-        String responseText = "";
-        try (Client client = Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build()) {
-            GenerateContentResponse response = client.models.generateContent("gemini-3-flash-preview", prompt, null);
-            responseText = response.text();
-        } catch (Exception e) {
-            System.out.println("Gemini Chat Error: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return responseText;
-    }
-
-    /**
      * 从文件读取播客名称列表
      * 
      * @param filePath 文件路径
@@ -601,6 +266,7 @@ public class PodCastUtil {
         }
         return podCastNames.toArray(new String[0]);
     }
+
 
     /**
      * 将播客条目列表写入文件 (JSON格式)
@@ -669,7 +335,7 @@ public class PodCastUtil {
                         "文章完整内容:xxx\n，播客内容如下：:";
 
         
-        String content = generateContentWithDeepSeekByFile(new java.io.File(podcastFilePath),promptString,true);
+        String content = LLMUtil.generateContentWithDeepSeekByFile(new java.io.File(podcastFilePath),promptString,true);
 
 
         //System.out.println(content);

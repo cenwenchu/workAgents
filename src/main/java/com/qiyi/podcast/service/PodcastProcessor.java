@@ -1,7 +1,7 @@
 package com.qiyi.podcast.service;
 
-import com.qiyi.podcast.ModelType;
-import com.qiyi.util.PodCastUtil;
+import com.qiyi.util.LLMUtil.ModelType;
+import com.qiyi.util.LLMUtil;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -85,19 +85,25 @@ public class PodcastProcessor {
         try {
             String summary = null;
             switch (modelType) {
-                case GEMINI:
-                    summary = PodCastUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
-                    break;
-                case DEEPSEEK:
-                    summary = PodCastUtil.generateContentWithDeepSeekByFile(pdfFile, SUMMARY_PROMPT, isStreamingProcess);
-                    break;
-                case ALL:
-                    summary = "-- DeepSeek摘要 --\n" + 
-                              PodCastUtil.generateContentWithDeepSeekByFile(pdfFile, SUMMARY_PROMPT, isStreamingProcess) +
-                              "\n\n\n\n-- Gemini 摘要 --\n" +
-                              PodCastUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
-                    break;
-            }
+                    case GEMINI:
+                        summary = LLMUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
+                        break;
+                    case DEEPSEEK:
+                        summary = LLMUtil.generateContentWithDeepSeekByFile(pdfFile, SUMMARY_PROMPT, isStreamingProcess);
+                        break;
+                    case ALIYUN:
+                        summary = LLMUtil.generateContentWithAliyunByFile(pdfFile, SUMMARY_PROMPT);
+                        break;
+                    case ALIYUN_VL:
+                        //summary = LLMUtil.generateContentWithAliyunByFile(pdfFile, SUMMARY_PROMPT);
+                        break;
+                    case ALL:
+                        summary = "-- DeepSeek摘要 --\n" + 
+                                  LLMUtil.generateContentWithDeepSeekByFile(pdfFile, SUMMARY_PROMPT, isStreamingProcess) +
+                                  "\n\n\n\n-- Gemini 摘要 --\n" +
+                                  LLMUtil.generateSummaryWithGemini(pdfFile, SUMMARY_PROMPT);
+                        break;
+                }
 
             if (summary != null && !summary.isEmpty()) {
                 try (FileWriter writer = new FileWriter(outputFile)) {
@@ -115,7 +121,7 @@ public class PodcastProcessor {
     }
 
     public void generateImage(File summaryFile, String outputDir) {
-        PodCastUtil.generateImageWithGemini(summaryFile.getAbsolutePath(), outputDir, IMAGE_PROMPT);
+        LLMUtil.generateImageWithGemini(summaryFile.getAbsolutePath(), outputDir, IMAGE_PROMPT);
     }
 
     public void batchRenameFiles(List<File> files, ModelType modelType) {
@@ -133,9 +139,11 @@ public class PodcastProcessor {
             System.out.println("正在请求批量翻译文件名...");
 
             if (modelType == ModelType.GEMINI || modelType == ModelType.ALL) {
-                response = PodCastUtil.chatWithGemini(prompt).trim();
+                response = LLMUtil.chatWithGemini(prompt).trim();
             } else if (modelType == ModelType.DEEPSEEK) {
-                response = PodCastUtil.chatWithDeepSeek(prompt).trim();
+                response = LLMUtil.chatWithDeepSeek(prompt).trim();
+            } else if (modelType == ModelType.ALIYUN) {
+                response = LLMUtil.chatWithAliyun(prompt).trim();
             }
 
             response = response.replace("```", "");

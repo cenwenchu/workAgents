@@ -16,6 +16,7 @@ import com.dingtalk.open.app.api.callback.OpenDingTalkCallbackListener;
 import com.dingtalk.open.app.api.security.AuthClientCredential;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.api.client.util.Base64;
 import com.qiyi.dingtalk.DingTalkDepartment;
 import com.qiyi.dingtalk.DingTalkUser;
 import com.taobao.api.FileItem;
@@ -23,11 +24,6 @@ import com.aliyun.dingtalkoauth2_1_0.models.GetAccessTokenResponse;
 import com.aliyun.dingtalkrobot_1_0.models.*;
 import com.aliyun.dingtalkcalendar_1_0.models.*;
 import com.aliyun.tea.TeaException;
-
-import org.apache.commons.codec.binary.Base64;
-
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 import java.net.URLEncoder;
 import java.util.ArrayList;
@@ -37,12 +33,16 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
 import com.aliyun.teaopenapi.models.Config;
 import com.aliyun.teautil.models.RuntimeOptions;
-import com.qiyi.tools.Tool;
+import com.qiyi.tools.*;
 import com.qiyi.tools.ToolRegistry;
 import com.qiyi.tools.agent.ShutdownAgentTool;
 import com.qiyi.tools.android.OpenAppTool;
+import com.qiyi.tools.android.TaobaoAppiumTool;
 import com.qiyi.tools.agent.ListCapabilitiesTool;
 import com.qiyi.tools.dingtalk.CreateEventTool;
 import com.qiyi.tools.dingtalk.SendMessageTool;
@@ -115,6 +115,8 @@ public class DingTalkUtil {
         ToolRegistry.register(new GetUserSecurityTool());
         ToolRegistry.register(new GetGroupStockQuotesTool());
         ToolRegistry.register(new OpenAppTool());
+        // ToolRegistry.register(new TaobaoPriceCheckTool()); // Deprecated, replaced by Appium version
+        ToolRegistry.register(new TaobaoAppiumTool());
         ToolRegistry.register(new ListCapabilitiesTool());
         
         // 异步初始化 ListCapabilitiesTool 的缓存，避免首次调用时延迟
@@ -149,7 +151,7 @@ public class DingTalkUtil {
 
         List<String> validSelectedTools = new ArrayList<>();
         try {
-            String selectionResponse = PodCastUtil.chatWithDeepSeek(selectionPrompt.toString());
+            String selectionResponse = LLMUtil.chatWithDeepSeek(selectionPrompt.toString());
             if (selectionResponse != null && !selectionResponse.trim().isEmpty()) {
                 selectionResponse = selectionResponse.replace("```json", "").replace("```", "").trim();
                 JSONObject selectionJson = JSON.parseObject(selectionResponse);
@@ -210,7 +212,7 @@ public class DingTalkUtil {
         sb.append("}");
 
         try {
-            String jsonStr = PodCastUtil.chatWithDeepSeek(sb.toString());
+            String jsonStr = LLMUtil.chatWithDeepSeek(sb.toString());
             // Clean up markdown if present
             jsonStr = jsonStr.replaceAll("```json", "").replaceAll("```", "").trim();
             
@@ -275,6 +277,14 @@ public class DingTalkUtil {
             }
 
             // Execute valid tasks with result chaining
+            boolean hasSendMessageTool = false;
+            for (JSONObject task : validTasks) {
+                if ("send_message".equals(task.getString("tool"))) {
+                    hasSendMessageTool = true;
+                    break;
+                }
+            }
+
             String previousResult = null;
             for (JSONObject task : validTasks) {
                 String toolName = task.getString("tool");
@@ -294,7 +304,11 @@ public class DingTalkUtil {
                 }
 
                 // Execute and capture result
-                String executionResult = ToolRegistry.get(toolName).execute(params, senderId, atUserIds);
+                List<String> executionAtUserIds = atUserIds;
+                if (hasSendMessageTool && !"send_message".equals(toolName)) {
+                    executionAtUserIds = new ArrayList<>();
+                }
+                String executionResult = ToolRegistry.get(toolName).execute(params, senderId, executionAtUserIds);
                 previousResult = executionResult;
             }
 
@@ -308,30 +322,6 @@ public class DingTalkUtil {
                  ex.printStackTrace();
              }
          }
-    }
-    
-    private static boolean isCapabilityQuery(String text) {
-        if (text == null) return false;
-        String t = text.trim().toLowerCase();
-        String zh = text.trim();
-        if (t.contains("what can you do") || t.contains("capabilities") || t.contains("ability") || t.contains("abilities")) {
-            return true;
-        }
-        String[] zhTriggers = new String[]{
-            "你能做什么",
-            "能做什么",
-            "可以做什么",
-            "工具能力",
-            "能力列表",
-            "功能",
-            "支持哪些工作",
-            "能干嘛",
-            "可以干嘛"
-        };
-        for (String s : zhTriggers) {
-            if (zh.contains(s)) return true;
-        }
-        return false;
     }
     
     private static java.util.Map<String, String> extractDefaultParamsFromDescription(String description) {
@@ -404,14 +394,7 @@ public class DingTalkUtil {
         }
     }
 
-    public static class Defaults {
-        public static final int DOWNLOAD_MAX_PROCESS_COUNT = 50;
-        public static final int DOWNLOAD_MAX_TRY_TIMES = 15;
-        public static final int DOWNLOAD_MAX_DUPLICATE_PAGES = 5;
-        public static final int DOWNLOAD_DOWNLOAD_MAX_PROCESS_COUNT = 0;
-        public static final int DOWNLOAD_THREAD_POOL_SIZE = 15;
-        public static final boolean PUBLISH_IS_DRAFT = false;
-    }
+
 
     private static volatile OpenDingTalkClient streamClient;
     
@@ -591,7 +574,7 @@ public class DingTalkUtil {
             List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages = new ArrayList<>();
             messages.add(io.github.pigmesh.ai.deepseek.core.chat.UserMessage.builder().addText(prompt).build());
             
-            String response = PodCastUtil.chatWithDeepSeek(messages, false);
+            String response = LLMUtil.chatWithDeepSeek(messages, false);
             
             // 4. 解析结果并匹配 UserID
             if (response != null && !response.trim().isEmpty()) {
@@ -1245,6 +1228,9 @@ public class DingTalkUtil {
      */
     public static boolean sendBatchMessageToEmployees (String appKey, String appSecret, String robotCode, List<String> userIds, String msgKey, String msgParam) throws Exception {
         boolean result = false;
+
+        if (userIds.size() == 0)
+            return true;
         
         // 假设 DingTalkUtil.createClient() 已经实现了 client 初始化
         com.aliyun.dingtalkrobot_1_0.Client client = DingTalkUtil.createClient();
@@ -1374,4 +1360,5 @@ public class DingTalkUtil {
             return false;
         }
     }
+
 }

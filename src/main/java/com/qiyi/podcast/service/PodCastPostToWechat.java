@@ -163,6 +163,7 @@ public class PodCastPostToWechat {
 
         }
 
+
         //点击发布按钮 (在当前操作页面上操作)
         if (isDraft) {
             publishPage.click("//button/span[contains(text(),'草稿')]");
@@ -179,10 +180,40 @@ public class PodCastPostToWechat {
             publishPage.close();
 
         } else {
-            publishPage.click("//button/span[contains(text(),'发表')]");
+            // publishPage.click("//button/span[contains(text(),'发表')]");
+            // 使用 evaluate 强制触发点击，或者等待可见后再点
+            // 优化定位：直接定位到 button 元素，而非内部 span
+            com.microsoft.playwright.Locator publishBtn = publishPage.locator("//span[@id='js_send']/button");
+            publishBtn.waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE).setTimeout(DEFAULT_TIMEOUT_MS));
+            
+            // 关键修复：等待 1.5s 确保 JS 事件监听器已绑定 (解决 visible 但点击无效的问题)
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+
+            // 检查是否处于软禁用状态 (weui-btn_disabled)
+            String btnClass = publishBtn.getAttribute("class");
+            if (btnClass != null && btnClass.contains("disabled")) {
+                System.out.println("警告：发表按钮似乎处于禁用状态 (class=" + btnClass + ")");
+            }
+
+            // 尝试点击
+            try {
+                publishBtn.click();
+            } catch (Exception e) {
+                System.out.println("常规点击发表失败，尝试 JS 点击: " + e.getMessage());
+                publishBtn.evaluate("element => element.click()");
+            }
 
             //无需声明并发表
             publishPage.click("//button[contains(text(),'无需声明并发表')]");
+
+            try
+            {
+                publishBtn.click();
+            }
+            catch(Exception ex)
+            {
+                
+            }
 
             publishPage.waitForSelector("//button[contains(text(),'发表')] >> visible=true",
                 new Page.WaitForSelectorOptions().setTimeout(DEFAULT_TIMEOUT_MS)).click();

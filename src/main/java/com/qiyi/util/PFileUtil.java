@@ -4,7 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.qiyi.podcast.ModelType;
+import com.qiyi.util.LLMUtil.ModelType;
 
 public class PFileUtil {
 
@@ -50,10 +50,12 @@ public class PFileUtil {
 
             log("正在请求批量翻译文件名...");
 
-            if (modelType == ModelType.GEMINI || modelType == ModelType.ALL) {
-                response = PodCastUtil.chatWithGemini(prompt).trim();
-            } else if (modelType == ModelType.DEEPSEEK) {
-                response = PodCastUtil.chatWithDeepSeek(prompt).trim();
+            if (modelType == ModelType.GEMINI) {
+                response = LLMUtil.chatWithGemini(prompt).trim();
+            } else if (modelType == ModelType.DEEPSEEK || modelType == ModelType.ALL) {
+                response = LLMUtil.chatWithDeepSeek(prompt).trim();
+            } else if (modelType == ModelType.ALIYUN) {
+                response = LLMUtil.chatWithAliyun(prompt).trim();
             }
 
             // Clean up response code blocks if any

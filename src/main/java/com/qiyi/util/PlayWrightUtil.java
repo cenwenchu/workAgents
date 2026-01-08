@@ -70,5 +70,25 @@ public class PlayWrightUtil {
 
         PodCastUtil.killChromeProcess(AppConfig.getInstance().getChromeDebugPort());
     }
+
+    /**
+     * 调试辅助工具：高亮指定元素并截图保存
+     * @param page 当前页面对象
+     * @param locator 需要高亮的元素定位器
+     * @param filename 截图保存的文件名
+     */
+    public static void highlightAndScreenshot(com.microsoft.playwright.Page page, com.microsoft.playwright.Locator locator, String filename) {
+        System.out.println("DEBUG: 准备高亮元素并截图验证...");
+        try {
+            // 高亮按钮 (红色边框)
+            locator.evaluate("element => element.style.border = '5px solid red'");
+            // 截图保存
+            java.nio.file.Path path = java.nio.file.Paths.get(filename);
+            page.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions().setPath(path));
+            System.out.println("DEBUG: 截图已保存至: " + path.toAbsolutePath());
+        } catch (Exception debugEx) {
+            System.out.println("DEBUG: 调试代码执行异常: " + debugEx.getMessage());
+        }
+    }
     
 }

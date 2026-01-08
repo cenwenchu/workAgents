@@ -227,7 +227,8 @@ public class PodcastCrawler {
                 "    el.id = 'crawler-notification';" +
                 "    el.style.position = 'fixed';" +
                 "    el.style.top = '80px';" + // Avoid covering header if any
-                "    el.style.right = '20px';" +
+                "    el.style.left = '50%';" +
+                "    el.style.transform = 'translateX(-50%)';" +
                 "    el.style.backgroundColor = 'rgba(33, 150, 243, 0.9)';" + // Blue with transparency
                 "    el.style.color = 'white';" +
                 "    el.style.padding = '12px 20px';" +
@@ -281,12 +282,14 @@ public class PodcastCrawler {
         Page page = context.newPage();
         try {
             String url = "https://podwise.ai" + item.linkString;
+            showPageNotification(page, "打开播客详情页...");
             page.navigate(url);
             page.waitForLoadState(LoadState.NETWORKIDLE);
             page.waitForTimeout(1000);
 
             ElementHandle exportDiv = page.querySelector("//button/span[contains(text(),'Export')]");
             if (exportDiv != null) {
+                showPageNotification(page, "打开导出菜单...");
                 exportDiv.scrollIntoViewIfNeeded();
                 page.waitForTimeout(500);
                 exportDiv.click(new ElementHandle.ClickOptions().setForce(true));
@@ -295,6 +298,7 @@ public class PodcastCrawler {
                     new Page.WaitForSelectorOptions().setTimeout(SHORT_TIMEOUT_MS));
 
                 if (pdfButton != null) {
+                    showPageNotification(page, "选择 PDF...");
                     pdfButton.click();
                     ElementHandle downloadBtn = page.waitForSelector("//button[contains(text(),'Download')]", 
                         new Page.WaitForSelectorOptions().setTimeout(SHORT_TIMEOUT_MS));
@@ -304,12 +308,16 @@ public class PodcastCrawler {
                         page.onDownload(download -> {
                             System.out.println("下载开始: " + download.url());
                             System.out.println("建议的文件名: " + download.suggestedFilename());
+                            try {
+                                showPageNotification(page, "下载开始: " + download.suggestedFilename());
+                            } catch (Exception ignore) {}
                         });
 
                         // Ensure directory exists
                         java.nio.file.Path targetPath = Paths.get(savePath);
                         Files.createDirectories(targetPath.getParent());
 
+                        showPageNotification(page, "点击下载...");
                         Download download = page.waitForDownload(() -> downloadBtn.click());
                         
                         // Check for download failure
@@ -375,8 +383,12 @@ public class PodcastCrawler {
                         }
 
                         System.out.println("English download: " + savePath);
+                        try {
+                            showPageNotification(page, "下载完成: " + savePath);
+                        } catch (Exception ignore) {}
 
                         if (cnSavePath != null) {
+                             try { showPageNotification(page, "准备下载中文版本..."); } catch (Exception ignore) {}
                              downloadChineseVersionInternal(page, cnSavePath);
                              if (!page.isClosed()) {
                                  page.close();
@@ -388,6 +400,7 @@ public class PodcastCrawler {
             
         } catch (Exception e) {
             System.err.println("Download failed [" + item.title + "]: " + e.getMessage());
+            try { showPageNotification(page, "下载失败: " + e.getMessage()); } catch (Exception ignore) {}
         } finally {
             if (!page.isClosed()) {
                 page.close();
@@ -401,6 +414,7 @@ public class PodcastCrawler {
                 new Page.WaitForSelectorOptions().setTimeout(SHORT_TIMEOUT_MS));
             
             if (langBtn != null) {
+                try { showPageNotification(page, "切换语言..."); } catch (Exception ignore) {}
                 langBtn.click();
                 ElementHandle cnBtn = page.querySelector("//button[span[contains(text(),'简体中文')] and span[contains(text(),'Select')]]");
                 
@@ -416,6 +430,7 @@ public class PodcastCrawler {
                 }
 
                 if (cnBtn != null) {
+                    try { showPageNotification(page, "选择简体中文..."); } catch (Exception ignore) {}
                     cnBtn.click();
                     ElementHandle newDownloadBtn = page.waitForSelector("//button[contains(text(),'Download')]", 
                         new Page.WaitForSelectorOptions().setTimeout(SHORT_TIMEOUT_MS));
@@ -426,6 +441,7 @@ public class PodcastCrawler {
                             java.nio.file.Files.createDirectories(targetPath.getParent());
                         }
 
+                        try { showPageNotification(page, "点击下载（中文版本）..."); } catch (Exception ignore) {}
                         Download download = page.waitForDownload(() -> newDownloadBtn.click());
                         
                         if (download.failure() != null) {
@@ -496,11 +512,13 @@ public class PodcastCrawler {
                         }
 
                         System.out.println("Chinese download: " + savePath);
+                        try { showPageNotification(page, "中文版本下载完成: " + savePath); } catch (Exception ignore) {}
                     }
                 }
             }
         } catch (Exception e) {
             System.err.println("CN download failed: " + e.getMessage());
+            try { showPageNotification(page, "中文下载失败: " + e.getMessage()); } catch (Exception ignore) {}
         }
     }
 }

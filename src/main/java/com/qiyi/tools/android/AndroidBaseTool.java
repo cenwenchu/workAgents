@@ -8,7 +8,11 @@ import java.util.List;
 public abstract class AndroidBaseTool implements Tool {
 
     protected String getDeviceSerial(JSONObject params) throws Exception {
-        String serial = params.getString("serial");
+        String serial = null;
+        
+        if (params != null)
+            serial = params.getString("serial");
+        
         if (serial != null && !serial.isEmpty()) {
             return serial;
         }

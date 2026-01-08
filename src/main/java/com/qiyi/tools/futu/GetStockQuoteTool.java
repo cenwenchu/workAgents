@@ -30,7 +30,15 @@ public class GetStockQuoteTool implements Tool {
         }
 
         String code = params.getString("code");
-        if (code == null) return "Error: code is required";
+        if (code == null) {
+            String msg = "Error: code is required";
+            try {
+                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, msg);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return msg;
+        }
         
         try {
             FutuOpenD openD = FutuOpenD.getInstance();

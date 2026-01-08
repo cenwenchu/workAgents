@@ -8,9 +8,10 @@ import java.io.IOException;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
-import com.qiyi.podcast.ModelType;
 import com.qiyi.podcast.service.PodcastManager;
+import com.qiyi.util.LLMUtil.ModelType;
 import com.qiyi.util.PlayWrightUtil;
+import com.qiyi.util.PodCastUtil;
 
 //先要运行这个启动可信任浏览器
 //nohup /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="/tmp/chrome-debug" > /tmp/chrome-debug.log 2>&1 &
@@ -48,6 +49,8 @@ public class PodwiseAgent {
 
             // 2. 处理任务 (摘要、翻译、图片)
             if (downloadedCount > 0) {
+                // 最小化浏览器，避免占用屏幕
+                PodCastUtil.minimizeChromeWindow();
                 podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize);
             }
             else {

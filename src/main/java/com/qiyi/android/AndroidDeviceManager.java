@@ -52,6 +52,23 @@ public class AndroidDeviceManager {
             cmd.add(part);
         }
 
+        return executeProcess(cmd);
+    }
+
+    public String executeShell(String serial, List<String> commandArgs) throws IOException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(adbPath);
+        if (serial != null && !serial.isEmpty()) {
+            cmd.add("-s");
+            cmd.add(serial);
+        }
+        cmd.add("shell");
+        cmd.addAll(commandArgs);
+
+        return executeProcess(cmd);
+    }
+
+    private String executeProcess(List<String> cmd) throws IOException {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         Process process = pb.start();
@@ -64,5 +81,59 @@ public class AndroidDeviceManager {
             }
         }
         return output.toString();
+    }
+
+    public void tap(String serial, int x, int y) throws IOException {
+        executeShell(serial, "input tap " + x + " " + y);
+    }
+
+    public void inputText(String serial, String text) throws IOException {
+        // ADB input text does not support non-ASCII characters natively.
+        // We warn if we detect them.
+        boolean hasNonAscii = false;
+        for (char c : text.toCharArray()) {
+            if (c > 127) {
+                hasNonAscii = true;
+                break;
+            }
+        }
+        if (hasNonAscii) {
+            System.err.println("Warning: Input text contains non-ASCII characters ('" + text + "'). " +
+                    "Standard ADB input usually fails to type these. Consider using Pinyin or English.");
+        }
+
+        List<String> args = new ArrayList<>();
+        args.add("input");
+        args.add("text");
+        args.add(text);
+        executeShell(serial, args);
+    }
+
+    public void pullFile(String serial, String remote, String local) throws IOException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(adbPath);
+        if (serial != null && !serial.isEmpty()) {
+            cmd.add("-s");
+            cmd.add(serial);
+        }
+        cmd.add("pull");
+        cmd.add(remote);
+        cmd.add(local);
+        
+        executeProcess(cmd);
+    }
+
+    public String dumpWindowHierarchy(String serial) throws IOException {
+        String remotePath = "/sdcard/window_dump.xml";
+        executeShell(serial, "uiautomator dump " + remotePath);
+        return remotePath;
+    }
+
+    public void screencap(String serial, String remotePath) throws IOException {
+        executeShell(serial, "screencap -p " + remotePath);
+    }
+
+    public void swipe(String serial, int x1, int y1, int x2, int y2, int durationMs) throws IOException {
+        executeShell(serial, "input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + durationMs);
     }
 }

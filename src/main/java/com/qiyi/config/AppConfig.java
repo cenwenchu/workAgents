@@ -11,6 +11,11 @@ public class AppConfig {
     // Configuration Keys
     public static final String KEY_GEMINI_API_KEY = "GEMINI_API_KEY";
     public static final String KEY_DEEPSEEK_API_KEY = "deepseek.api-key";
+    public static final String KEY_ALIYUN_API_KEY = "aliyun.api-key";
+    public static final String KEY_ALIYUN_OSS_ENDPOINT = "aliyun.oss.endpoint";
+    public static final String KEY_ALIYUN_OSS_ACCESS_KEY_ID = "aliyun.oss.access-key-id";
+    public static final String KEY_ALIYUN_OSS_ACCESS_KEY_SECRET = "aliyun.oss.access-key-secret";
+    public static final String KEY_ALIYUN_OSS_BUCKET_NAME = "aliyun.oss.bucket-name";
     public static final String KEY_DINGTALK_TOKEN = "dingtalk.robot.token";
     public static final String KEY_DINGTALK_SECRET = "dingtalk.robot.secret";
     public static final String KEY_DINGTALK_CLIENT_ID = "dingtalk.robot.client.id";
@@ -64,6 +69,26 @@ public class AppConfig {
 
     public String getDeepSeekApiKey() {
         return getProperty(KEY_DEEPSEEK_API_KEY);
+    }
+
+    public String getAliyunApiKey() {
+        return getProperty(KEY_ALIYUN_API_KEY);
+    }
+
+    public String getAliyunOssEndpoint() {
+        return getProperty(KEY_ALIYUN_OSS_ENDPOINT);
+    }
+
+    public String getAliyunOssAccessKeyId() {
+        return getProperty(KEY_ALIYUN_OSS_ACCESS_KEY_ID);
+    }
+
+    public String getAliyunOssAccessKeySecret() {
+        return getProperty(KEY_ALIYUN_OSS_ACCESS_KEY_SECRET);
+    }
+
+    public String getAliyunOssBucketName() {
+        return getProperty(KEY_ALIYUN_OSS_BUCKET_NAME);
     }
 
     public String getPodcastDownloadDir() {

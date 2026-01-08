@@ -4,7 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolRegistry;
 import com.qiyi.util.DingTalkUtil;
-import com.qiyi.util.PodCastUtil;
+import com.qiyi.util.LLMUtil;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -106,7 +106,7 @@ public class ListCapabilitiesTool implements Tool {
                 toolListBuilder.toString();
 
         try {
-            String response = PodCastUtil.chatWithDeepSeek(prompt);
+            String response = LLMUtil.chatWithDeepSeek(prompt);
             if (response != null && !response.trim().isEmpty()) {
                 cachedCapabilities = "我目前具备以下能力：\n\n" + response;
                 return cachedCapabilities;

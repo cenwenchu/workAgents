@@ -1,7 +1,7 @@
 package com.qiyi.podcast.service;
 
 import com.microsoft.playwright.Browser;
-import com.qiyi.podcast.ModelType;
+import com.qiyi.util.LLMUtil.ModelType;
 import com.qiyi.podcast.PodCastItem;
 import com.qiyi.util.PFileUtil;
 import com.qiyi.util.DingTalkUtil;
