@@ -1,4 +1,4 @@
-package com.qiyi.tools.android;
+package com.qiyi.android;
 
 import java.net.MalformedURLException;
 import java.util.List;

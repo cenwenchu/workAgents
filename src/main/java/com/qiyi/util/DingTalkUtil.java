@@ -16,7 +16,7 @@ import com.dingtalk.open.app.api.callback.OpenDingTalkCallbackListener;
 import com.dingtalk.open.app.api.security.AuthClientCredential;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.api.client.util.Base64;
+import org.apache.commons.codec.binary.Base64;
 import com.qiyi.dingtalk.DingTalkDepartment;
 import com.qiyi.dingtalk.DingTalkUser;
 import com.taobao.api.FileItem;
@@ -115,7 +115,6 @@ public class DingTalkUtil {
         ToolRegistry.register(new GetUserSecurityTool());
         ToolRegistry.register(new GetGroupStockQuotesTool());
         ToolRegistry.register(new OpenAppTool());
-        // ToolRegistry.register(new TaobaoPriceCheckTool()); // Deprecated, replaced by Appium version
         ToolRegistry.register(new TaobaoAppiumTool());
         ToolRegistry.register(new ListCapabilitiesTool());
         

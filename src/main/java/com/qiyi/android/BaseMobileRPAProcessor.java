@@ -1,4 +1,4 @@
-package com.qiyi.tools.android;
+package com.qiyi.android;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -94,7 +94,7 @@ public abstract class BaseMobileRPAProcessor implements IMobileRPAProcessor {
      */
     public void drag(WebElement element,double percent,Direction direction,int offsetX,int offsetY)
     {
-    	drag(element.getAttribute("bounds"),percent,direction,offsetX,offsetY);
+    	drag(element.getDomAttribute("bounds"),percent,direction,offsetX,offsetY);
     }
     
 	/**

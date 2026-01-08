@@ -2,6 +2,7 @@ package com.qiyi.tools.android;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.android.AndroidDeviceManager;
+import com.qiyi.android.BaseMobileRPAProcessor;
 import com.qiyi.tools.Tool;
 import com.qiyi.util.DingTalkUtil;
 import com.qiyi.util.LLMUtil;
