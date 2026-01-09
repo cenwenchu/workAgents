@@ -41,8 +41,8 @@ import com.aliyun.teautil.models.RuntimeOptions;
 import com.qiyi.tools.*;
 import com.qiyi.tools.ToolRegistry;
 import com.qiyi.tools.agent.ShutdownAgentTool;
-import com.qiyi.tools.android.OpenAppTool;
-import com.qiyi.tools.android.TaobaoAppiumTool;
+// import com.qiyi.tools.android.OpenAppTool;
+// import com.qiyi.tools.android.JingdongAppiumTool;
 import com.qiyi.tools.agent.ListCapabilitiesTool;
 import com.qiyi.tools.dingtalk.CreateEventTool;
 import com.qiyi.tools.dingtalk.SendMessageTool;
@@ -114,8 +114,8 @@ public class DingTalkUtil {
         ToolRegistry.register(new GetUserSecurityGroupTool());
         ToolRegistry.register(new GetUserSecurityTool());
         ToolRegistry.register(new GetGroupStockQuotesTool());
-        ToolRegistry.register(new OpenAppTool());
-        ToolRegistry.register(new TaobaoAppiumTool());
+        // ToolRegistry.register(new OpenAppTool());
+        // ToolRegistry.register(new JingdongAppiumTool());
         ToolRegistry.register(new ListCapabilitiesTool());
         
         // 异步初始化 ListCapabilitiesTool 的缓存，避免首次调用时延迟
