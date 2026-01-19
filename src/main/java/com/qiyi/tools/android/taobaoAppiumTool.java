@@ -20,7 +20,6 @@ import org.openqa.selenium.StaleElementReferenceException;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.Point;
 import org.openqa.selenium.interactions.Actions;
-import org.openqa.selenium.support.ui.WebDriverWait;
 
 
 import java.net.MalformedURLException;
@@ -33,9 +32,9 @@ import java.util.List;
 import java.util.Set;
 
 
-public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
+public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
-    private static Logger logger = LogManager.getLogger(taobaoAppiumTool.class);
+    private static Logger logger = LogManager.getLogger(TaobaoAppiumTool.class);
 
     private static final int TRY_PAGE_COUNT = 5;
 
@@ -43,13 +42,14 @@ public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
     public static void main(String[] aStrings) throws Exception
     {
-        taobaoAppiumTool tool = new taobaoAppiumTool();
+        TaobaoAppiumTool tool = new TaobaoAppiumTool();
 
         JSONObject parmas = new JSONObject();
         parmas.put("product_name", "皮蛋瘦肉粥");
         parmas.put("product_type", "外卖商品");
         parmas.put("max_shop_count", 5);
-        //parmas.put("target_shop_name", "三米粥铺");
+        parmas.put("target_shop_name", "三米粥铺");
+        parmas.put("operation", "buy");
 
         //tool.initializeDriver(parmas, List.of("13000000000"));
         //tool.searchProductInShop("皮蛋瘦肉粥", List.of("13000000000"), "三米粥铺", true);
@@ -59,7 +59,7 @@ public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         System.out.println(result);
     }
     
-    public taobaoAppiumTool() {
+    public TaobaoAppiumTool() {
         this.setAppPackage("com.taobao.taobao");
         this.setAppActivity("com.taobao.tao.welcome.Welcome");
     }
@@ -235,6 +235,9 @@ public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     
                     // Hide keyboard
                     try {
+
+                    Thread.sleep(1000);
+
                         ((AndroidDriver) driver).hideKeyboard();
                     } catch (Exception e) {
                         // Ignore
@@ -471,15 +474,18 @@ public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                  
                  DingTalkUtil.sendTextMessageToEmployees(users, "找到并已进入店铺：" + targetShopName + "，准备定位商品：" + productName);
                  
-                 // Search/Locate product inside shop (But DO NOT RETURN INFO, just locate)
-                 return searchProductInShop(productName, users, targetShopName, true);
+                 String result = searchProductInShop(productName, users, targetShopName, true);
+                 DingTalkUtil.sendTextMessageToEmployees(users, result);
+                 return result;
 
             } catch (Exception e) {
                 return reportError(users, "进入店铺失败: " + e.getMessage());
             }
         }
         
-        return "未找到目标店铺：" + targetShopName;
+        String msg = "未找到目标店铺：" + targetShopName;
+        DingTalkUtil.sendTextMessageToEmployees(users, msg);
+        return msg;
     }
 
     public String searchProductInShop(String productName, List<String> users, String shopName, boolean clickToEnter) throws Exception {
@@ -537,17 +543,100 @@ public class taobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     }
                     
                     if (clickToEnter) {
-                        String msg = "已进入店铺 [" + shopName + "]，找到商品：" + productName + "，正在尝试点击进入详情页...";
+                        String msg = "已进入店铺 [" + shopName + "]，找到商品：" + productName + "，正在尝试直接加购...";
                         DingTalkUtil.sendTextMessageToEmployees(users, msg);
                         
                         try {
-                            if (parent != null) {
-                                parent.click();
-                            } else {
-                                productElement.click();
+                            
+                            try
+                            {
+                                //先清空购物车
+                                //android.view.View[@resource-id="btn__cart"]
+                                WebElement cartBtn = driver.findElement(AppiumBy.xpath("//android.view.View[@resource-id=\"btn__cart\"]"));
+                                cartBtn.click();
+                                Thread.sleep(1000);
+
+                                //点击text为 清空 的组件
+                                WebElement clearBtn = driver.findElement(AppiumBy.xpath("//*[@text=\"清空\"]"));
+                                clearBtn.click();
+                                Thread.sleep(1000);
+
+                                clearBtn = driver.findElement(AppiumBy.xpath("//android.widget.TextView[@text=\"清空\"]"));
+                                clearBtn.click();
+                                Thread.sleep(1000);         
                             }
-                            Thread.sleep(3000); // Wait for page transition
-                            return "已成功进入商品详情页：" + productName;
+                            catch(Exception ex)
+                            {
+                                //do nothing;
+                            }
+                            
+
+                            // Try adding to cart up to 3 times
+                            boolean added = false;
+                            int addCount = 0;
+                            for (int k = 0; k < 3; k++) {
+                                System.out.println("Attempt " + (k+1) + " to add to cart...");
+                                
+                                // 1. Try to click "加购" (Add to Cart) under parent
+                                try {
+                                    if (parent != null) {
+                                        WebElement addToCartBtn = parent.findElement(AppiumBy.xpath(".//android.widget.Button[@text='加购']"));
+                                        addToCartBtn.click();
+                                        addCount++;
+                                    }
+                                } catch (Exception e) {
+                                    System.out.println("Add to cart button click failed: " + e.getMessage());
+                                }
+                                
+                                Thread.sleep(1000);
+                
+                                // 2. Check if "去结算" (Checkout) is visible and clickable
+                                try {
+                                    String checkoutXpath = "//android.widget.TextView[@text=\"去结算\"]";
+                                    List<WebElement> checkoutBtns = this.findElementsAndWait(checkoutXpath, 2);
+                                    if (!checkoutBtns.isEmpty()) {
+                                        WebElement btn = checkoutBtns.get(0);
+                                        if (btn.isDisplayed() && btn.isEnabled()) {
+                                            System.out.println("Found checkout button, clicking...");
+                                            btn.click();
+                                            added = true;
+                                            break;
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                     System.out.println("Check checkout button failed: " + e.getMessage());
+                                }
+                            }
+                
+                            if (added) {
+                                String totalPrice = "";
+                                try {
+                                    //获取 //android.widget.TextView[@text="合计¥13.9"] 组件的文本内容
+                                    WebElement totalPriceElement = driver.findElement(AppiumBy.xpath("//android.widget.TextView[contains(@text,\"合计\")]"));
+                                    totalPrice = totalPriceElement.getText();
+                                } catch (Exception e) {
+                                    // ignore
+                                }
+
+                                String discountPrice = "";
+                                try {
+                                    // android.widget.TextView[@text="已优惠¥16"] 优惠金额
+                                    WebElement discountPriceElement = driver.findElement(AppiumBy.xpath("//android.widget.TextView[contains(@text,\"已优惠\")]"));
+                                    discountPrice = discountPriceElement.getText();
+                                } catch (Exception e) {
+                                    // ignore
+                                }
+                                
+                                String content = "已成功将 " + productName + " 商品加入购物车(数量:" + addCount + "，金额" + totalPrice;
+                                if (discountPrice != null && !discountPrice.isEmpty()) {
+                                    content += "，" + discountPrice;
+                                }
+                                content += ")，并点击结算";
+
+                                return content;
+                            } else {
+                                return "尝试多次加购(成功:" + addCount + ")，但未检测到结算按钮";
+                            }
                         } catch (Exception e) {
                              return "找到商品但点击失败：" + e.getMessage();
                         }
