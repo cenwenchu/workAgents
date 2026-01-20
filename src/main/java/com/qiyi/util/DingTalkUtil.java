@@ -79,7 +79,7 @@ public class DingTalkUtil {
          ToolManager.analyzeAndExecute(text, new com.qiyi.tools.context.DingTalkToolContext(senderId, atUserIds));
     }
     
-    public static void initClientConfig() {
+    public static synchronized void initClientConfig() {
         java.util.Properties props = new java.util.Properties();
         try (java.io.InputStream input = DingTalkUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
             if (input == null) {
@@ -94,16 +94,25 @@ public class DingTalkUtil {
 
         if (props.containsKey("dingtalk.robot.token")) {
             ROBOT_TOKEN = props.getProperty("dingtalk.robot.token");
+        }
+        if (props.containsKey("dingtalk.robot.secret")) {
             ROBOT_SECRET = props.getProperty("dingtalk.robot.secret");
+        }
+        if (props.containsKey("dingtalk.robot.client.id")) {
             ROBOT_CLIENT_ID = props.getProperty("dingtalk.robot.client.id");
+        }
+        if (props.containsKey("dingtalk.robot.client.secret")) {
             ROBOT_CLIENT_SECRET = props.getProperty("dingtalk.robot.client.secret");
+        }
+        if (props.containsKey("dingtalk.robot.code")) {
             ROBOT_CODE = props.getProperty("dingtalk.robot.code");
-            if (props.containsKey("dingtalk.agent.id")) {
-                try {
-                    AGENT_ID = Long.parseLong(props.getProperty("dingtalk.agent.id"));
-                } catch (NumberFormatException e) {
-                    System.err.println("Invalid dingtalk.agent.id format");
-                }
+        }
+        
+        if (props.containsKey("dingtalk.agent.id")) {
+            try {
+                AGENT_ID = Long.parseLong(props.getProperty("dingtalk.agent.id"));
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid dingtalk.agent.id format");
             }
         }
         
@@ -128,6 +137,15 @@ public class DingTalkUtil {
     }
 
     public static synchronized void startRobotMsgCallbackConsumer(String clientId,String clientSecret) {
+        if ((clientId == null || clientId.isEmpty()) || (clientSecret == null || clientSecret.isEmpty())) {
+             initClientConfig();
+             if (clientId == null || clientId.isEmpty()) clientId = ROBOT_CLIENT_ID;
+             if (clientSecret == null || clientSecret.isEmpty()) clientSecret = ROBOT_CLIENT_SECRET;
+        }
+
+        final String finalClientId = clientId;
+        final String finalClientSecret = clientSecret;
+
         if (streamClient != null) {
             System.out.println("Robot callback consumer is already running.");
             return;
@@ -140,7 +158,7 @@ public class DingTalkUtil {
                 // 但由于 start 是 synchronized 的，且通常只调用一次，风险可控。
                 OpenDingTalkClient client = OpenDingTalkStreamClientBuilder
                         .custom()
-                        .credential(new AuthClientCredential(clientId, clientSecret))
+                        .credential(new AuthClientCredential(finalClientId, finalClientSecret))
                         .registerCallbackListener("/v1.0/im/bot/messages/get", new RobotMsgCallbackConsumer())
                         .build();
 
