@@ -12,6 +12,7 @@ import com.qiyi.podcast.service.PodcastManager;
 import com.qiyi.util.LLMUtil.ModelType;
 import com.qiyi.util.PlayWrightUtil;
 import com.qiyi.util.PodCastUtil;
+import com.qiyi.tools.ToolContext;
 
 //先要运行这个启动可信任浏览器
 //nohup /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="/tmp/chrome-debug" > /tmp/chrome-debug.log 2>&1 &
@@ -28,6 +29,10 @@ public class PodwiseAgent {
 
 
     public int run(int maxProcessCount, int maxTryTimes, int maxDuplicatePages, int downloadMaxProcessCount, int threadPoolSize) {
+        return run(maxProcessCount, maxTryTimes, maxDuplicatePages, downloadMaxProcessCount, threadPoolSize, null);
+    }
+
+    public int run(int maxProcessCount, int maxTryTimes, int maxDuplicatePages, int downloadMaxProcessCount, int threadPoolSize, ToolContext context) {
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
         if (connection != null) {
@@ -51,7 +56,7 @@ public class PodwiseAgent {
             if (downloadedCount > 0) {
                 // 最小化浏览器，避免占用屏幕
                 PodCastUtil.minimizeChromeWindow();
-                podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize);
+                podcastManager.runProcessingTask(downloadMaxProcessCount, ModelType.DEEPSEEK, false, true, threadPoolSize, context);
             }
             else {
                 System.out.println("没有新下载的文件，无需处理");

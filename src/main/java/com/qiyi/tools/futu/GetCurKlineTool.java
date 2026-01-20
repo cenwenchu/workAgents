@@ -3,9 +3,9 @@ package com.qiyi.tools.futu;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolContext;
 import com.futu.openapi.pb.QotGetKL;
 import com.futu.openapi.pb.QotCommon;
-import com.qiyi.util.DingTalkUtil;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -21,14 +21,12 @@ public class GetCurKlineTool implements Tool {
         return "功能：获取指定证券的最新 K 线数据。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）；klType（整数，选填，K线类型，默认日线。常用值：1=1分钟，2=日线，3=周线，4=月线）；reqNum（整数，选填，请求数量，默认10）。返回：包含所请求数量的K线数据（时间、开高低收、成交量等）的响应字符串。";
     }
 
-    @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
+    protected FutuOpenD getFutuOpenD() {
+        return FutuOpenD.getInstance();
+    }
 
+    @Override
+    public String execute(JSONObject params, ToolContext context) {
         String code = params.getString("code");
         if (code == null) return "Error: code is required";
         
@@ -36,7 +34,7 @@ public class GetCurKlineTool implements Tool {
         int reqNum = params.getIntValue("reqNum", 10);
         
         try {
-            FutuOpenD openD = FutuOpenD.getInstance();
+            FutuOpenD openD = getFutuOpenD();
             
             int marketVal = QotCommon.QotMarket.QotMarket_HK_Security_VALUE;
             String stockCode = code;
@@ -109,7 +107,7 @@ public class GetCurKlineTool implements Tool {
                  if (response.getS2C().getKlListCount() == 0) {
                      String msg = "未查询到K线数据。";
                      try {
-                         DingTalkUtil.sendTextMessageToEmployees(notifyUsers, msg);
+                         context.sendText(msg);
                      } catch (Exception e) {
                          e.printStackTrace();
                      }
@@ -117,7 +115,7 @@ public class GetCurKlineTool implements Tool {
                  }
                  String result = sb.toString();
                  try {
-                     DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "K线数据查询结果:\n" + result);
+                     context.sendText("K线数据查询结果:\n" + result);
                  } catch (Exception e) {
                      e.printStackTrace();
                  }
@@ -125,7 +123,7 @@ public class GetCurKlineTool implements Tool {
             } else {
                  String errorMsg = "Error: " + response.getRetMsg();
                  try {
-                     DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询K线数据失败: " + response.getRetMsg());
+                     context.sendText("查询K线数据失败: " + response.getRetMsg());
                  } catch (Exception e) {
                      e.printStackTrace();
                  }
@@ -136,7 +134,7 @@ public class GetCurKlineTool implements Tool {
             e.printStackTrace();
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询K线数据发生异常: " + e.getMessage());
+                context.sendText("查询K线数据发生异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }

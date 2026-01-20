@@ -87,10 +87,12 @@ public abstract class BaseMobileRPAProcessor implements IMobileRPAProcessor {
 	}
 	
 	/**
-     * 拖动
-     * @param 以哪个屏幕的对象作为拖动的起点
-     * @param 拖动的宽度，主要是根据elemnt的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
-     * @param 拖动方向
+     * 拖动元素
+     * @param element 以哪个屏幕的对象作为拖动的起点
+     * @param percent 拖动的宽度，主要是根据element的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
+     * @param direction 拖动方向
+     * @param offsetX x的偏移量
+     * @param offsetY y的偏移量
      */
     public void drag(WebElement element,double percent,Direction direction,int offsetX,int offsetY)
     {
@@ -98,10 +100,12 @@ public abstract class BaseMobileRPAProcessor implements IMobileRPAProcessor {
     }
     
 	/**
-	 * 拖动
-	 * @param 以哪个屏幕的位置作为拖动的起点
-	 * @param 拖动的宽度，主要是根据elemnt的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
-     * @param 拖动方向
+	 * 拖动区域
+	 * @param bounds 以哪个屏幕的位置作为拖动的起点，格式如 "[0,0][1080,1920]"
+	 * @param percent 拖动的宽度，主要是根据element的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
+	 * @param direction 拖动方向
+	 * @param offsetX x的偏移量
+     * @param offsetY y的偏移量
 	 */
 	public void drag(String bounds,double percent,Direction direction,int offsetX,int offsetY)
     {

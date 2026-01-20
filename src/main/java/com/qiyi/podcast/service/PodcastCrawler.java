@@ -284,8 +284,11 @@ public class PodcastCrawler {
             String url = "https://podwise.ai" + item.linkString;
             showPageNotification(page, "打开播客详情页...");
             page.navigate(url);
-            page.waitForLoadState(LoadState.NETWORKIDLE);
-            page.waitForTimeout(1000);
+            
+           
+            page.waitForSelector("//button/span[contains(text(),'Export')]", 
+                new Page.WaitForSelectorOptions().setTimeout(SHORT_TIMEOUT_MS));
+
 
             ElementHandle exportDiv = page.querySelector("//button/span[contains(text(),'Export')]");
             if (exportDiv != null) {

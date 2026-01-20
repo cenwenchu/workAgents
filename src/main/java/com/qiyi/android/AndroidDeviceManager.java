@@ -6,6 +6,12 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Android设备管理器
+ * <p>
+ * 用于管理连接的Android设备，执行ADB命令。
+ * </p>
+ */
 public class AndroidDeviceManager {
     private static final AndroidDeviceManager INSTANCE = new AndroidDeviceManager();
     private String adbPath = "adb"; // Assume in PATH
@@ -13,10 +19,19 @@ public class AndroidDeviceManager {
     private AndroidDeviceManager() {
     }
 
+    /**
+     * 获取单例实例
+     * @return AndroidDeviceManager实例
+     */
     public static AndroidDeviceManager getInstance() {
         return INSTANCE;
     }
 
+    /**
+     * 获取连接的设备列表
+     * @return 设备序列号列表
+     * @throws IOException IO异常
+     */
     public List<String> getDevices() throws IOException {
         List<String> devices = new ArrayList<>();
         Process process = new ProcessBuilder(adbPath, "devices").start();
@@ -35,6 +50,13 @@ public class AndroidDeviceManager {
         return devices;
     }
     
+    /**
+     * 执行Shell命令
+     * @param serial 设备序列号，如果为null则不指定设备
+     * @param command Shell命令字符串
+     * @return 命令输出结果
+     * @throws IOException IO异常
+     */
     public String executeShell(String serial, String command) throws IOException {
         List<String> cmd = new ArrayList<>();
         cmd.add(adbPath);
@@ -55,6 +77,13 @@ public class AndroidDeviceManager {
         return executeProcess(cmd);
     }
 
+    /**
+     * 执行Shell命令（参数列表方式）
+     * @param serial 设备序列号，如果为null则不指定设备
+     * @param commandArgs Shell命令参数列表
+     * @return 命令输出结果
+     * @throws IOException IO异常
+     */
     public String executeShell(String serial, List<String> commandArgs) throws IOException {
         List<String> cmd = new ArrayList<>();
         cmd.add(adbPath);
@@ -83,10 +112,23 @@ public class AndroidDeviceManager {
         return output.toString();
     }
 
+    /**
+     * 模拟点击
+     * @param serial 设备序列号
+     * @param x X坐标
+     * @param y Y坐标
+     * @throws IOException IO异常
+     */
     public void tap(String serial, int x, int y) throws IOException {
         executeShell(serial, "input tap " + x + " " + y);
     }
 
+    /**
+     * 输入文本
+     * @param serial 设备序列号
+     * @param text 要输入的文本（仅支持ASCII）
+     * @throws IOException IO异常
+     */
     public void inputText(String serial, String text) throws IOException {
         // ADB input text does not support non-ASCII characters natively.
         // We warn if we detect them.

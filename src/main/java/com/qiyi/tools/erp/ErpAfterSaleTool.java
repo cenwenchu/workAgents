@@ -9,7 +9,7 @@ import com.microsoft.playwright.Request;
 import com.microsoft.playwright.APIRequestContext;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.options.RequestOptions;
-import com.qiyi.util.DingTalkUtil;
+import com.qiyi.tools.ToolContext;
 import com.qiyi.util.PlayWrightUtil;
 
 import java.util.List;
@@ -50,16 +50,10 @@ public class ErpAfterSaleTool extends ErpBaseTool {
     }
 
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
-
+    public String execute(JSONObject params, ToolContext context) {
         if (!TOOL_LOCK.tryLock()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP查询任务正在执行中，请稍后再试。");
+                context.sendText("ERP查询任务正在执行中，请稍后再试。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -68,30 +62,30 @@ public class ErpAfterSaleTool extends ErpBaseTool {
 
         PlayWrightUtil.Connection connection = null;
         try {
-            DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "开始执行ERP售后预警查询任务...");
+            context.sendText("开始执行ERP售后预警查询任务...");
 
-            connection = PlayWrightUtil.connectAndAutomate();
+            connection = connectToBrowser();
             if (connection == null) {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "无法连接到浏览器，任务终止");
+                context.sendText("无法连接到浏览器，任务终止");
                 return "Error: Browser connection failed";
             }
 
-            BrowserContext context;
+            BrowserContext browserContext;
             if (connection.browser.contexts().isEmpty()) {
-                context = connection.browser.newContext();
+                browserContext = connection.browser.newContext();
             } else {
-                context = connection.browser.contexts().get(0);
+                browserContext = connection.browser.contexts().get(0);
             }
 
-            Page page = context.newPage();
+            Page page = browserContext.newPage();
             try {
                 // 1. Check Login
-                if (!ensureLogin(page, PAGE_URL, notifyUsers)) {
+                if (!ensureLogin(page, PAGE_URL, context)) {
                     return "Error: Login failed";
                 }
 
                 // 2. Fetch Data
-                return fetchData(page, notifyUsers);
+                return fetchData(page, context);
 
             } finally {
                 page.close();
@@ -100,20 +94,18 @@ public class ErpAfterSaleTool extends ErpBaseTool {
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "任务执行异常: " + e.getMessage());
+                context.sendText("任务执行异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
             return "Error: " + e.getMessage();
         } finally {
-            if (connection != null) {
-                PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
-            }
+            disconnectBrowser(connection);
             TOOL_LOCK.unlock();
         }
     }
 
-    private String fetchData(Page page, List<String> notifyUsers) {
+    private String fetchData(Page page, ToolContext context) {
         try {
             // Capture the real API request to get the URL and Template Payload
             // We reload the page to trigger the request
@@ -182,7 +174,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                 return "Error: Non-JSON response (Status " + status + ")";
             }
 
-            return handleApiResponse(notifyUsers, status, bodyJson);
+            return handleApiResponse(context, status, bodyJson);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -241,7 +233,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
         }
     }
 
-    private String handleApiResponse(List<String> notifyUsers, int status, JSONObject bodyJson) {
+    private String handleApiResponse(ToolContext context, int status, JSONObject bodyJson) {
         try {
             if (status == 200) {
                 boolean success = bodyJson.getBooleanValue("success");
@@ -253,7 +245,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                         if (data instanceof JSONArray) {
                             JSONArray dataArray = (JSONArray) data;
                             if (dataArray.isEmpty()) {
-                                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功，但今日无售后预警数据。");
+                                context.sendText("查询成功，但今日无售后预警数据。");
                                 return "No data found";
                             }
                             
@@ -267,20 +259,20 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                         }
 
                         String finalOutput = resultBuilder.toString();
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP售后预警查询结果:\n" + finalOutput);
+                        context.sendText("ERP售后预警查询结果:\n" + finalOutput);
                         return finalOutput;
 
                     } else {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功，但返回数据为空。");
+                        context.sendText("查询成功，但返回数据为空。");
                         return "Data is null";
                     }
                 } else {
                     String msg = bodyJson.getString("message");
-                    DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询失败: " + msg);
+                    context.sendText("查询失败: " + msg);
                     return "Error: " + msg;
                 }
             } else {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "接口调用失败 (Status " + status + ")");
+                context.sendText("接口调用失败 (Status " + status + ")");
                 return "Error: Status " + status;
             }
         } catch (Exception e) {

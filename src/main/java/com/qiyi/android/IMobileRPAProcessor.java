@@ -38,38 +38,34 @@ public interface IMobileRPAProcessor {
 	
 	/**
 	 * 初始化Driver的会话，用于和客户端机器互动
-	 * @param 设备id（getDeviceList 可以获取）
-	 * @param appiumServerUrl
-	 * @return
-	 * @throws MalformedURLException
+	 * @param udid 设备id（getDeviceList 可以获取）
+	 * @param appiumServerUrl Appium服务器URL
+	 * @throws MalformedURLException URL格式错误异常
 	 */
 	public void initDriver(String udid,String appiumServerUrl) throws MalformedURLException;
 	
 	/**
      * 结束会话，释放client机器
-     * @param driver
      */
 	public void quitDriver();
 	
 	/**
-     * 拖动
-     * @param driver
-     * @param 以哪个屏幕的对象作为拖动的起点
-     * @param 拖动的宽度，主要是根据elemnt的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
-     * @param x的偏移量
-     * @param y的偏移量
-     * @param 拖动方向
+     * 拖动元素
+     * @param element 以哪个屏幕的对象作为拖动的起点
+     * @param percent 拖动的宽度，主要是根据element的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
+     * @param direction 拖动方向
+     * @param offsetX x的偏移量
+     * @param offsetY y的偏移量
      */
     public void drag(WebElement element,double percent,Direction direction,int offsetX,int offsetY);
     
     /**
-	 * 拖动
-	 * @param driver
-	 * @param 以哪个屏幕的位置作为拖动的起点
-	 * @param 拖动的宽度，主要是根据elemnt的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
-	 * @param x的偏移量
-     * @param y的偏移量
-     * @param 拖动方向
+	 * 拖动区域
+	 * @param bounds 以哪个屏幕的位置作为拖动的起点，格式如 "[0,0][1080,1920]"
+	 * @param percent 拖动的宽度，主要是根据element的高和宽来乘以这个比例。例如高 1000pix，这个数字如果是0.3，则拖动 1000 * 0.3 = 300 pix
+	 * @param direction 拖动方向
+	 * @param offsetX x的偏移量
+     * @param offsetY y的偏移量
 	 */
 	public void drag(String bounds,double percent,Direction direction,int offsetX,int offsetY);
 	
@@ -77,26 +73,26 @@ public interface IMobileRPAProcessor {
      * 向上或者向下滚动屏幕（暂时还没支持左右，左右请用drag）
      * @param percent 拖动全屏幕的比例
      * @param direction 拖动方向
-     * @param beginYPosition 拖动开始的的屏幕位置，0< <1;
+     * @param beginYPosition 拖动开始的的屏幕位置，0 < beginYPosition < 1
      */
 	public void scroll(double percent,Direction direction,double beginYPosition);
     
     /**
-	 * 找到android的elments 列表 通过xpath
-	 * @param xpath
-	 * @param 是否需要等待，主要用于某些界面需要渲染时间，当找不到对象，可以循环等待waitSeconds秒来获取对象（每一秒会检查一次，直至waitSeconds用完）
-	 * @return
-	 * @throws Exception
+	 * 找到android的elements列表 通过xpath
+	 * @param xpath 元素的XPath
+	 * @param waitSeconds 是否需要等待，主要用于某些界面需要渲染时间，当找不到对象，可以循环等待waitSeconds秒来获取对象（每一秒会检查一次，直至waitSeconds用完）
+	 * @return 找到的元素列表
+	 * @throws Exception 查找过程中的异常
 	 */
 	public List<WebElement> findElementsAndWait(String xpath,int waitSeconds) throws Exception;
 	
 	/**
-	 * 通过 Element来找子的elments 列表 通过xpath
+	 * 通过 Element来找子的elements列表 通过xpath
 	 * @param element 这个对象替代掉了根节点，他就是最高节点，高于这个节点的对象是无法找到的，就算用/..
-	 * @param xpath
-	 * @param 是否需要等待，主要用于某些界面需要渲染时间，当找不到对象，可以循环等待waitSeconds秒来获取对象（每一秒会检查一次，直至waitSeconds用完）
-	 * @return
-	 * @throws Exception
+	 * @param xpath 相对或绝对XPath
+	 * @param waitSeconds 是否需要等待，主要用于某些界面需要渲染时间，当找不到对象，可以循环等待waitSeconds秒来获取对象（每一秒会检查一次，直至waitSeconds用完）
+	 * @return 找到的子元素列表
+	 * @throws Exception 查找过程中的异常
 	 */
 	public List<WebElement> findElementsByElementAndWait(WebElement element,String xpath,int waitSeconds) throws Exception;
 	

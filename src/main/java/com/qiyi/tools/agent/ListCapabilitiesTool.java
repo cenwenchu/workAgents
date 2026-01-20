@@ -2,8 +2,8 @@ package com.qiyi.tools.agent;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolRegistry;
-import com.qiyi.util.DingTalkUtil;
 import com.qiyi.util.LLMUtil;
 
 import java.util.ArrayList;
@@ -27,27 +27,21 @@ public class ListCapabilitiesTool implements Tool {
     }
 
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
+    public String execute(JSONObject params, ToolContext context) {
         String result = getCapabilities();
         
         // Send message to user if senderId is present (not pre-warming)
-        if (senderId != null && !senderId.isEmpty()) {
-            List<String> users = new ArrayList<>();
-            users.add(senderId);
+        if (context != null && context.getSenderId() != null && !context.getSenderId().isEmpty()) {
             try {
-                System.out.println("ListCapabilitiesTool: Sending capabilities to " + senderId);
+                System.out.println("ListCapabilitiesTool: Sending capabilities to " + context.getSenderId());
                 // Use Markdown for better formatting
-                boolean sent = DingTalkUtil.sendMarkdownMessageToEmployees(users, "Agent 能力列表", result);
-                if (!sent) {
-                     System.err.println("ListCapabilitiesTool: Markdown send returned false, trying text");
-                     DingTalkUtil.sendTextMessageToEmployees(users, result);
-                }
+                context.sendMarkdown("Agent 能力列表", result);
             } catch (Exception e) {
                 System.err.println("ListCapabilitiesTool: Failed to send message: " + e.getMessage());
                 e.printStackTrace();
                 // Fallback to text
                 try {
-                    DingTalkUtil.sendTextMessageToEmployees(users, result);
+                    context.sendText(result);
                 } catch (Exception ex) {
                     ex.printStackTrace();
                 }
@@ -64,7 +58,7 @@ public class ListCapabilitiesTool implements Tool {
             return cachedCapabilities;
         }
 
-        Collection<Tool> tools = ToolRegistry.getAll();
+        Collection<Tool> tools = getAllTools();
         Map<String, List<Tool>> toolsByCategory = new HashMap<>();
 
         for (Tool tool : tools) {
@@ -106,19 +100,24 @@ public class ListCapabilitiesTool implements Tool {
                 toolListBuilder.toString();
 
         try {
-            String response = LLMUtil.chatWithDeepSeek(prompt);
-            if (response != null && !response.trim().isEmpty()) {
-                cachedCapabilities = "我目前具备以下能力：\n\n" + response;
-                return cachedCapabilities;
-            }
+            cachedCapabilities = llmChat(prompt);
         } catch (Exception e) {
             e.printStackTrace();
+            // Fallback to raw list if LLM fails
+            cachedCapabilities = "无法生成智能介绍，以下是原始工具列表：\n" + toolListBuilder.toString();
         }
 
-        // Fallback to basic list if LLM fails
-        return generateFallbackList(toolsByCategory);
+        return cachedCapabilities;
     }
 
+    protected Collection<Tool> getAllTools() {
+        return ToolRegistry.getAll();
+    }
+    
+    protected String llmChat(String prompt) {
+        return LLMUtil.chatWithDeepSeek(prompt);
+    }
+    
     private String getCategoryFromPackage(String packageName) {
         // Assume package format com.qiyi.tools.xxx
         // We want 'xxx'
@@ -135,17 +134,5 @@ public class ListCapabilitiesTool implements Tool {
         return "General";
     }
 
-    private String generateFallbackList(Map<String, List<Tool>> toolsByCategory) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("我目前具备以下能力（自动生成）：\n\n");
-        
-        for (Map.Entry<String, List<Tool>> entry : toolsByCategory.entrySet()) {
-            sb.append("## Category: ").append(entry.getKey()).append("\n");
-            for (Tool tool : entry.getValue()) {
-                sb.append("### ").append(tool.getName()).append("\n");
-                sb.append(tool.getDescription()).append("\n\n");
-            }
-        }
-        return sb.toString();
-    }
+    
 }

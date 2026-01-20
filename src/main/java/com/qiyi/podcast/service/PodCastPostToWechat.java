@@ -112,7 +112,12 @@ public class PodCastPostToWechat {
         publishPage.check("//i[@class='weui-desktop-icon-checkbox']");
 
         //点击浮层上的按钮叫做确定
-        publishPage.click("//button[contains(text(),'确定')]");
+        String confirmBtn = "//button[contains(text(),'确定')]";
+        if (publishPage.isVisible(confirmBtn) && publishPage.isEnabled(confirmBtn)) {
+            publishPage.click(confirmBtn);
+        } else {
+            publishPage.click("//button[contains(text(),'取消')]");
+        }
 
         //填写分类
         publishPage.click("//div/span[contains(@class,'js_article_tags_content') and contains(text(),'未添加')]");
@@ -144,7 +149,13 @@ public class PodCastPostToWechat {
         //修改一下留言的配置
         publishPage.click("//div[@class='setting-group__content']");
         publishPage.click("//label[contains(text(),'留言开关')]/..//div[contains(@class,'weui-desktop-switch__box')]");
-        publishPage.click("//button[contains(text(),'确定')]");
+        confirmBtn = "//button[contains(text(),'确定')]";
+        String confirmBtnClass = publishPage.getAttribute(confirmBtn, "class");
+        if (publishPage.isVisible(confirmBtn) && publishPage.isEnabled(confirmBtn) && (confirmBtnClass == null || !confirmBtnClass.contains("btn_disabled"))) {
+            publishPage.click(confirmBtn);
+        } else {
+            publishPage.click("//button[contains(text(),'取消')]");
+        }
         
         //鼠标移动到coverUploadArea，然后上传图片
         ElementHandle coverUploadArea = publishPage.querySelector("//div[contains(@class,'select-cover__mask')]");

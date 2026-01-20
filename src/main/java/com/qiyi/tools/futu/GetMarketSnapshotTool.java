@@ -3,9 +3,9 @@ package com.qiyi.tools.futu;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolContext;
 import com.futu.openapi.pb.QotGetSecuritySnapshot;
 import com.futu.openapi.pb.QotCommon;
-import com.qiyi.util.DingTalkUtil;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -21,19 +21,17 @@ public class GetMarketSnapshotTool implements Tool {
         return "功能：获取指定证券的市场快照（SecuritySnapshot）。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）。返回：包含最新价、昨收、最高、最低、成交量等快照信息的响应字符串。";
     }
 
-    @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
+    protected FutuOpenD getFutuOpenD() {
+        return FutuOpenD.getInstance();
+    }
 
+    @Override
+    public String execute(JSONObject params, ToolContext context) {
         String code = params.getString("code");
         if (code == null) return "Error: code is required";
         
         try {
-            FutuOpenD openD = FutuOpenD.getInstance();
+            FutuOpenD openD = getFutuOpenD();
             
             int marketVal = QotCommon.QotMarket.QotMarket_HK_Security_VALUE;
             String stockCode = code;
@@ -92,7 +90,7 @@ public class GetMarketSnapshotTool implements Tool {
                  if (sb.length() == 0) {
                      String msg = "未查询到市场快照信息。";
                      try {
-                         DingTalkUtil.sendTextMessageToEmployees(notifyUsers, msg);
+                         context.sendText(msg);
                      } catch (Exception e) {
                          e.printStackTrace();
                      }
@@ -100,7 +98,7 @@ public class GetMarketSnapshotTool implements Tool {
                  }
                  String result = sb.toString();
                  try {
-                     DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "市场快照查询结果:\n" + result);
+                     context.sendText("市场快照查询结果:\n" + result);
                  } catch (Exception e) {
                      e.printStackTrace();
                  }
@@ -108,7 +106,7 @@ public class GetMarketSnapshotTool implements Tool {
             } else {
                  String errorMsg = "Error: " + response.getRetMsg();
                  try {
-                     DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询市场快照失败: " + response.getRetMsg());
+                     context.sendText("查询市场快照失败: " + response.getRetMsg());
                  } catch (Exception e) {
                      e.printStackTrace();
                  }
@@ -121,7 +119,7 @@ public class GetMarketSnapshotTool implements Tool {
             e.printStackTrace();
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询市场快照发生异常: " + e.getMessage());
+                context.sendText("查询市场快照发生异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }

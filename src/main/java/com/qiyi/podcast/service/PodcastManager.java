@@ -13,6 +13,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import com.qiyi.tools.ToolContext;
+
 public class PodcastManager {
 
     private final PodcastCrawler crawler;
@@ -99,6 +101,10 @@ public class PodcastManager {
     }
 
     public void runProcessingTask(int maxProcessCount, ModelType modelType, boolean needGenerateImage, boolean isStreaming, int threadPoolSize) {
+        runProcessingTask(maxProcessCount, modelType, needGenerateImage, isStreaming, threadPoolSize, null);
+    }
+
+    public void runProcessingTask(int maxProcessCount, ModelType modelType, boolean needGenerateImage, boolean isStreaming, int threadPoolSize, ToolContext context) {
         System.out.println("Starting Processing (Summary/Image) Task...");
         
         //File[] files = fileService.getOriginalFiles(); // Or get CN files?
@@ -168,5 +174,18 @@ public class PodcastManager {
         
         executor.shutdown();
         System.out.println("Processing Task Completed.");
+        try {
+            DingTalkUtil.sendTextMessageToEmployees(DingTalkUtil.PODCAST_ADMIN_USERS, "播客摘要分析生成完成，处理文件数: " + processedCount);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        
+        if (context != null) {
+            try {
+                context.sendText("播客摘要分析生成完成，处理文件数: " + processedCount);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 }

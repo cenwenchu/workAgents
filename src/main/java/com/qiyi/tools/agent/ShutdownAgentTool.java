@@ -2,9 +2,8 @@ package com.qiyi.tools.agent;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolContext;
 import com.qiyi.util.DingTalkUtil;
-import java.util.List;
-import java.util.ArrayList;
 
 public class ShutdownAgentTool implements Tool {
     @Override
@@ -17,20 +16,19 @@ public class ShutdownAgentTool implements Tool {
         return "关闭钉钉机器人服务并退出 DingTalkAgent。Parameters: none.";
     }
 
+    protected void stopRobotMsgCallbackConsumer() throws Exception {
+        DingTalkUtil.stopRobotMsgCallbackConsumer();
+    }
+
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
+    public String execute(JSONObject params, ToolContext context) {
         try {
-            DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "已收到关闭指令，正在关闭钉钉机器人服务...");
+            context.sendText("已收到关闭指令，正在关闭钉钉机器人服务...");
         } catch (Exception e) {
             e.printStackTrace();
         }
         try {
-            DingTalkUtil.stopRobotMsgCallbackConsumer();
+            stopRobotMsgCallbackConsumer();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -39,7 +37,11 @@ public class ShutdownAgentTool implements Tool {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
-        System.exit(0);
+        exit(0);
         return "已关闭钉钉机器人服务并退出 DingTalkAgent。";
+    }
+
+    protected void exit(int status) {
+        System.exit(status);
     }
 }

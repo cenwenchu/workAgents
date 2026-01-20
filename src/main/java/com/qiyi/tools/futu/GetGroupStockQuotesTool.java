@@ -3,7 +3,7 @@ package com.qiyi.tools.futu;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
-import com.qiyi.util.DingTalkUtil;
+import com.qiyi.tools.ToolContext;
 import com.futu.openapi.pb.QotGetUserSecurity;
 import com.futu.openapi.pb.QotGetBasicQot;
 import com.futu.openapi.pb.QotCommon;
@@ -22,21 +22,19 @@ public class GetGroupStockQuotesTool implements Tool {
         return "功能：获取指定自选股分组下所有股票的实时报价。参数：groupName（字符串，必填，分组名称）。返回：该分组下所有股票的实时价格列表。";
     }
 
-    @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
+    protected FutuOpenD getFutuOpenD() {
+        return FutuOpenD.getInstance();
+    }
 
+    @Override
+    public String execute(JSONObject params, ToolContext context) {
         String groupName = params.getString("groupName");
         if (groupName == null || groupName.isEmpty()) {
             return "Error: groupName is required";
         }
 
         try {
-            FutuOpenD openD = FutuOpenD.getInstance();
+            FutuOpenD openD = getFutuOpenD();
             
             // Step 1: Get User Security List
             QotGetUserSecurity.C2S c2s = QotGetUserSecurity.C2S.newBuilder()
@@ -52,7 +50,7 @@ public class GetGroupStockQuotesTool implements Tool {
             
             if (groupResp.getRetType() != 0) {
                 String errorMsg = "获取自选股列表失败: " + groupResp.getRetMsg();
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, errorMsg);
+                context.sendText(errorMsg);
                 return errorMsg;
             }
 
@@ -63,7 +61,7 @@ public class GetGroupStockQuotesTool implements Tool {
 
             if (securityList.isEmpty()) {
                 String msg = "分组[" + groupName + "]下无股票。";
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, msg);
+                context.sendText(msg);
                 return msg;
             }
 
@@ -99,11 +97,11 @@ public class GetGroupStockQuotesTool implements Tool {
                  }
                  
                  String result = sb.toString();
-                 DingTalkUtil.sendTextMessageToEmployees(notifyUsers, result);
+                 context.sendText(result);
                  return result;
             } else {
                  String errorMsg = "获取批量报价失败: " + quoteResp.getRetMsg();
-                 DingTalkUtil.sendTextMessageToEmployees(notifyUsers, errorMsg);
+                 context.sendText(errorMsg);
                  return errorMsg;
             }
 
@@ -111,7 +109,7 @@ public class GetGroupStockQuotesTool implements Tool {
             e.printStackTrace();
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "获取分组报价发生异常: " + e.getMessage());
+                context.sendText("获取分组报价发生异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }

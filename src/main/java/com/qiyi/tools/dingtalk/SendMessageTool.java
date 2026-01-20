@@ -5,12 +5,14 @@ import com.qiyi.util.DingTalkUtil;
 import com.qiyi.dingtalk.DingTalkDepartment;
 import com.qiyi.dingtalk.DingTalkUser;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolContext;
 
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Collection;
+import java.util.Collections;
 
 public class SendMessageTool implements Tool {
     @Override
@@ -23,8 +25,22 @@ public class SendMessageTool implements Tool {
         return "Send direct DingTalk text message to specific users. Parameters: content (string, mandatory). Choose ONE of: departments (string/List, names or IDs) OR names (string/List). If both provided, departments take precedence.";
     }
 
+    protected List<DingTalkDepartment> getAllDepartments() throws Exception {
+        return DingTalkUtil.getAllDepartments(true, true);
+    }
+
+    protected void sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
+        DingTalkUtil.sendTextMessageToEmployees(userIds, content);
+    }
+
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
+    public String execute(JSONObject params, ToolContext context) {
+        String senderId = context.getSenderId();
+        List<String> atUserIds = context.getAtUserIds();
+        
+        // Use a context that only notifies the sender to match original behavior
+        ToolContext senderContext = context.withAtUserIds(Collections.emptyList());
+
         String content = params != null ? params.getString("content") : null;
         List<String> recipients = new ArrayList<>();
         List<String> notFoundNames = new ArrayList<>();
@@ -55,7 +71,7 @@ public class SendMessageTool implements Tool {
                 }
                 if (!deptKeys.isEmpty()) {
                     try {
-                        List<DingTalkDepartment> departments = DingTalkUtil.getAllDepartments(true, true);
+                        List<DingTalkDepartment> departments = getAllDepartments();
                         Map<String, DingTalkDepartment> deptById = new HashMap<>();
                         Map<String, DingTalkDepartment> deptByName = new HashMap<>();
                         for (DingTalkDepartment d : departments) {
@@ -135,10 +151,18 @@ public class SendMessageTool implements Tool {
 
                 if (!nameList.isEmpty()) {
                     try {
+                        List<DingTalkDepartment> departments = getAllDepartments();
+                        Map<String, String> userMap = new HashMap<>();
+                        for (DingTalkDepartment dept : departments) {
+                            if (dept.getUserList() != null) {
+                                for (DingTalkUser u : dept.getUserList()) {
+                                    userMap.put(u.getName(), u.getUserid());
+                                }
+                            }
+                        }
                         for (String name : nameList) {
-                            DingTalkUser user = DingTalkUtil.findUserFromDepartmentByName(name);
-                            if (user != null) {
-                                String uid = user.getUserid();
+                            String uid = userMap.get(name);
+                            if (uid != null) {
                                 if (!recipients.contains(uid)) {
                                     recipients.add(uid);
                                 }
@@ -161,12 +185,12 @@ public class SendMessageTool implements Tool {
             }
         }
         
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
+        // List<String> notifyUsers = new ArrayList<>();
+        // if (senderId != null) notifyUsers.add(senderId);
         
         if (content == null || content.trim().isEmpty()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "未提供消息内容，未执行发送。");
+                senderContext.sendText("未提供消息内容，未执行发送。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -175,7 +199,7 @@ public class SendMessageTool implements Tool {
 
         if (!notFoundDepartments.isEmpty()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "未找到以下部门: " + String.join("，", notFoundDepartments) + "。请确认部门名称或ID是否正确。");
+                senderContext.sendText("未找到以下部门: " + String.join("，", notFoundDepartments) + "。请确认部门名称或ID是否正确。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -186,7 +210,7 @@ public class SendMessageTool implements Tool {
 
         if (!notFoundNames.isEmpty()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "未找到以下用户: " + String.join("，", notFoundNames) + "。请确认姓名是否正确。");
+                senderContext.sendText("未找到以下用户: " + String.join("，", notFoundNames) + "。请确认姓名是否正确。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -197,7 +221,7 @@ public class SendMessageTool implements Tool {
 
         if (recipients.isEmpty()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "未指定有效的接收人（部门或用户），未执行发送。");
+                senderContext.sendText("未指定有效的接收人（部门或用户），未执行发送。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -207,7 +231,7 @@ public class SendMessageTool implements Tool {
         try {
             String senderName = null;
             try {
-                List<DingTalkDepartment> departments = DingTalkUtil.getAllDepartments(true, true);
+                List<DingTalkDepartment> departments = getAllDepartments();
                 Map<String, String> idNameMap = new HashMap<>();
                 for (DingTalkDepartment dept : departments) {
                     if (dept.getUserList() != null) {
@@ -225,13 +249,13 @@ public class SendMessageTool implements Tool {
             String finalContent = (senderName != null && !senderName.trim().isEmpty())
                     ? ("【消息发起人：" + senderName + "】" + content)
                     : ("【消息发起人：" + (senderId != null ? senderId : "未知") + "】" + content);
-            DingTalkUtil.sendTextMessageToEmployees(recipients, finalContent);
-            DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "已向 " + recipients.size() + " 位用户发送消息");
+            sendTextMessageToEmployees(recipients, finalContent);
+            senderContext.sendText("已向 " + recipients.size() + " 位用户发送消息");
             return "Message Sent to " + recipients.size() + " users";
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "发送消息失败: " + e.getMessage());
+                senderContext.sendText("发送消息失败: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }

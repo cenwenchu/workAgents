@@ -40,6 +40,7 @@ public class DingTalkAgent {
         }));
 
         //启动机器人监听
+        com.qiyi.tools.ToolManager.init();
         DingTalkUtil.startRobotMsgCallbackConsumer();
 
         // 获取所有部门列表

@@ -4,8 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.android.AndroidDeviceManager;
 import com.qiyi.android.BaseMobileRPAProcessor;
 import com.qiyi.tools.Tool;
-import com.qiyi.util.DingTalkUtil;
-
+import com.qiyi.tools.ToolContext;
 import com.qiyi.util.LLMUtil;
 import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
 
@@ -32,14 +31,41 @@ import java.util.List;
 import java.util.Set;
 
 
+/**
+ * 淘宝 App 自动化工具类
+ * <p>
+ * 基于 Appium 实现，用于在淘宝 App 中执行自动化任务，如搜索商品、查找外卖店铺、
+ * 进入店铺详情、下单等操作。
+ * </p>
+ * <p>
+ * 该工具类实现了 {@link Tool} 接口，可以被 Agent 调用。
+ * 核心功能包括：
+ * <ul>
+ *     <li>初始化 Appium Driver 连接 Android 设备</li>
+ *     <li>执行搜索任务 (operation='search')：搜索商品，扫描店铺列表，整理店铺信息，并获取商品详情</li>
+ *     <li>执行下单任务 (operation='buy')：直接进入指定店铺，定位商品，加入购物车并点击结算</li>
+ * </ul>
+ * </p>
+ */
 public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
     private static Logger logger = LogManager.getLogger(TaobaoAppiumTool.class);
 
+    /**
+     * 尝试翻页的最大次数
+     */
     private static final int TRY_PAGE_COUNT = 5;
 
+    /**
+     * 搜索店铺数量限制，默认为 3
+     */
     private int maxShopCount = 3;
 
+    /**
+     * 主函数，用于本地测试
+     * @param aStrings 命令行参数
+     * @throws Exception 异常
+     */
     public static void main(String[] aStrings) throws Exception
     {
         TaobaoAppiumTool tool = new TaobaoAppiumTool();
@@ -54,11 +80,14 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         //tool.initializeDriver(parmas, List.of("13000000000"));
         //tool.searchProductInShop("皮蛋瘦肉粥", List.of("13000000000"), "三米粥铺", true);
 
-        String result  = tool.execute(parmas, null, null);
+        String result  = tool.execute(parmas, new com.qiyi.tools.context.ConsoleToolContext());
 
         System.out.println(result);
     }
     
+    /**
+     * 构造函数，设置淘宝 App 的包名和启动 Activity
+     */
     public TaobaoAppiumTool() {
         this.setAppPackage("com.taobao.taobao");
         this.setAppActivity("com.taobao.tao.welcome.Welcome");
@@ -82,13 +111,41 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                "- max_shop_count (Integer, 选填): 搜索店铺数量限制，默认为 3。";
     }
     
+    /**
+     * 初始化 Appium Driver
+     * @param udid 设备唯一标识符 (Serial Number)
+     * @param appiumServerUrl Appium 服务器地址
+     * @throws MalformedURLException URL 格式错误
+     */
+    /**
+     * 获取连接的设备列表
+     * @return 设备 UDID 列表
+     */
+    protected List<String> getConnectedDevices() {
+        try {
+            return AndroidDeviceManager.getInstance().getDevices();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 创建 AndroidDriver 实例
+     * @param url Appium 服务器 URL
+     * @param options UiAutomator2Options 配置
+     * @return AndroidDriver 实例
+     */
+    protected AndroidDriver createDriver(URL url, UiAutomator2Options options) {
+        return new AndroidDriver(url, options);
+    }
+
     @Override
     public void initDriver(String udid, String appiumServerUrl)
             throws MalformedURLException {
 
         if (udid == null || udid.isEmpty()) {
              try {
-                 List<String> devices = AndroidDeviceManager.getInstance().getDevices();
+                 List<String> devices = getConnectedDevices();
                  if (devices.isEmpty()) {
                      throw new RuntimeException("No Android devices connected.");
                  }
@@ -112,17 +169,33 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
         options.setCapability("uiautomator2Options", uiAutomator2Options);
         
-        driver = new AndroidDriver(
-                new URL(appiumServerUrl), options);
+        driver = createDriver(new URL(appiumServerUrl), options);
         driver.setSetting("allowInvisibleElements", true);
         ((AndroidDriver) driver).activateApp(appPackage);
     }
 
+    protected String llmChat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean stream) {
+        return LLMUtil.chatWithDeepSeek(messages, stream);
+    }
+
+    protected void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * 执行工具的主要逻辑
+     * @param params 工具参数
+     * @param senderId 发送者 ID
+     * @param atUserIds @ 用户 ID 列表
+     * @return 执行结果
+     */
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
+    public String execute(JSONObject params, ToolContext context) {
         String serial = null;
-        List<String> users = new ArrayList<>();
-        if (senderId != null) users.add(senderId);
 
         try {
             
@@ -154,7 +227,13 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             }
 
             if (productName == null || productName.trim().isEmpty()) {
-                return reportError(users, "未指定商品名称 (product_name)。请在指令中明确指定要搜索的商品。");
+                String msg = "未指定商品名称 (product_name)。请在指令中明确指定要搜索的商品。";
+                try {
+                    context.sendText(msg);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return msg;
             }
 
             // 2. Init Driver
@@ -163,27 +242,27 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     serial = params.getString("serial");
                 }
                 
-                DingTalkUtil.sendTextMessageToEmployees(users, "正在初始化 Appium Driver" + (serial != null ? " (目标设备: " + serial + ")" : "") + "...");
+                context.sendText("正在初始化 Appium Driver" + (serial != null ? " (目标设备: " + serial + ")" : "") + "...");
                 this.initDriver(serial, "http://127.0.0.1:4723");
             } catch (Exception e) {
                  e.printStackTrace();
-                 return reportError(users, "Appium 连接或启动 App 失败: " + e.getMessage());
+                 return reportError(context, "Appium 连接或启动 App 失败: " + e.getMessage());
             }
 
-            DingTalkUtil.sendTextMessageToEmployees(users, "Appium 连接成功，正在执行操作: " + operation + ", 搜索: " + productName);
+            context.sendText("Appium 连接成功，正在执行操作: " + operation + ", 搜索: " + productName);
 
             if ("buy".equals(operation)) {
                 if (targetShopName == null || targetShopName.trim().isEmpty()) {
-                     return reportError(users, "下单模式 (operation='buy') 必须指定 target_shop_name。");
+                     return reportError(context, "下单模式 (operation='buy') 必须指定 target_shop_name。");
                 }
-                return executeBuyFlow(users, productName, productType, targetShopName);
+                return executeBuyFlow(context, productName, productType, targetShopName);
             } else {
-                return executeSearchFlow(users, productName, productType, targetShopName);
+                return executeSearchFlow(context, productName, productType, targetShopName);
             }
 
         } catch (Throwable e) {
             e.printStackTrace();
-            return reportError(users, "Appium 执行异常 (Throwable): " + e.getMessage());
+            return reportError(context, "Appium 执行异常 (Throwable): " + e.getMessage());
         } finally {
             this.cleanup();
         }
@@ -191,6 +270,12 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
 
 
+    /**
+     * 执行关键词搜索
+     * @param productName 商品名称
+     * @param productType 商品类型 (如 "外卖商品")
+     * @throws Exception 搜索过程中发生的异常
+     */
     private void searchKeyword(String productName, String productType) throws Exception {
 
         if ("外卖商品".equals(productType)) {
@@ -204,6 +289,9 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 System.out.println("Exception: " + e.getMessage());
                 System.out.println("Warning: '闪购' not found, proceeding to search directly...");
             }
+
+            // 0. Handle Marketing Popups
+            handleMarketingPopups();
 
             // 4. Search Flow (Handle existing input state -> Input -> Enter)
             WebElement inputField = null;
@@ -220,7 +308,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     // Use Clipboard + Paste to handle Chinese input
                     try {
                             ((AndroidDriver) driver).setClipboardText(productName);
-                            Thread.sleep(500);
+                            sleep(500);
                             ((AndroidDriver) driver).pressKey(new KeyEvent(AndroidKey.PASTE));
                             System.out.println("Pasted text from clipboard");
                     } catch (Exception e) {
@@ -235,9 +323,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     
                     // Hide keyboard
                     try {
-
-                    Thread.sleep(1000);
-
+                        sleep(1000);
                         ((AndroidDriver) driver).hideKeyboard();
                     } catch (Exception e) {
                         // Ignore
@@ -252,7 +338,93 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         }
     }
 
-    private String executeSearchFlow(List<String> users, String productName, String productType, String targetShopName) throws Exception {
+    /**
+     * 处理营销弹窗
+     * <p>
+     * 尝试检测并关闭常见的营销弹窗、广告或升级提示。
+     * 这是一个“尽力而为”的操作，不会因为未找到弹窗而抛出异常。
+     * </p>
+     * @param context 工具上下文
+     */
+    private void handleMarketingPopups() {
+        System.out.println("Checking for marketing popups...");
+        try {
+            // 定义常见的关闭按钮定位符
+            // 注意：这些定位符是基于经验的通用猜测，可能需要根据实际 App 更新调整
+            List<org.openqa.selenium.By> closeLocators = new ArrayList<>();
+            
+            // 1. 基于 Content-desc
+            closeLocators.add(AppiumBy.xpath("//android.view.View[contains(@content-desc, '关闭')]"));
+            closeLocators.add(AppiumBy.xpath("//android.widget.ImageView[contains(@content-desc, '关闭')]"));
+            closeLocators.add(AppiumBy.xpath("//*[contains(@content-desc, '以后再说')]"));
+            closeLocators.add(AppiumBy.xpath("//*[contains(@content-desc, '跳过')]"));
+            
+            // 2. 基于 Text
+            closeLocators.add(AppiumBy.xpath("//*[contains(@text, '以后再说')]"));
+            closeLocators.add(AppiumBy.xpath("//*[contains(@text, '跳过')]"));
+            
+            // 3. 基于 ID (模糊匹配 - 谨慎使用，因为可能误伤)
+            // 淘宝的关闭按钮通常没有特定的 ID，或者 ID 是混淆的。
+            // 这里仅作为备选，且限定包含 close 关键字
+            closeLocators.add(AppiumBy.xpath("//*[contains(@resource-id, 'close') and contains(@resource-id, 'btn')]"));
+
+            // 循环尝试，因为可能叠加多个弹窗
+            int maxPopups = 3; 
+            for (int i = 0; i < maxPopups; i++) {
+                boolean found = false;
+                for (org.openqa.selenium.By locator : closeLocators) {
+                    try {
+                        // 使用较短的超时时间，快速检查
+                        // findElements 不会抛出异常，如果没找到返回空列表
+                        // 注意：这里需要 driver 实例，TaobaoAppiumTool 继承自 BaseMobileRPAProcessor，应该有 driver 字段
+                        List<WebElement> elements = driver.findElements(locator);
+                        if (!elements.isEmpty()) {
+                            for(WebElement btn : elements) {
+                                if (btn.isDisplayed()) {
+                                    System.out.println("Found popup close button: " + locator.toString());
+                                    btn.click();
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (found) {
+                                sleep(1500); // 等待弹窗关闭动画
+                                break; // 找到一个就跳出内层循环，进行下一次外层检测（应对多重弹窗）
+                            }
+                        }
+                    } catch (Exception ignored) {
+                        // 忽略单个定位查找失败
+                    }
+                }
+                if (!found) {
+                    break; // 没有发现任何弹窗，结束检查
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("Error handling popups: " + e.getMessage());
+            // 不抛出异常，以免阻断主流程
+        }
+    }
+
+    /**
+     * 执行搜索流程 (Search Mode)
+     * <p>
+     * 1. 搜索关键词
+     * 2. 扫描并提取店铺列表信息
+     * 3. 使用 LLM 整理店铺数据
+     * 4. 依次进入店铺获取商品详情
+     * </p>
+     * @param context 工具上下文 (用于发送通知)
+     * @param productName 商品名称
+     * @param productType 商品类型
+     * @param targetShopName 目标店铺名称 (可选)
+     * @return 最终汇总结果
+     * @throws Exception 异常
+     */
+    private String executeSearchFlow(ToolContext context, String productName, String productType, String targetShopName) throws Exception {
+        // 0. Handle Marketing Popups
+        handleMarketingPopups();
+
         // 1. Search
         searchKeyword(productName, productType);
 
@@ -292,7 +464,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 System.out.println("Scrolling to next page...");
                 try {
                     this.scroll(0.5, Direction.UP, 0.8);
-                    Thread.sleep(1000);
+                    sleep(1000);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -312,8 +484,8 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 
                 List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages = new ArrayList<>();
                 messages.add(UserMessage.builder().addText(prompt).build());
-                structuredData = LLMUtil.chatWithDeepSeek(messages, false);
-                DingTalkUtil.sendTextMessageToEmployees(users, "店铺列表整理结果：\n" + structuredData);
+                structuredData = llmChat(messages, false);
+                context.sendText("店铺列表整理结果：\n" + structuredData);
                 
                 // Parse shop names from structured data
                 String[] lines = structuredData.split("\n");
@@ -331,7 +503,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
             } catch (Exception e) {
                  System.out.println("LLM Processing Failed: " + e.getMessage());
-                 DingTalkUtil.sendTextMessageToEmployees(users, rawShopData.toString());
+                 context.sendText(rawShopData.toString());
                  return rawShopData.toString(); // Fallback
             }
         } else {
@@ -345,7 +517,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         if (targetShopName != null && !targetShopName.isEmpty()) {
              // Only fetch for target shop
 
-             String result = enterShopAndFetchDetail(users, targetShopName, productName);
+             String result = enterShopAndFetchDetail(context, targetShopName, productName);
              if (!result.equals(""))
                 detailedResult.append(result).append("\n");
             else
@@ -355,7 +527,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             int count = 0;
             for (String shopName : shopNamesToFetch) {
 
-                String result = enterShopAndFetchDetail(users, shopName, productName);
+                String result = enterShopAndFetchDetail(context, shopName, productName);
 
                 if (!result.equals(""))
                 {
@@ -370,10 +542,19 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             }
         }
         
-        DingTalkUtil.sendTextMessageToEmployees(users, "最终汇总结果：\n" + detailedResult.toString());
+        context.sendText("最终汇总结果：\n" + detailedResult.toString());
         return detailedResult.toString();
     }
 
+    /**
+     * 在当前页面查找指定名称的店铺
+     * <p>
+     * 会在当前页面查找，如果找不到会尝试滚动屏幕。
+     * </p>
+     * @param shopName 店铺名称
+     * @return 找到的店铺卡片元素，如果未找到则返回 null
+     * @throws Exception 异常
+     */
     private WebElement findShop(String shopName) throws Exception {
         Set<String> processedShops = new HashSet<>();
         
@@ -433,7 +614,14 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         return null;
     }
 
-    private String enterShopAndFetchDetail(List<String> users, String shopName, String productName) {
+    /**
+     * 进入店铺并获取详情 (Search Mode 辅助方法)
+     * @param context 工具上下文
+     * @param shopName 店铺名称
+     * @param productName 商品名称
+     * @return 详情结果
+     */
+    private String enterShopAndFetchDetail(ToolContext context, String shopName, String productName) {
         try {
             System.out.println("Starting detail fetch for shop: " + shopName);
             // Try to reset to home using Deep Link first (Faster)
@@ -454,7 +642,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             shopCard.click();
 
             // 3. Search product inside shop
-            return searchProductInShop(productName, users, shopName, false);
+            return searchProductInShop(productName, context, shopName, false);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -462,7 +650,24 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         }
     }
 
-    private String executeBuyFlow(List<String> users, String productName, String productType, String targetShopName) throws Exception {
+    /**
+     * 执行下单流程 (Buy Mode)
+     * <p>
+     * 1. 搜索关键词
+     * 2. 定位并进入目标店铺
+     * 3. 在店内搜索商品并尝试加入购物车
+     * </p>
+     * @param context 工具上下文
+     * @param productName 商品名称
+     * @param productType 商品类型
+     * @param targetShopName 目标店铺名称
+     * @return 执行结果
+     * @throws Exception 异常
+     */
+    private String executeBuyFlow(ToolContext context, String productName, String productType, String targetShopName) throws Exception {
+        // 0. Handle Marketing Popups
+        handleMarketingPopups();
+
         searchKeyword(productName, productType);
         
         // Use findShop to locate and click
@@ -472,23 +677,32 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             try {
                  targetCard.click();
                  
-                 DingTalkUtil.sendTextMessageToEmployees(users, "找到并已进入店铺：" + targetShopName + "，准备定位商品：" + productName);
+                 context.sendText("找到并已进入店铺：" + targetShopName + "，准备定位商品：" + productName);
                  
-                 String result = searchProductInShop(productName, users, targetShopName, true);
-                 DingTalkUtil.sendTextMessageToEmployees(users, result);
+                 String result = searchProductInShop(productName, context, targetShopName, true);
+                 context.sendText(result);
                  return result;
 
             } catch (Exception e) {
-                return reportError(users, "进入店铺失败: " + e.getMessage());
+                return reportError(context, "进入店铺失败: " + e.getMessage());
             }
         }
         
         String msg = "未找到目标店铺：" + targetShopName;
-        DingTalkUtil.sendTextMessageToEmployees(users, msg);
+        context.sendText(msg);
         return msg;
     }
 
-    public String searchProductInShop(String productName, List<String> users, String shopName, boolean clickToEnter) throws Exception {
+    /**
+     * 在店铺内搜索商品
+     * @param productName 商品名称
+     * @param context 工具上下文
+     * @param shopName 店铺名称
+     * @param clickToEnter 是否点击进入商品/加入购物车 (true: 加购模式, false: 仅获取信息)
+     * @return 商品信息或操作结果
+     * @throws Exception 异常
+     */
+    public String searchProductInShop(String productName, ToolContext context, String shopName, boolean clickToEnter) throws Exception {
         // Search for product inside the shop
         int maxRetries = 3;
         for (int i = 0; i < maxRetries; i++) {
@@ -544,7 +758,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     
                     if (clickToEnter) {
                         String msg = "已进入店铺 [" + shopName + "]，找到商品：" + productName + "，正在尝试直接加购...";
-                        DingTalkUtil.sendTextMessageToEmployees(users, msg);
+                        context.sendText(msg);
                         
                         try {
                             
@@ -554,12 +768,12 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                                 //android.view.View[@resource-id="btn__cart"]
                                 WebElement cartBtn = driver.findElement(AppiumBy.xpath("//android.view.View[@resource-id=\"btn__cart\"]"));
                                 cartBtn.click();
-                                Thread.sleep(1000);
+                                Thread.sleep(2000);
 
                                 //点击text为 清空 的组件
                                 WebElement clearBtn = driver.findElement(AppiumBy.xpath("//*[@text=\"清空\"]"));
                                 clearBtn.click();
-                                Thread.sleep(1000);
+                                Thread.sleep(2000);
 
                                 clearBtn = driver.findElement(AppiumBy.xpath("//android.widget.TextView[@text=\"清空\"]"));
                                 clearBtn.click();
@@ -574,7 +788,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                             // Try adding to cart up to 3 times
                             boolean added = false;
                             int addCount = 0;
-                            for (int k = 0; k < 3; k++) {
+                            for (int k = 0; k < 5; k++) {
                                 System.out.println("Attempt " + (k+1) + " to add to cart...");
                                 
                                 // 1. Try to click "加购" (Add to Cart) under parent
@@ -643,14 +857,14 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     }
     
                     String msg = "已进入店铺 [" + shopName + "]，找到商品信息：\n" + productText;
-                    DingTalkUtil.sendTextMessageToEmployees(users, msg);
+                    context.sendText(msg);
                     return productText;
                 }
             } catch (StaleElementReferenceException e) {
                 System.out.println("Stale element detected, retrying... " + (i + 1));
                 if (i == maxRetries - 1) {
                      String msg = "已进入店铺 [" + shopName + "]，但在店铺内未找到商品：" + productName + " (Stale Element)";
-                     DingTalkUtil.sendTextMessageToEmployees(users, msg);
+                     context.sendText(msg);
                      return msg;
                 }
                 Thread.sleep(1000);
@@ -704,10 +918,10 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         this.quitDriver();
     }
 
-    private String reportError(List<String> users, String msg) {
+    private String reportError(ToolContext context, String msg) {
         System.err.println(msg);
         try {
-            DingTalkUtil.sendTextMessageToEmployees(users, "Error: " + msg);
+            context.sendText("Error: " + msg);
         } catch (Exception e) {
             e.printStackTrace();
         }

@@ -5,7 +5,8 @@ import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.tools.Tool;
-import com.qiyi.util.DingTalkUtil;
+import com.qiyi.tools.ToolContext;
+import com.qiyi.util.PlayWrightUtil;
 
 import java.util.HashMap;
 import java.util.List;
@@ -16,7 +17,17 @@ public abstract class ErpBaseTool implements Tool {
     protected static final ReentrantLock TOOL_LOCK = new ReentrantLock();
     protected final Map<String, String> capturedApiHeaders = new HashMap<>();
 
-    protected boolean ensureLogin(Page page, String targetUrl, List<String> notifyUsers) {
+    protected PlayWrightUtil.Connection connectToBrowser() {
+        return PlayWrightUtil.connectAndAutomate();
+    }
+
+    protected void disconnectBrowser(PlayWrightUtil.Connection connection) {
+        if (connection != null) {
+            PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
+        }
+    }
+
+    protected boolean ensureLogin(Page page, String targetUrl, ToolContext context) {
         try {
             // Setup network interception to capture headers from real requests
             setupHeaderCapture(page);
@@ -31,7 +42,7 @@ public abstract class ErpBaseTool implements Tool {
             boolean isLoggedIn = isLoginSuccess(page);
             
             if (!isLoggedIn) {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "检测到ERP系统未登录，请在打开的浏览器中完成登录，任务将等待您的操作。");
+                context.sendText("检测到ERP系统未登录，请在打开的浏览器中完成登录，任务将等待您的操作。");
                 
                 // Wait loop
                 long maxWaitTime = 5 * 60 * 1000; // 5 minutes
@@ -39,7 +50,7 @@ public abstract class ErpBaseTool implements Tool {
                 
                 while (!isLoggedIn) {
                     if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "登录等待超时，任务终止。");
+                        context.sendText("登录等待超时，任务终止。");
                         return false;
                     }
                     
@@ -54,13 +65,15 @@ public abstract class ErpBaseTool implements Tool {
                     }
                 }
                 
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP登录成功，继续执行任务。");
+                context.sendText("ERP登录成功，继续执行任务。");
+
+                Thread.sleep(2000); 
             }
             return true;
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "检查登录状态时出错: " + e.getMessage());
+                context.sendText("检查登录状态时出错: " + e.getMessage());
             } catch (Exception ex) { ex.printStackTrace(); }
             return false;
         }

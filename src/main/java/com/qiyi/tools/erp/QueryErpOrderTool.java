@@ -10,11 +10,8 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.APIRequestContext;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.options.RequestOptions;
-import com.qiyi.util.DingTalkUtil;
+import com.qiyi.tools.ToolContext;
 import com.qiyi.util.PlayWrightUtil;
-
-import java.util.List;
-import java.util.ArrayList;
 import java.util.Collections;
 
 public class QueryErpOrderTool extends ErpBaseTool {
@@ -32,17 +29,11 @@ public class QueryErpOrderTool extends ErpBaseTool {
     }
 
     @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
-
+    public String execute(JSONObject params, ToolContext context) {
         String orderId = params != null ? params.getString("orderId") : null;
         if (orderId == null || orderId.isEmpty()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP订单查询缺少必填参数：订单号 (orderId)");
+                context.sendText("ERP订单查询缺少必填参数：订单号 (orderId)");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -51,7 +42,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
 
         if (!TOOL_LOCK.tryLock()) {
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "ERP查询任务正在执行中，请稍后再试。");
+                context.sendText("ERP查询任务正在执行中，请稍后再试。");
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -60,30 +51,30 @@ public class QueryErpOrderTool extends ErpBaseTool {
 
         PlayWrightUtil.Connection connection = null;
         try {
-            DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "开始执行ERP订单查询任务...");
+            context.sendText("开始执行ERP订单查询任务...");
 
-            connection = PlayWrightUtil.connectAndAutomate();
+            connection = connectToBrowser();
             if (connection == null) {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "无法连接到浏览器，任务终止");
+                context.sendText("无法连接到浏览器，任务终止");
                 return "Error: Browser connection failed";
             }
 
-            BrowserContext context;
+            BrowserContext browserContext;
             if (connection.browser.contexts().isEmpty()) {
-                context = connection.browser.newContext();
+                browserContext = connection.browser.newContext();
             } else {
-                context = connection.browser.contexts().get(0);
+                browserContext = connection.browser.contexts().get(0);
             }
 
-            Page page = context.newPage();
+            Page page = browserContext.newPage();
             try {
                 // 1. Check Login using base class method
-                if (!ensureLogin(page, ERP_ORDER_PAGE_URL, notifyUsers)) {
+                if (!ensureLogin(page, ERP_ORDER_PAGE_URL, context)) {
                     return "Error: Login failed";
                 }
 
                 // 2. Fetch Data
-                return fetchData(page, notifyUsers, orderId);
+                return fetchData(page, context, orderId);
 
             } finally {
                 page.close();
@@ -92,15 +83,13 @@ public class QueryErpOrderTool extends ErpBaseTool {
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "任务执行异常: " + e.getMessage());
+                context.sendText("任务执行异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
             return "Error: " + e.getMessage();
         } finally {
-            if (connection != null) {
-                PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
-            }
+            disconnectBrowser(connection);
             TOOL_LOCK.unlock();
         }
     }
@@ -125,7 +114,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
         }
     }
 
-    private String fetchData(Page page, List<String> notifyUsers, String orderId) {
+    private String fetchData(Page page, ToolContext context, String orderId) {
         try {
             // Construct payload
             JSONObject payload = new JSONObject();
@@ -156,23 +145,23 @@ public class QueryErpOrderTool extends ErpBaseTool {
                 bodyJson = JSONObject.parseObject(body);
             } catch (Exception e) {
                 try {
-                    DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "接口返回非JSON数据 (Status " + status + "):\n" + body);
+                    context.sendText("接口返回非JSON数据 (Status " + status + "):\n" + body);
                 } catch (Exception ex) { ex.printStackTrace(); }
                 return "Error: Non-JSON response (Status " + status + ")";
             }
 
-            return handleApiResponse(notifyUsers, status, bodyJson);
+            return handleApiResponse(context, status, bodyJson);
 
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "获取数据失败: " + e.getMessage());
+                context.sendText("获取数据失败: " + e.getMessage());
             } catch (Exception ex) { ex.printStackTrace(); }
             return "Error: " + e.getMessage();
         }
     }
 
-    private String handleApiResponse(List<String> notifyUsers, int status, JSONObject bodyJson) {
+    private String handleApiResponse(ToolContext context, int status, JSONObject bodyJson) {
         try {
             if (status == 200) {
                 boolean success = bodyJson.getBooleanValue("success");
@@ -185,7 +174,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
                         if (data instanceof JSONArray) {
                             JSONArray dataArray = (JSONArray) data;
                             if (dataArray.isEmpty()) {
-                                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功，但未找到匹配的订单记录 (data is empty)。");
+                                context.sendText("查询成功，但未找到匹配的订单记录 (data is empty)。");
                                 return "No records found";
                             }
                             count = dataArray.size();
@@ -202,7 +191,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
                              if (displayData.length() > 2000) {
                                   displayData = displayData.substring(0, 2000) + "\n...(truncated)";
                              }
-                             DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功 (未知数据结构):\n" + displayData);
+                             context.sendText("查询成功 (未知数据结构):\n" + displayData);
                              return "Unknown data structure: " + displayData;
                         }
 
@@ -212,30 +201,30 @@ public class QueryErpOrderTool extends ErpBaseTool {
                              finalOutput = finalOutput.substring(0, 3500) + "\n...(内容过长已截断)";
                         }
                         
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功，找到 " + count + " 条记录:\n" + finalOutput);
+                        context.sendText("查询成功，找到 " + count + " 条记录:\n" + finalOutput);
                         return finalOutput;
 
                     } else {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询成功，但返回数据为空 (data is null)。");
+                        context.sendText("查询成功，但返回数据为空 (data is null)。");
                         return "Data is null";
                     }
                 } else {
                     String msg = bodyJson.getString("message");
                     if ("empty token".equals(msg)) {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询失败: 认证Token丢失 (empty token)。\n建议：请在浏览器中刷新页面或重新登录。");
+                        context.sendText("查询失败: 认证Token丢失 (empty token)。\n建议：请在浏览器中刷新页面或重新登录。");
                     } else {
-                        DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "查询失败 (Business Error): " + msg);
+                        context.sendText("查询失败 (Business Error): " + msg);
                     }
                     return "Error: " + msg;
                 }
             } else {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "接口调用失败 (Status " + status + "):\n" + bodyJson.toJSONString());
+                context.sendText("接口调用失败 (Status " + status + "):\n" + bodyJson.toJSONString());
                 return "Error: Status " + status;
             }
         } catch (Exception e) {
             e.printStackTrace();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "处理响应结果失败: " + e.getMessage());
+                context.sendText("处理响应结果失败: " + e.getMessage());
             } catch (Exception ex) { ex.printStackTrace(); }
             return "Error: " + e.getMessage();
         }

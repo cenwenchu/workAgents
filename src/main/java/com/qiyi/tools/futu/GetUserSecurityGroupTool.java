@@ -1,10 +1,10 @@
 package com.qiyi.tools.futu;
 
 import com.alibaba.fastjson2.JSONObject;
+import com.futu.openapi.pb.QotGetUserSecurityGroup;
 import com.qiyi.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
-import com.qiyi.util.DingTalkUtil;
-import com.futu.openapi.pb.QotGetUserSecurityGroup;
+import com.qiyi.tools.ToolContext;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -20,16 +20,14 @@ public class GetUserSecurityGroupTool implements Tool {
         return "功能：获取用户的自选股分组列表。参数：groupType（整数，选填，分组类型，默认全部）。返回：分组名称和类型列表。";
     }
 
-    @Override
-    public String execute(JSONObject params, String senderId, List<String> atUserIds) {
-        List<String> notifyUsers = new ArrayList<>();
-        if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null && !atUserIds.isEmpty()) {
-            notifyUsers.addAll(atUserIds);
-        }
+    protected FutuOpenD getFutuOpenD() {
+        return FutuOpenD.getInstance();
+    }
 
+    @Override
+    public String execute(JSONObject params, ToolContext context) {
         try {
-            FutuOpenD openD = FutuOpenD.getInstance();
+            FutuOpenD openD = getFutuOpenD();
             
             // Default to ALL if not specified
             int groupType = QotGetUserSecurityGroup.GroupType.GroupType_All_VALUE;
@@ -63,7 +61,7 @@ public class GetUserSecurityGroupTool implements Tool {
                 
                 String result = sb.toString();
                 try {
-                    DingTalkUtil.sendTextMessageToEmployees(notifyUsers, result);
+                    context.sendText(result);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -71,7 +69,7 @@ public class GetUserSecurityGroupTool implements Tool {
             } else {
                 String errorMsg = "获取自选股分组失败: " + response.getRetMsg();
                 try {
-                    DingTalkUtil.sendTextMessageToEmployees(notifyUsers, errorMsg);
+                    context.sendText(errorMsg);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -82,7 +80,7 @@ public class GetUserSecurityGroupTool implements Tool {
             e.printStackTrace();
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "获取自选股分组发生异常: " + e.getMessage());
+                context.sendText("获取自选股分组发生异常: " + e.getMessage());
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
