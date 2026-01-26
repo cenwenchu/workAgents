@@ -16,7 +16,7 @@ public class HTMLCleaner {
 
     // 只需要移除完全无用的标签，保留结构
     private static final Set<String> TAGS_TO_REMOVE = new HashSet<>(Arrays.asList(
-            "script", "style", "noscript", "svg", "meta", "link", "iframe", "head"
+            "script", "style", "noscript", "svg", "meta", "link", "head"
     ));
 
     // 保留对自动化定位有用的核心属性
