@@ -44,7 +44,8 @@ public class PlayWrightUtil {
                 if (wsEndpoint == null) 
                 {
                     System.out.println("未找到运行的 Chrome 实例，请先以调试模式启动 Chrome");
-                    System.out.println("启动命令：chrome --remote-debugging-port=" + port);
+                    String userDataDir = System.getProperty("user.home") + "/chrome-debug-profile";
+                    System.out.println("启动命令：chrome --remote-debugging-port=" + port + " --user-data-dir=\"" + userDataDir + "\"");
 
                     return null;
                 }

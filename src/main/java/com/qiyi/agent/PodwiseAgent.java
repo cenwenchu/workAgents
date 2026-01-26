@@ -15,7 +15,7 @@ import com.qiyi.util.PodCastUtil;
 import com.qiyi.tools.ToolContext;
 
 //先要运行这个启动可信任浏览器
-//nohup /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="/tmp/chrome-debug" > /tmp/chrome-debug.log 2>&1 &
+//nohup /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="${HOME}/chrome-debug-profile" > /tmp/chrome-debug.log 2>&1 &
 
 //lsof -ti:9222 | xargs kill -9  杀死进程
 

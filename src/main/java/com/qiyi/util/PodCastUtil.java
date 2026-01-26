@@ -164,10 +164,12 @@ public class PodCastUtil {
     public static void startChromeBrowser(int port) throws IOException, InterruptedException {
         // 启动 Chrome 浏览器
         System.out.println("正在启动 Chrome 浏览器 (Port: " + port + ")...");
-        String command = "nohup /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=" + port + " --user-data-dir=\"/tmp/chrome-debug\" > /tmp/chrome-debug.log 2>&1 &";
+        // 使用用户目录下的持久化路径，防止重启或清理导致数据丢失
+        String userDataDir = System.getProperty("user.home") + "/chrome-debug-profile";
+        String command = "nohup /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=" + port + " --user-data-dir=\"" + userDataDir + "\" > /tmp/chrome-debug.log 2>&1 &";
         Process chromeProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", command});
         chromeProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-        System.out.println("Chrome 浏览器已启动");
+        System.out.println("Chrome 浏览器已启动，User Data Dir: " + userDataDir);
         
         // 等待 Chrome 完全启动
         Thread.sleep(3000);
