@@ -390,10 +390,8 @@ public class AutoWebAgent {
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton btnGetCode = new JButton("Get Code");
         JButton btnExecute = new JButton("Execute Code");
-        JButton btnPickSelector = new JButton("Pick Selector");
         
         buttonPanel.add(btnGetCode);
-        buttonPanel.add(btnPickSelector);
         buttonPanel.add(btnExecute);
         frame.add(buttonPanel, BorderLayout.SOUTH);
 
@@ -407,111 +405,6 @@ public class AutoWebAgent {
              System.out.println(msg);
         };
         
-        // --- Setup Selector Picker Binding ---
-        // We expose a function that the browser can call when an element is picked
-        try {
-            rootPage.exposeFunction("onElementPicked", (args) -> {
-                String selector = args[0].toString();
-                SwingUtilities.invokeLater(() -> {
-                    // Check if text is selected in codeArea
-                    String selectedText = codeArea.getSelectedText();
-                    if (selectedText != null && !selectedText.isEmpty()) {
-                        codeArea.replaceSelection(selector);
-                        uiLogger.accept("Replaced '" + selectedText + "' with '" + selector + "'");
-                    } else {
-                        // Insert at cursor
-                        codeArea.insert(selector, codeArea.getCaretPosition());
-                        uiLogger.accept("Inserted selector: " + selector);
-                    }
-                    // Bring window to front
-                    frame.toFront();
-                    frame.requestFocus();
-                });
-                return null;
-            });
-        } catch (Exception e) {
-            // Function might already exist if re-running, ignore
-            System.out.println("Binding onElementPicked already exists or failed: " + e.getMessage());
-        }
-
-
-        // --- Logic: Pick Selector ---
-        btnPickSelector.addActionListener(e -> {
-            ContextWrapper selectedContext = (ContextWrapper) contextCombo.getSelectedItem();
-            if (selectedContext == null) {
-                JOptionPane.showMessageDialog(frame, "Please select a context first.", "Error", JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-            
-            uiLogger.accept("=== Selector Picker Mode Started ===");
-            uiLogger.accept("Context: " + selectedContext.name);
-            uiLogger.accept("Please CLICK an element in the browser window...");
-            
-            // Inject JS to capture the next click
-            // JS Logic: 
-            // 1. Add capturing click listener
-            // 2. Prevent default/propagation
-            // 3. Generate selector
-            // 4. Call window.onElementPicked
-            // 5. Remove listener
-            
-            String js = 
-                "(function() {" +
-                "  function getCssSelector(el) {" +
-                "    if (!(el instanceof Element)) return;" +
-                "    var path = [];" +
-                "    while (el.nodeType === Node.ELEMENT_NODE) {" +
-                "        var selector = el.nodeName.toLowerCase();" +
-                "        if (el.id) {" +
-                "            selector += '#' + el.id;" +
-                "            path.unshift(selector);" +
-                "            break;" +
-                "        } else {" +
-                "            var sib = el, nth = 1;" +
-                "            while (sib = sib.previousElementSibling) {" +
-                "                if (sib.nodeName.toLowerCase() == selector)" +
-                "                   nth++;" +
-                "            }" +
-                "            if (nth != 1)" +
-                "                selector += ':nth-of-type('+nth+')';" +
-                "        }" +
-                "        path.unshift(selector);" +
-                "        el = el.parentNode;" +
-                "    }" +
-                "    return path.join(' > ');" +
-                "  }" +
-                "  function handler(e) {" +
-                "    e.preventDefault();" +
-                "    e.stopPropagation();" +
-                "    var sel = '';" +
-                "    if (e.target.innerText && e.target.innerText.trim().length > 0 && e.target.innerText.length < 30) {" +
-                "         sel = \"text='\" + e.target.innerText.trim() + \"'\";" +
-                "    } else {" +
-                "         sel = getCssSelector(e.target);" +
-                "    }" +
-                "    var codeFormat = 'page.locator(\"' + sel + '\")';" +
-                "    window.onElementPicked(codeFormat);" +
-                "    document.removeEventListener('click', handler, true);" +
-                "  }" +
-                "  document.addEventListener('click', handler, {capture: true, once: true});" +
-                "})();";
-
-            new Thread(() -> {
-                try {
-                    // Execute in the selected context (Page or Frame)
-                    if (selectedContext.context instanceof Page) {
-                        ((Page)selectedContext.context).evaluate(js);
-                    } else if (selectedContext.context instanceof com.microsoft.playwright.Frame) {
-                        ((com.microsoft.playwright.Frame)selectedContext.context).evaluate(js);
-                    }
-                } catch (Exception ex) {
-                    uiLogger.accept("Error starting picker: " + ex.getMessage());
-                }
-            }).start();
-        });
-
-
-
         // --- Logic: Refresh Contexts ---
         Runnable refreshContextAction = () -> {
             uiLogger.accept("Scanning for frames...");
@@ -749,6 +642,7 @@ public class AutoWebAgent {
             "- Use RELAXED and ROBUST selectors. Avoid brittle full DOM chains.\n" +
             "- STRICT HTML-GROUNDED SELECTORS: all ids/classes/text used in selectors must exist in the provided HTML snippet. \n" +
             "- NO GUESSING: Do NOT assume/hallucinate class prefixes (like .ant-, .el-, .mui-) unless they explicitly appear in the provided HTML. Use the EXACT class names found in the snippet.\n" +
+            "- VARIABLE RULE: In a given scope, each variable name (like rows, firstRow) must be declared with 'def' at most once. Reuse the variable or choose a new name instead of redefining it.\n" +
             "- **CRITICAL: WAIT BEFORE ACTION**: The page might be dynamic. Always wait for elements to appear before clicking or reading.\n" +
             "\n" +
             "SECTION 1: CLICKING / INTERACTING WITH SINGLE ELEMENTS (buttons, tabs, checkboxes)\n" +
@@ -811,8 +705,12 @@ public class AutoWebAgent {
             "\n" +
             "WAITING AND LOGGING RULES (APPLY TO ALL SECTIONS)\n" +
             "- **MANDATORY**: Before interacting with ANY element (especially '待发货' or table rows), WAIT for it to be visible.\n" +
+            "- **CRITICAL STRICT MODE RULE**: When waiting for a list of elements (like table rows), NEVER wait on the list locator itself. Always wait on the **first** element or the container.\n" +
+            "  * BAD: `page.locator('tbody tr').waitFor(...)` (Throws Strict Mode Error if multiple rows exist)\n" +
+            "  * GOOD: `page.locator('tbody tr').first().waitFor(...)`\n" +
             "- Use: `page.locator('...').waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000))`\n" +
-            "- If searching for text like '待发货', wait for it first: `page.locator(\"text='待发货'\").waitFor(...)`\n" +
+            "- If searching for text like '待发货', wait for it first: `page.locator(\"text='待发货'\").first().waitFor(...)`\n" +
+            "- Do NOT call `page.waitForLoadState(\"networkidle\")` or `frame.waitForLoadState(\"networkidle\")`. These signatures are invalid; rely on locator-based waits instead.\n" +
             "- Use 'println' (not System.out.println) for logging so it appears in the UI:\n" +
             "  - e.g., println '开始查询待发货订单', println '等待查询结果加载', println '已选中第一条订单', etc.\n" +
             "\n" +
@@ -878,4 +776,5 @@ public class AutoWebAgent {
             throw e;
         }
     }
+
 }
