@@ -70,56 +70,62 @@ public class AutoWebAgent {
             }
 
             try {
-                page.waitForLoadState();
+                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(10000));
             } catch (Exception e) {
-                System.out.println("Wait for load state timed out or failed, continuing...");
+                System.out.println("Wait for NETWORKIDLE timed out or failed, continuing...");
             }
             
             // Wait extra time for dynamic content (React/Vue rendering)
             System.out.println("Waiting 5 seconds for dynamic content to render...");
             page.waitForTimeout(5000);
 
-            // Check for iframes
+            // Check for iframes with retry logic
             com.microsoft.playwright.Frame contentFrame = null;
             String frameName = "";
             double maxArea = 0;
             
-            System.out.println("Checking frames...");
-            for (com.microsoft.playwright.Frame f : page.frames()) {
-                // Skip the main frame itself to find nested content frames
-                if (f == page.mainFrame()) continue;
-                
-                try {
-                    com.microsoft.playwright.ElementHandle element = f.frameElement();
-                    if (element != null) {
-                        com.microsoft.playwright.options.BoundingBox box = element.boundingBox();
-                        if (box != null) {
-                            double area = box.width * box.height;
-                            System.out.println(" - Frame: " + f.name() + " | URL: " + f.url() + " | Area: " + area);
-                            
-                            // Check if visible (width and height > 0)
-                            if (box.width > 0 && box.height > 0) {
-                                // Select the largest visible frame
-                                if (area > maxArea) {
-                                    maxArea = area;
-                                    contentFrame = f;
-                                    frameName = f.name();
+            System.out.println("Checking frames (scanning up to 10 seconds)...");
+            for (int i = 0; i < 5; i++) {
+                maxArea = 0;
+                contentFrame = null;
+                for (com.microsoft.playwright.Frame f : page.frames()) {
+                    // Skip the main frame itself to find nested content frames
+                    if (f == page.mainFrame()) continue;
+                    
+                    try {
+                        com.microsoft.playwright.ElementHandle element = f.frameElement();
+                        if (element != null) {
+                            com.microsoft.playwright.options.BoundingBox box = element.boundingBox();
+                            if (box != null) {
+                                double area = box.width * box.height;
+                                System.out.println(" - [" + i + "] Frame: " + f.name() + " | URL: " + f.url() + " | Area: " + area);
+                                
+                                // Check if visible (width and height > 0)
+                                if (box.width > 0 && box.height > 0) {
+                                    // Select the largest visible frame
+                                    if (area > maxArea) {
+                                        maxArea = area;
+                                        contentFrame = f;
+                                        frameName = f.name();
+                                    }
                                 }
                             }
                         }
+                    } catch (Exception e) {
+                        System.out.println(" - Error checking frame " + f.name() + ": " + e.getMessage());
                     }
-                } catch (Exception e) {
-                    System.out.println(" - Error checking frame " + f.name() + ": " + e.getMessage());
                 }
+                
+                if (contentFrame != null) {
+                    System.out.println("   -> Identified largest frame as content frame: " + frameName + " (Area: " + maxArea + ")");
+                    break;
+                }
+                
+                System.out.println("   -> No significant child frame found yet. Waiting 2s...");
+                page.waitForTimeout(2000);
             }
 
-            if (contentFrame != null) {
-                System.out.println("   -> Identified largest frame as content frame: " + frameName + " (Area: " + maxArea + ")");
-            } else {
-                System.out.println("   -> No significant child frame found.");
-            }
-
-            String html;
+            String html = "";
             boolean isFrame = false;
             
             if (contentFrame != null) {
@@ -127,6 +133,7 @@ public class AutoWebAgent {
                 try {
                     // Ensure frame is loaded
                     contentFrame.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED);
+                    contentFrame.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new com.microsoft.playwright.Frame.WaitForLoadStateOptions().setTimeout(5000));
                 } catch (Exception e) {
                     System.out.println("Frame load state wait failed: " + e.getMessage());
                 }
@@ -135,6 +142,19 @@ public class AutoWebAgent {
             } else {
                 System.out.println("Using main page content.");
                 html = page.content();
+            }
+
+            // Retry logic for empty content
+            int retries = 0;
+            while (html.length() < 1000 && retries < 3) {
+                 System.out.println("Content seems empty (" + html.length() + " chars). Waiting and retrying... (" + (retries + 1) + "/3)");
+                 page.waitForTimeout(3000);
+                 if (contentFrame != null) {
+                     html = contentFrame.content();
+                 } else {
+                     html = page.content();
+                 }
+                 retries++;
             }
 
             System.out.println("HTML before clean Size: " + html.length());
@@ -729,6 +749,7 @@ public class AutoWebAgent {
             "- Use RELAXED and ROBUST selectors. Avoid brittle full DOM chains.\n" +
             "- STRICT HTML-GROUNDED SELECTORS: all ids/classes/text used in selectors must exist in the provided HTML snippet. \n" +
             "- NO GUESSING: Do NOT assume/hallucinate class prefixes (like .ant-, .el-, .mui-) unless they explicitly appear in the provided HTML. Use the EXACT class names found in the snippet.\n" +
+            "- **CRITICAL: WAIT BEFORE ACTION**: The page might be dynamic. Always wait for elements to appear before clicking or reading.\n" +
             "\n" +
             "SECTION 1: CLICKING / INTERACTING WITH SINGLE ELEMENTS (buttons, tabs, checkboxes)\n" +
             "- Prefer visible text, aria-label, title, or meaningful class names.\n" +
@@ -741,28 +762,15 @@ public class AutoWebAgent {
             "  * GOOD: locator('.ant-checkbox-wrapper')\n" +
             "\n" +
             "SECTION 2: LOCATING LISTS / TABLES (GENERIC STRUCTURAL APPROACH)\n" +
-            "- **CRITICAL**: Do NOT search for specific framework classes (like .ant-table-row) unless you see them in the HTML.\n" +
-            "- **Step 1: Anchor by Headers (Multi-Match Strategy)**\n" +
-            "  - Extract MULTIPLE key column names from the User Task (e.g., '序号', '订单号', '商品信息').\n" +
-            "  - Do NOT rely on a single header match (like just '序号') because common words appear in many places (filters, tooltips, hidden metadata).\n" +
-            "  - **RULE**: The correct Table Header Row must contain AT LEAST 2 or more of the user-specified headers in the SAME container or row.\n" +
-            "  - **Disambiguation**: If multiple candidates exist (e.g., filter area vs result table), choose the one that is DEEPER in the DOM or explicitly looks like a grid/table structure.\n" +
-            "  - This defines the 'Header Area'.\n" +
-            "- **Step 2: Find the Row Container**\n" +
-            "  - Look for the 'Body Area' which is usually:\n" +
-            "    a) A sibling of the Header Area (common in scrolling grids/div-tables).\n" +
-            "    b) The parent <tbody> if inside a standard <table>.\n" +
-            "    c) A container div appearing immediately after the header.\n" +
-            "- **Step 3: Identify Row Pattern**\n" +
+            "- **CRITICAL**: Do NOT search for specific framework classes (like .ant-table-row, .art-table-row) unless you see them in the HTML.\n" +
+            "- **Step 1: Identify Row Pattern (GENERIC STRUCTURE FIRST)**\n" +
             "  - Inside the Body Area, look for **REPEATING SIBLING ELEMENTS**.\n" +
-            "  - These are your rows.\n" +
-            "  - **OBSERVE** their actual class name in the HTML (e.g., 'art-table-row', 'grid-row', 'div-item', 'tr').\n" +
-            "  - Construct your row selector based on this OBSERVATION.\n" +
-            "  - Example: If you see `<div class='art-table-row'>...</div>`, use `.art-table-row`. If you see `<tr>...</tr>`, use `tr`.\n" +
-            "- **Handling Separated Headers**:\n" +
-            "  - If headers are in `<div class='header'>...</div>` and rows are in `<div class='body'>...</div>`, do NOT try to search for rows inside the header div.\n" +
+            "  - **PRIORITY 1 (Standard Table)**: If the structure is `<table>`, simply use `tbody tr`.\n" +
+            "  - **PRIORITY 2 (Div Table)**: If using `div`s, look for direct children of the body container that repeat.\n" +
+            "  - **AVOID PREFIXES**: Do NOT rely on 'ant-', 'art-', 'el-' prefixes. Instead, check if the element tag is `tr` or if it has a generic class like `row`.\n" +
+            "  - **Selector Strategy**: `page.locator('tbody tr')` or `page.locator('.table-body > div')`.\n" +
             "\n" +
-            "SECTION 3: ACCESSING COLUMNS / CELL VALUES IN RESULT LISTS\n" +
+            "SECTION 3: ACCESSING COLUMNS / CELL VALUES\n" +
             "- When the user refers to a specific column (e.g., '订单号' column), map it to a REAL header in the HTML.\n" +
             "- Strategy:\n" +
             "  1) Locate the table container.\n" +
@@ -802,13 +810,9 @@ public class AutoWebAgent {
             "- When iterating multiple pages, structure the code in a loop and include clear logs for each page.\n" +
             "\n" +
             "WAITING AND LOGGING RULES (APPLY TO ALL SECTIONS)\n" +
-            "- Use explicit waits with a 60-second timeout for dynamic content and navigation.\n" +
-            "- If using page.waitForSelector(...): use 'new com.microsoft.playwright.Page.WaitForSelectorOptions().setTimeout(60000)'\n" +
-            "- If using locator.waitFor(...): use 'new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000)'\n" +
-            "- Do NOT mix Page options with Locator.waitFor.\n" +
-            "- CRITICAL FRAME COMPATIBILITY: When calling 'page.waitForSelector(...)', do NOT use Page.WaitForSelectorOptions if 'page' might be a Frame.\n" +
-            "  * INSTEAD: use 'new com.microsoft.playwright.Frame.WaitForSelectorOptions().setTimeout(60000)' which is safer, OR just rely on locator waiting:\n" +
-            "  * BEST PRACTICE: page.locator('...').waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000))\n" +
+            "- **MANDATORY**: Before interacting with ANY element (especially '待发货' or table rows), WAIT for it to be visible.\n" +
+            "- Use: `page.locator('...').waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000))`\n" +
+            "- If searching for text like '待发货', wait for it first: `page.locator(\"text='待发货'\").waitFor(...)`\n" +
             "- Use 'println' (not System.out.println) for logging so it appears in the UI:\n" +
             "  - e.g., println '开始查询待发货订单', println '等待查询结果加载', println '已选中第一条订单', etc.\n" +
             "\n" +
