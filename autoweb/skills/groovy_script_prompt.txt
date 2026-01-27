@@ -68,6 +68,9 @@ SECTION 2: DYNAMIC LISTS & TABLES (Virtual Scrolling)
 
 - **Simple Extraction (Text Only)**: Use `web.extractList(containerSelector, rowSelector, limit)`.
   - Example: `List<String> rawRows = web.extractList('.art-table-body', '.art-table-row', 100)`
+  - Before extraction, detect the per-page size via `int pageSize = web.getPageSize(); if (pageSize < 1) pageSize = Math.min(web.getTotalCount(), 200);` and pass `pageSize` as `limit`. Do NOT hardcode numeric page sizes.
+  - Output MUST be based on `rawRows` returned by `extractList`. Do NOT re-count DOM rows and do NOT read cells via `nth-child` after extraction.
+  - If you must output comma-joined cell texts, use `web.extractRowTexts(containerSelector, rowSelector, cellSelector, pageSize)` and output the returned list.
 
 - **Detailed Extraction (Structured Data)**: Use `web.extractTableData(containerSelector, rowSelector, limit, columnsMap)`.
   - **CRITICAL**: Do NOT iterate over rows using `nth-child` indices after extraction. Virtual lists do not support random access by index after scrolling.
@@ -77,8 +80,11 @@ SECTION 2: DYNAMIC LISTS & TABLES (Virtual Scrolling)
         "OrderNo": "td:nth-child(2)", 
         "Status": ".status-label"
     ]
-    List<Map<String, String>> data = web.extractTableData('.art-table-body', '.art-table-row', 50, columns)
+    int pageSize = web.getPageSize()
+    if (pageSize < 1) pageSize = Math.min(web.getTotalCount(), 200)
+    List<Map<String, String>> data = web.extractTableData('.art-table-body', '.art-table-row', pageSize, columns)
     ```
+  - Output MUST be generated from `data` returned by `extractTableData`. Do NOT re-read DOM rows after extraction.
   - If the list stops too early, switch container selector to the nearest scrollable ancestor (e.g., `.art-table-body > .art-table-body-inner`), and retry.
   - Do NOT use `:visible` or count visible rows to infer full page size on virtual lists.
   - Do NOT fall back to re-counting `.art-table-row` after extraction; rely on the data returned by extraction API itself (it already deduplicates and resets to top).

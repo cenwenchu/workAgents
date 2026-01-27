@@ -777,6 +777,90 @@ public class WebDSL {
         log("  -> Extracted " + results.size() + " structured rows.");
         return results;
     }
+    
+    /**
+     * Extracts row texts (comma-joined cells) for the first page using MD5 dedup.
+     * Generic and robust for virtual lists.
+     */
+    public List<String> extractRowTexts(String containerSelector, String rowSelector, String cellSelector, int limit) {
+        log("Action: Extracting row texts from '" + containerSelector + "'...");
+        
+        containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+        
+        java.util.Set<String> processedKeys = new java.util.HashSet<>();
+        List<String> results = new java.util.ArrayList<>();
+        
+        ensureAtTop(containerSelector);
+        wait(300);
+        
+        int maxScrolls = 80;
+        int noNewData = 0;
+        int scrollStep = 300;
+        int wheelStep = 800;
+        
+        for (int i = 0; i < maxScrolls; i++) {
+            Locator rows = locator(rowSelector);
+            int count = rows.count();
+            boolean foundNew = false;
+            
+            for (int j = 0; j < count; j++) {
+                Locator row = rows.nth(j);
+                // gather cells
+                List<String> cells = new java.util.ArrayList<>();
+                try {
+                    Locator cellLocs = row.locator(cellSelector);
+                    int cc = cellLocs.count();
+                    for (int k = 0; k < cc; k++) {
+                        String t = normalizeText(cellLocs.nth(k).innerText());
+                        if (!t.isEmpty()) cells.add(t);
+                    }
+                } catch (Exception ignored) {}
+                
+                String joined = String.join("，", cells);
+                String key = md5(joined);
+                if (!joined.isEmpty() && !processedKeys.contains(key)) {
+                    processedKeys.add(key);
+                    results.add(joined);
+                    foundNew = true;
+                    if (limit > 0 && results.size() >= limit) {
+                        break;
+                    }
+                }
+            }
+            
+            if (limit > 0 && results.size() >= limit) break;
+            
+            if (!foundNew) {
+                noNewData++;
+                if (noNewData >= 3) {
+                    log("  -> No new row texts for 3 consecutive scrolls. Stopping.");
+                    break;
+                }
+            } else {
+                noNewData = 0;
+            }
+            
+            if (isAtBottom(containerSelector)) break;
+            scrollBy(containerSelector, scrollStep);
+            wait(500);
+            hover(containerSelector);
+            page.mouse().wheel(0, wheelStep);
+            wait(500);
+            
+            if (!foundNew) {
+                scrollStep = Math.min(scrollStep * 2, 1600);
+                wheelStep = Math.min(wheelStep * 2, 2400);
+            } else {
+                scrollStep = 300;
+                wheelStep = 800;
+            }
+        }
+        
+        ensureAtTop(containerSelector);
+        wait(300);
+        log("  -> Extracted " + results.size() + " row texts.");
+        return results;
+    }
 
     /**
      * Advanced: Locates an item in a virtual list and scrolls it into view.
