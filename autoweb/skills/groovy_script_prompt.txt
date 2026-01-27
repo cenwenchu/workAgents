@@ -81,6 +81,8 @@ SECTION 2: DYNAMIC LISTS & TABLES (Virtual Scrolling)
     ```
   - If the list stops too early, switch container selector to the nearest scrollable ancestor (e.g., `.art-table-body > .art-table-body-inner`), and retry.
   - Do NOT use `:visible` or count visible rows to infer full page size on virtual lists.
+  - Do NOT fall back to re-counting `.art-table-row` after extraction; rely on the data returned by extraction API itself (it already deduplicates and resets to top).
+  - **Page Size**: MUST detect the per-page size from the UI (e.g., pagination "xx 条/页"). Do NOT hardcode 50/100 in code or prompts. Use `web.getPageSize()` to read it.
 
 - **Finding & Interacting with Specific Item**: Use `web.locateItem(containerSelector, rowSelector, textToFind)`.
   - It scrolls until it finds the item and makes it visible.

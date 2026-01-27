@@ -319,6 +319,55 @@ public class WebDSL {
         }
     }
     
+    public int getTotalCount() {
+        try {
+            String txt = getText(".ant-pagination-total-text");
+            if (txt != null) {
+                String digits = txt.replaceAll("[^0-9]", "");
+                if (!digits.isEmpty()) {
+                    return Integer.parseInt(digits);
+                }
+            }
+        } catch (Exception ignored) {}
+        return -1;
+    }
+    
+    public int getPageSize() {
+        String[] candidates = {
+            ".ant-pagination-options .ant-select-selection-item",
+            ".ant-pagination-options .ant-select-selector .ant-select-selection-item",
+            ".ant-pagination-options"
+        };
+        for (String sel : candidates) {
+            try {
+                if (count(sel) > 0) {
+                    String t = locator(sel).first().innerText();
+                    if (t != null) {
+                        String digits = t.replaceAll("[^0-9]", "");
+                        if (!digits.isEmpty()) {
+                            return Integer.parseInt(digits);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        // Fallback: scan common option contents
+        try {
+            Locator opts = locator(".ant-select-item-option-content");
+            int c = opts.count();
+            for (int i = 0; i < c; i++) {
+                String t = opts.nth(i).innerText();
+                if (t != null && t.contains("条/页")) {
+                    String digits = t.replaceAll("[^0-9]", "");
+                    if (!digits.isEmpty()) {
+                        return Integer.parseInt(digits);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return -1;
+    }
+    
     private boolean isScrollable(String selector) {
         try {
             Object v = locator(selector).first().evaluate("el => (el.scrollHeight - el.clientHeight) > 2");
