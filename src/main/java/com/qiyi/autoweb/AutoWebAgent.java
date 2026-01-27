@@ -5,10 +5,18 @@ import com.qiyi.util.LLMUtil;
 import com.qiyi.util.PlayWrightUtil;
 import javax.swing.*;
 import java.awt.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.io.IOException;
 
 public class AutoWebAgent {
 
+    private static String GROOVY_SCRIPT_PROMPT_TEMPLATE = "";
+    private static String REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE = "";
+
     public static void main(String[] args) {
+        loadPrompts();
         if (args.length < 2) {
             // Default example if no args provided
             String url = "https://sc.scm121.com/tradeManage/tower/distribute";
@@ -23,7 +31,34 @@ public class AutoWebAgent {
         }
     }
 
+    private static void loadPrompts() {
+        try {
+            // Use user.dir to find the skills directory
+            Path skillsDir = Paths.get(System.getProperty("user.dir"), "autoweb", "skills");
+            
+            Path groovyPromptPath = skillsDir.resolve("groovy_script_prompt.txt");
+            if (Files.exists(groovyPromptPath)) {
+                GROOVY_SCRIPT_PROMPT_TEMPLATE = new String(Files.readAllBytes(groovyPromptPath), java.nio.charset.StandardCharsets.UTF_8);
+                System.out.println("Loaded groovy_script_prompt.txt");
+            } else {
+                System.err.println("Warning: groovy_script_prompt.txt not found at " + groovyPromptPath.toAbsolutePath());
+            }
+
+            Path refinedPromptPath = skillsDir.resolve("refined_groovy_script_prompt.txt");
+            if (Files.exists(refinedPromptPath)) {
+                REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE = new String(Files.readAllBytes(refinedPromptPath), java.nio.charset.StandardCharsets.UTF_8);
+                System.out.println("Loaded refined_groovy_script_prompt.txt");
+            } else {
+                System.err.println("Warning: refined_groovy_script_prompt.txt not found at " + refinedPromptPath.toAbsolutePath());
+            }
+            
+        } catch (IOException e) {
+            System.err.println("Error loading prompts: " + e.getMessage());
+        }
+    }
+
     public static void run(String url, String userPrompt) {
+        loadPrompts();
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
         if (connection == null) {
             System.err.println("Failed to connect to browser.");
@@ -395,6 +430,9 @@ public class AutoWebAgent {
             rootPage = (Page) initialContext;
         }
 
+        // State tracking for execution
+        java.util.concurrent.atomic.AtomicBoolean hasExecuted = new java.util.concurrent.atomic.AtomicBoolean(false);
+
         JFrame frame = new JFrame("AutoWeb 网页自动化控制台");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setSize(600, 950);
@@ -415,17 +453,24 @@ public class AutoWebAgent {
         JPanel topContainer = new JPanel(new BorderLayout());
 
         // 1. Settings Panel (Context Selector)
-        JPanel settingsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel settingsPanel = new JPanel(new BorderLayout());
         settingsPanel.setBorder(BorderFactory.createTitledBorder("上下文选择"));
         
+        JPanel leftSettings = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         JLabel lblContext = new JLabel("目标上下文:");
         JComboBox<ContextWrapper> contextCombo = new JComboBox<>();
-        contextCombo.setPreferredSize(new Dimension(300, 25));
-        JButton btnRefreshContext = new JButton("刷新 / 扫描");
+        contextCombo.setPreferredSize(new Dimension(250, 25));
+        leftSettings.add(lblContext);
+        leftSettings.add(contextCombo);
         
-        settingsPanel.add(lblContext);
-        settingsPanel.add(contextCombo);
-        settingsPanel.add(btnRefreshContext);
+        JPanel rightSettings = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        JButton btnRefreshContext = new JButton("刷新 / 扫描");
+        JButton btnReloadPrompts = new JButton("重载提示规则");
+        rightSettings.add(btnRefreshContext);
+        rightSettings.add(btnReloadPrompts);
+        
+        settingsPanel.add(leftSettings, BorderLayout.WEST);
+        settingsPanel.add(rightSettings, BorderLayout.EAST);
         
         topContainer.add(settingsPanel, BorderLayout.NORTH);
 
@@ -529,6 +574,11 @@ public class AutoWebAgent {
             new Thread(refreshContextAction).start();
         });
 
+        btnReloadPrompts.addActionListener(e -> {
+            loadPrompts();
+            JOptionPane.showMessageDialog(frame, "提示规则已重新载入！", "成功", JOptionPane.INFORMATION_MESSAGE);
+        });
+
 
         // --- Logic: Get Code ---
         btnGetCode.addActionListener(e -> {
@@ -548,6 +598,9 @@ public class AutoWebAgent {
             btnRefine.setEnabled(false);
             btnExecute.setEnabled(false);
             outputArea.setText(""); // Clear output before new operation
+            // Reset execution state since we are starting a new generation cycle
+            hasExecuted.set(false);
+            
             uiLogger.accept("=== 开始生成代码 ===");
             uiLogger.accept("目标上下文: " + selectedContext.name);
             codeArea.setText("// 正在为上下文生成代码: " + selectedContext.name + "...\n// 请稍候...");
@@ -709,11 +762,27 @@ public class AutoWebAgent {
             // Clear output area before execution
             outputArea.setText(""); 
             uiLogger.accept("=== 开始执行代码 ===");
-            uiLogger.accept("目标上下文: " + selectedContext.name);
             
             new Thread(() -> {
                 try {
-                    executeWithGroovy(code, selectedContext.context, uiLogger);
+                    Object executionTarget = selectedContext.context;
+                    
+                    // Check if already executed once, if so, reload page to restore state
+                    if (hasExecuted.get()) {
+                         uiLogger.accept("检测到代码已执行过，正在重置页面状态以确保环境纯净...");
+                         // Reload and find context again
+                         ContextWrapper freshContext = reloadAndFindContext(rootPage, selectedContext, uiLogger, contextCombo);
+                         executionTarget = freshContext.context;
+                         uiLogger.accept("页面状态已重置，使用新上下文: " + freshContext.name);
+                    } else {
+                        uiLogger.accept("首次执行，使用当前上下文: " + selectedContext.name);
+                    }
+                    
+                    executeWithGroovy(code, executionTarget, uiLogger);
+                    
+                    // Mark as executed
+                    hasExecuted.set(true);
+                    
                     SwingUtilities.invokeLater(() -> {
                          btnGetCode.setEnabled(true);
                          btnRefine.setEnabled(true);
@@ -733,7 +802,7 @@ public class AutoWebAgent {
 
         // Initialize frame size/location
         Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-        int width = 600;
+        int width = 800;
         int height = screenSize.height - 50;
         frame.setSize(width, height);
         frame.setLocation(screenSize.width - width, 0);
@@ -744,104 +813,11 @@ public class AutoWebAgent {
     }
 
     private static String generateGroovyScript(String userPrompt, String cleanedHtml) {
-        String prompt = String.format(
-            "You are a Playwright automation expert for web automation in Groovy.\n" +
-            "User Task (natural language): %s\n" +
-            "Target HTML (cleaned snapshot of the current page/frame):\n%s\n\n" +
-            "GLOBAL PRINCIPLES:\n" +
-            "- Always combine USER TASK + HTML CONTENT to design the script.\n" +
-            "- First, extract key intents and entities from the user task (filters, columns, buttons, operations).\n" +
-            "- Then, map these intents to REAL elements that exist in the HTML above.\n" +
-            "- Only when there is not enough information in BOTH the user task and the HTML, you may fall back to generic heuristics.\n" +
-            "- You have direct access to variable 'page' (Page or Frame). DO NOT declare it.\n" +
-            "- Use RELAXED and ROBUST selectors. Avoid brittle full DOM chains.\n" +
-            "- STRICT HTML-GROUNDED SELECTORS: all ids/classes/text used in selectors must exist in the provided HTML snippet. \n" +
-            "- NO GUESSING: Do NOT assume/hallucinate class prefixes (like .ant-, .el-, .mui-) unless they explicitly appear in the provided HTML. Use the EXACT class names found in the snippet.\n" +
-            "- VARIABLE RULE: In a given scope, each variable name (like rows, firstRow) must be declared with 'def' at most once. Reuse the variable or choose a new name instead of redefining it.\n" +
-            "- **CRITICAL: WAIT BEFORE ACTION**: The page might be dynamic. Always wait for elements to appear before clicking or reading.\n" +
-            "\n" +
-            "SECTION 1: CLICKING / INTERACTING WITH SINGLE ELEMENTS (buttons, tabs, checkboxes)\n" +
-            "- Prefer visible text, aria-label, title, or meaningful class names.\n" +
-            "- GOOD: page.locator(\"text='待发货'\").click()\n" +
-            "- GOOD: page.locator(\"button:has-text('搜 索')\").click()\n" +
-            "- AVOID: guessing raw input checkboxes (e.g., input[type='checkbox']) in modern UI libraries.\n" +
-            "- For checkboxes/radios, prefer clicking the VISIBLE label or wrapper element instead of hidden <input>.\n" +
-            "- STRICT MODE WARNING: Do NOT use '.or()' to combine selectors that might BOTH exist (e.g., wrapper AND input). This causes a crash.\n" +
-            "  * BAD: locator('.ant-checkbox-wrapper').or(locator('input'))\n" +
-            "  * GOOD: locator('.ant-checkbox-wrapper')\n" +
-            "\n" +
-            "SECTION 2: LOCATING LISTS / TABLES (GENERIC STRUCTURAL APPROACH)\n" +
-            "- **CRITICAL**: Do NOT search for specific framework classes (like .ant-table-row, .art-table-row) unless you see them in the HTML.\n" +
-            "- **Step 1: Identify Row Pattern (GENERIC STRUCTURE FIRST)**\n" +
-            "  - Inside the Body Area, look for **REPEATING SIBLING ELEMENTS**.\n" +
-            "  - **PRIORITY 1 (Standard Table)**: If the structure is `<table>`, simply use `tbody tr`.\n" +
-            "  - **PRIORITY 2 (Div Table)**: If using `div`s, look for direct children of the body container that repeat.\n" +
-            "  - **AVOID PREFIXES**: Do NOT rely on 'ant-', 'art-', 'el-' prefixes. Instead, check if the element tag is `tr` or if it has a generic class like `row`.\n" +
-            "  - **Selector Strategy**: `page.locator('tbody tr')` or `page.locator('.table-body > div')`.\n" +
-            "\n" +
-            "SECTION 3: ACCESSING COLUMNS / CELL VALUES\n" +
-            "- When the user refers to a specific column (e.g., '订单号' column), map it to a REAL header in the HTML.\n" +
-            "- Strategy:\n" +
-            "  1) Locate the table container.\n" +
-            "  2) Inspect header cells (<th>) and find the index of the target column by its visible text.\n" +
-            "  3) Use that index to access the corresponding <td> in each row.\n" +
-            "- Example approach:\n" +
-            "  def headerCells = table.locator('thead tr th')\n" +
-            "  int colIndex = -1\n" +
-            "  for (int i = 0; i < headerCells.count(); i++) {\n" +
-            "      def text = headerCells.nth(i).innerText().trim()\n" +
-            "      if (text.contains('订单号')) { colIndex = i; break }\n" +
-            "  }\n" +
-            "  if (colIndex >= 0) {\n" +
-            "      def firstRowCell = table.locator('tbody tr').first().locator('td').nth(colIndex)\n" +
-            "      def orderNo = firstRowCell.innerText().trim()\n" +
-            "  }\n" +
-            "- If exact header text from the user is not present, choose the closest matching header in HTML.\n" +
-            "\n" +
-            "SECTION 4: OPERATIONS ON LIST ITEMS (select row, row-level buttons, batch actions)\n" +
-            "- Selecting rows:\n" +
-            "  - If the user says '选中第一条', prefer using the first visible data row in the identified table.\n" +
-            "  - Try checkboxes inside the first row, or click the row itself if the UI supports row selection.\n" +
-            "- Row-level buttons (e.g., '审核', '推单'):\n" +
-            "  - For a given row (first row or matched by some cell value), search inside that row for a button with the requested text.\n" +
-            "  - Example: row.locator(\"button:has-text('审核')\").click()\n" +
-            "- Batch action buttons above the list:\n" +
-            "  - Look for buttons near the table header area or in toolbars that contain the requested text.\n" +
-            "- Always ensure you operate on the row/table that matches the result list determined in SECTION 2.\n" +
-            "\n" +
-            "SECTION 5: PAGINATION OF RESULT LISTS\n" +
-            "- If the user mentions pagination (next page, previous page, go to page X), look for a pagination widget near the bottom of the result list.\n" +
-            "- Common patterns: '下一页', '上一页', '>' '<', numeric page buttons.\n" +
-            "- Use robust selectors like:\n" +
-            "  page.locator(\".ant-pagination-next button\").click()\n" +
-            "  or page.locator(\"text='下一页'\").click()\n" +
-            "- After clicking a pagination control, wait for the table to refresh (e.g., wait for some row text to change, or re-wait for the tbody rows).\n" +
-            "- When iterating multiple pages, structure the code in a loop and include clear logs for each page.\n" +
-            "\n" +
-            "WAITING AND LOGGING RULES (APPLY TO ALL SECTIONS)\n" +
-            "- **MANDATORY**: Before interacting with ANY element (especially '待发货' or table rows), WAIT for it to be visible.\n" +
-            "- **CRITICAL STRICT MODE RULE**: When waiting for a list of elements (like table rows), NEVER wait on the list locator itself. Always wait on the **first** element or the container.\n" +
-            "  * BAD: `page.locator('tbody tr').waitFor(...)` (Throws Strict Mode Error if multiple rows exist)\n" +
-            "  * GOOD: `page.locator('tbody tr').first().waitFor(...)`\n" +
-            "- Use: `page.locator('...').waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000))`\n" +
-            "- If searching for text like '待发货', wait for it first: `page.locator(\"text='待发货'\").first().waitFor(...)`\n" +
-            "- Do NOT call `page.waitForLoadState(\"networkidle\")` or `frame.waitForLoadState(\"networkidle\")`. These signatures are invalid; rely on locator-based waits instead.\n" +
-            "- Use 'println' (not System.out.println) for logging so it appears in the UI:\n" +
-            "  - e.g., println '开始查询待发货订单', println '等待查询结果加载', println '已选中第一条订单', etc.\n" +
-            "\n" +
-            "VISUAL FEEDBACK (OPTIONAL BUT RECOMMENDED)\n" +
-            "- Before performing click/check/fill on a locator, highlight the element so the user can see it.\n" +
-            "- Use this pattern where appropriate:\n" +
-            "  def el = page.locator('selector')\n" +
-            "  el.scrollIntoViewIfNeeded()\n" +
-            "  el.evaluate(\"e => e.style.border = '3px solid red'\")\n" +
-            "  page.waitForTimeout(500)\n" +
-            "  el.click()\n" +
-            "\n" +
-            "OUTPUT FORMAT\n" +
-            "- Output ONLY valid Groovy code. No markdown, no explanations, no ```.\n",
-            userPrompt, cleanedHtml
-        );
+        if (GROOVY_SCRIPT_PROMPT_TEMPLATE == null || GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
+            loadPrompts();
+        }
+
+        String prompt = String.format(GROOVY_SCRIPT_PROMPT_TEMPLATE, userPrompt, cleanedHtml);
 
         System.out.println("Generating code with LLM...");
         String code = LLMUtil.chatWithDeepSeek(prompt);
@@ -860,24 +836,12 @@ public class AutoWebAgent {
         String execOutput,
         String refineHint
     ) {
+        if (REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE == null || REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
+            loadPrompts();
+        }
+
         String prompt = String.format(
-            "You previously generated Groovy Playwright automation code for the following task.\n" +
-            "Original User Task:\n%s\n\n" +
-            "Cleaned HTML snapshot of the current page/frame:\n%s\n\n" +
-            "Previous Groovy Code:\n%s\n\n" +
-            "Execution Output / Error Log:\n%s\n\n" +
-            "Additional User Hint For Fixing The Code:\n%s\n\n" +
-            "CRITICAL FIX REQUIREMENTS:\n" +
-            "- If an element is reported as missing, FIRST verify its existence and visibility in the provided HTML.\n" +
-            "- DO NOT guess selectors or framework prefixes (ant-, art-, el-) if the element is not present in the HTML.\n" +
-            "- Check for hidden elements (bounding box width/height > 0) before using selectors.\n" +
-            "Your goal is to FIX and IMPROVE the Groovy code based on the execution result and the new hint.\n" +
-            "Requirements:\n" +
-            "- Preserve the overall intent of the original task and code.\n" +
-            "- Use the HTML structure above to ground all selectors.\n" +
-            "- Apply the same GLOBAL PRINCIPLES as before: avoid guessing framework prefixes, prefer tbody tr for standard tables, use locator('...').first() in strict mode, and do not use page.waitForLoadState(\"networkidle\").\n" +
-            "- Avoid redefining variables with the same name in the same scope.\n" +
-            "- Output ONLY the final Groovy code, no explanations.\n",
+            REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE,
             originalUserPrompt,
             cleanedHtml,
             previousCode,

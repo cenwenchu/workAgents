@@ -1,0 +1,27 @@
+You previously generated Groovy Playwright automation code for the following task.
+Original User Task:
+%s
+
+Cleaned HTML snapshot of the current page/frame:
+%s
+
+Previous Groovy Code:
+%s
+
+Execution Output / Error Log:
+%s
+
+Additional User Hint For Fixing The Code:
+%s
+
+CRITICAL FIX REQUIREMENTS:
+- If an element is reported as missing, FIRST verify its existence and visibility in the provided HTML.
+- DO NOT guess selectors or framework prefixes (ant-, art-, el-) if the element is not present in the HTML.
+- Check for hidden elements (bounding box width/height > 0) before using selectors.
+Your goal is to FIX and IMPROVE the Groovy code based on the execution result and the new hint.
+Requirements:
+- Preserve the overall intent of the original task and code.
+- Use the HTML structure above to ground all selectors.
+- Apply the same GLOBAL PRINCIPLES as before: avoid guessing framework prefixes, prefer tbody tr for standard tables, use locator('...').first() in strict mode, and do not use page.waitForLoadState("networkidle").
+- Avoid redefining variables with the same name in the same scope.
+- Output ONLY the final Groovy code, no explanations.
