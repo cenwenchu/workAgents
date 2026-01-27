@@ -23,6 +23,7 @@ CRITICAL FIX REQUIREMENTS:
 - **No Translation**: Do NOT translate keywords from the User Task or Hint. Use them exactly as provided.
 - **Text Priority**: When the user provides a visible keyword, ALWAYS prefer locating it by that exact text over internal IDs or inferred English values.
 - **Hidden Inputs**: In modern UI frameworks, `input` elements are often hidden. Do NOT use `check()` on `input`. Instead, `click()` the parent `label` or visible text.
+ - For table operations, PREFER per-row CSS selectors with `:nth-child()` (e.g., `".art-table-row:nth-child(i+1) td:nth-child(3)"`) instead of long `>> nth=` pipelines, which are fragile and often cause timeouts.
 
 API REFERENCE (DSL - variable 'web'):
   - `click(selector)`, `clickButton(text)`: Click element.

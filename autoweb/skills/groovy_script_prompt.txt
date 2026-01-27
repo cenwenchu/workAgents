@@ -58,12 +58,16 @@ SECTION 2: TABLES & LISTS
   `if (index >= 0) { ... }`
 - To iterate rows:
   `int count = web.count('tbody tr')`
-  `for (int i=0; i<count; i++) { ... }`
+  `for (int i=0; i<count; i++) {`
+    `String rowSelector = "tbody tr:nth-child(" + (i + 1) + ")"` 
+    `String cellText = web.getText(rowSelector + " td:nth-child(2)")`
+  `}`
 
 SECTION 3: SELECTORS
 - Use specific IDs or Classes found in the HTML.
 - Do NOT guess prefixes (like .ant-, .el-). Only use what you see.
 - **Text Priority**: If the User Task refers to an element by text (e.g. "待发货"), PREFER selectors that use that text (e.g. `text='待发货'` or `:has-text('待发货')`). Avoid using obscure internal values (like `value="WaitOuterSent"`) unless necessary for uniqueness.
+- For table cells, PREFER CSS `:nth-child()` combined with a per-row selector (e.g., `".art-table-row:nth-child(i+1) td:nth-child(3)"`) instead of long `>> nth=` pipelines, which are more fragile.
 
 Example:
 ```groovy

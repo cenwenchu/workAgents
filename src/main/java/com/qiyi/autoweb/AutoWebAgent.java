@@ -20,8 +20,10 @@ public class AutoWebAgent {
         if (args.length < 2) {
             // Default example if no args provided
             String url = "https://sc.scm121.com/tradeManage/tower/distribute";
-            String userPrompt = "查询待发货的订单，然后会得到的结果表带有表头'序号','订单号','商品信息'等字段，选中其中的第一条结果，"
-                            +"并且把第一条的记录所有字段的值都提取出来输出，然后再查看一下当前的结果有多少记录，输出记录数";
+            String userPrompt = "查询待发货的订单，然后会得到的结果表带有表头'序号','订单号','商品信息'等字段，"
+            + "统计一下结果记录的条数（总记录数在页面最底部 有共 xx 条），然后滚动列表，直到单页数据都完整出现，然后输出：1.总的记录数。 "
+            + "2.第一页的记录，每一条记录都为一行，内容通过逗号分隔，去掉内容中回车换行。最后，选中第一行的数据，点击审核推单按钮。";
+
             System.out.println("No arguments provided. Running default example:");
             System.out.println("URL: " + url);
             System.out.println("Prompt: " + userPrompt);
