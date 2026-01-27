@@ -207,25 +207,7 @@ public class AutoWebAgent {
             System.out.println("HTML finally cleaned. Size: " + cleanedHtml.length());
 
             // Save HTMLs for debugging (fixed filenames to avoid accumulation)
-            // Use project directory for debug output
-            java.nio.file.Path debugDir = java.nio.file.Paths.get(System.getProperty("user.dir"), "autoweb_debug");
-            try {
-                if (!java.nio.file.Files.exists(debugDir)) {
-                    java.nio.file.Files.createDirectories(debugDir);
-                }
-                
-                java.nio.file.Path rawPath = debugDir.resolve("debug_raw.html");
-                java.nio.file.Path cleanedPath = debugDir.resolve("debug_cleaned.html");
-                
-                java.nio.file.Files.write(rawPath, html.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                java.nio.file.Files.write(cleanedPath, cleanedHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                
-                System.out.println("Debug HTML saved to:");
-                System.out.println(" - Raw: " + rawPath.toAbsolutePath());
-                System.out.println(" - Cleaned: " + cleanedPath.toAbsolutePath());
-            } catch (Exception ex) {
-                System.err.println("Failed to save debug HTML files: " + ex.getMessage());
-            }
+            saveDebugArtifacts(html, cleanedHtml, null, System.out::println);
 
             // Launch UI
             System.out.println("Launching Control UI...");
@@ -419,6 +401,33 @@ public class AutoWebAgent {
             return ((com.microsoft.playwright.Frame) pageOrFrame).content();
         }
         return "";
+    }
+
+    private static void saveDebugArtifacts(String rawHtml, String cleanedHtml, String code, java.util.function.Consumer<String> uiLogger) {
+        try {
+            java.nio.file.Path debugDir = java.nio.file.Paths.get(System.getProperty("user.dir"), "autoweb", "debug");
+            if (!java.nio.file.Files.exists(debugDir)) {
+                java.nio.file.Files.createDirectories(debugDir);
+            }
+            
+            if (rawHtml != null) {
+                java.nio.file.Files.write(debugDir.resolve("debug_raw.html"), rawHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            if (cleanedHtml != null) {
+                java.nio.file.Files.write(debugDir.resolve("debug_cleaned.html"), cleanedHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            if (code != null) {
+                 java.nio.file.Path codePath = debugDir.resolve("debug_code.groovy");
+                 java.nio.file.Files.write(codePath, code.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                 uiLogger.accept("Debug code saved to: " + codePath.toAbsolutePath());
+            }
+            
+            if (rawHtml != null || cleanedHtml != null) {
+                uiLogger.accept("Debug HTMLs saved to: " + debugDir.toAbsolutePath());
+            }
+        } catch (Exception ex) {
+            uiLogger.accept("Failed to save debug artifacts: " + ex.getMessage());
+        }
     }
 
     private static void createGUI(Object initialContext, String initialCleanedHtml, String defaultPrompt, PlayWrightUtil.Connection connection) {
@@ -651,8 +660,15 @@ public class AutoWebAgent {
                     }
                     uiLogger.accept("已获取页面内容，清理后大小: " + freshCleanedHtml.length());
                     
+                    // Save HTML debug files
+                    saveDebugArtifacts(freshHtml, freshCleanedHtml, null, uiLogger);
+                    
                     // 2. Generate Code
                     String code = generateGroovyScript(currentPrompt, freshCleanedHtml);
+                    
+                    // Save generated code to debug file
+                    saveDebugArtifacts(null, null, code, uiLogger);
+
                     SwingUtilities.invokeLater(() -> {
                         codeArea.setText(code);
                         btnGetCode.setEnabled(true);
@@ -715,6 +731,9 @@ public class AutoWebAgent {
                         freshCleanedHtml = freshCleanedHtml.substring(0, 100000) + "...(truncated)";
                     }
 
+                    // Save HTML debug files
+                    saveDebugArtifacts(freshHtml, freshCleanedHtml, null, uiLogger);
+
                     String refinedCode = generateRefinedGroovyScript(
                         currentPrompt,
                         freshCleanedHtml,
@@ -724,6 +743,10 @@ public class AutoWebAgent {
                     );
 
                     String finalRefinedCode = refinedCode;
+                    
+                    // Save refined code to debug file
+                    saveDebugArtifacts(null, null, finalRefinedCode, uiLogger);
+
                     SwingUtilities.invokeLater(() -> {
                         codeArea.setText(finalRefinedCode);
                         btnGetCode.setEnabled(true);

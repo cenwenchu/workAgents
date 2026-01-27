@@ -20,4 +20,4 @@ src/main/java/com/qiyi/.DS_Store
 src/main/java/com/qiyi/android/.DS_Store
 mobile_scripts/adb_server.log
 src/main/resources/.DS_Store
-autoweb_debug/
+autoweb/debug/
