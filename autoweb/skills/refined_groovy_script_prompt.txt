@@ -15,13 +15,43 @@ Additional User Hint For Fixing The Code:
 %s
 
 CRITICAL FIX REQUIREMENTS:
-- If an element is reported as missing, FIRST verify its existence and visibility in the provided HTML.
-- DO NOT guess selectors or framework prefixes (ant-, art-, el-) if the element is not present in the HTML.
-- Check for hidden elements (bounding box width/height > 0) before using selectors.
-Your goal is to FIX and IMPROVE the Groovy code based on the execution result and the new hint.
-Requirements:
-- Preserve the overall intent of the original task and code.
-- Use the HTML structure above to ground all selectors.
-- Apply the same GLOBAL PRINCIPLES as before: avoid guessing framework prefixes, prefer tbody tr for standard tables, use locator('...').first() in strict mode, and do not use page.waitForLoadState("networkidle").
-- Avoid redefining variables with the same name in the same scope.
-- Output ONLY the final Groovy code, no explanations.
+- **Optimization Goal**: Use the `web` DSL variable for robust interaction.
+- **Two-Stage Process**: 
+  1. Analyze the Error and HTML. Create a "Fix Plan".
+  2. Generate the corrected Groovy code based on the plan.
+- **Variable Rule**: Do NOT redeclare variables.
+- **No Translation**: Do NOT translate keywords from the User Task or Hint. Use them exactly as provided.
+- **Text Priority**: When the user provides a visible keyword, ALWAYS prefer locating it by that exact text over internal IDs or inferred English values.
+- **Hidden Inputs**: In modern UI frameworks, `input` elements are often hidden. Do NOT use `check()` on `input`. Instead, `click()` the parent `label` or visible text.
+
+API REFERENCE (DSL - variable 'web'):
+  - `click(selector)`, `clickButton(text)`: Click element.
+  - `type(selector, text)`: Type text.
+  - `check(selector)`, `uncheck(selector)`: For checkboxes/radios.
+  - `isChecked(selector)`: Returns boolean.
+  - `selectOption(selector, valueOrLabel)`: For standard `<select>`.
+  - `getText(selector)`: Get inner text.
+  - `getAllText(selector)`: Get list of texts for all matching elements.
+  - `count(selector)`: Get number of matching elements.
+  - `waitFor(selector)`: Wait for element to appear (default 30s).
+  - `wait(millis)`: Pause execution.
+  - `hover(selector)`: Hover mouse over element.
+  - `scrollIntoView(selector)`: Scroll to element.
+  - `press(selector, key)`: Press keyboard key (e.g. 'Enter') on element.
+  - `log(msg)`: Log message.
+  - `findRowIndex(rowSelector, cellText)`: Find row index containing text.
+- PREFER these DSL methods over raw Playwright calls.
+
+Output ONLY the final Groovy code (including the Plan comments).
+
+Example Format:
+```groovy
+// FIX PLAN:
+// 1. Selector for 'Login' failed. Use 'button[name="login"]' instead.
+// 2. Add wait before clicking.
+
+// CODE:
+web.log("Retrying login...")
+web.waitFor('button[name="login"]')
+web.click('button[name="login"]')
+```

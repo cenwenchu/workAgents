@@ -4,94 +4,83 @@ Target HTML (cleaned snapshot of the current page/frame):
 %s
 
 GLOBAL PRINCIPLES:
-- Always combine USER TASK + HTML CONTENT to design the script.
-- First, extract key intents and entities from the user task (filters, columns, buttons, operations).
-- Then, map these intents to REAL elements that exist in the HTML above.
-- Only when there is not enough information in BOTH the user task and the HTML, you may fall back to generic heuristics.
-- You have direct access to variable 'page' (Page or Frame). DO NOT declare it.
-- Use RELAXED and ROBUST selectors. Avoid brittle full DOM chains.
-- STRICT HTML-GROUNDED SELECTORS: all ids/classes/text used in selectors must exist in the provided HTML snippet. 
-- NO GUESSING: Do NOT assume/hallucinate class prefixes (like .ant-, .el-, .mui-) unless they explicitly appear in the provided HTML. Use the EXACT class names found in the snippet.
-- VARIABLE RULE: In a given scope, each variable name (like rows, firstRow) must be declared with 'def' at most once. Reuse the variable or choose a new name instead of redefining it.
-- **CRITICAL: WAIT BEFORE ACTION**: The page might be dynamic. Always wait for elements to appear before clicking or reading.
+- **Optimization Goal**: Generate robust, semantic code using the provided DSL.
+- **Two-Stage Process**: 
+  1. Analyze the User Task and HTML. Create a detailed "Step-by-Step Plan".
+  2. Generate the Groovy code based on the plan.
+- **Variable Rule**: Do NOT redeclare variables.
+- **Waiting**: The DSL handles basic waiting, but be mindful of logical flow.
+- **No Translation**: Do NOT translate keywords from the User Task into other languages. Use them exactly as they appear in the task or HTML.
+- **Text Priority**: When the user provides a visible keyword (e.g., button name, label), ALWAYS prefer locating it by that exact text (e.g., `text='待发货'`) over internal IDs or inferred English values, unless the text is ambiguous.
+- **Hidden Inputs**: In modern UI frameworks (like Ant Design), `input` elements are often hidden. Do NOT use `check()` on `input` directly. Instead, `click()` the parent `label` or the visible text associated with it.
 
-SECTION 1: CLICKING / INTERACTING WITH SINGLE ELEMENTS (buttons, tabs, checkboxes)
-- Prefer visible text, aria-label, title, or meaningful class names.
-- GOOD: page.locator("text='待发货'").click()
-- GOOD: page.locator("button:has-text('搜 索')").click()
-- AVOID: guessing raw input checkboxes (e.g., input[type='checkbox']) in modern UI libraries.
-- For checkboxes/radios, prefer clicking the VISIBLE label or wrapper element instead of hidden <input>.
-- STRICT MODE WARNING: Do NOT use '.or()' to combine selectors that might BOTH exist (e.g., wrapper AND input). This causes a crash.
-  * BAD: locator('.ant-checkbox-wrapper').or(locator('input'))
-  * GOOD: locator('.ant-checkbox-wrapper')
+API REFERENCE (DSL - variable 'web'):
+- `web.click(selector)`: Clicks an element. High-level wrapper for `locator(selector).first().click()`.
+- `web.click(selector, index)`: Clicks the Nth matching element.
+- `web.clickButton(textOrSelector)`: Smartly finds and clicks a button/link by text OR selector. PREFER THIS for buttons.
+- `web.type(selector, text)`: Fills input.
+- `web.check(selector)`, `web.uncheck(selector)`: For checkboxes/radios.
+- `web.isChecked(selector)`: Returns boolean.
+- `web.selectOption(selector, valueOrLabel)`: For standard `<select>`.
+- `web.getText(selector)`: Returns inner text of first match.
+- `web.getAllText(selector)`: Returns list of strings for all matches.
+- `web.waitFor(selector)`: Explicit wait for element.
+- `web.wait(millis)`: Pause execution.
+- `web.count(selector)`: Returns number of matching elements.
+- `web.isVisible(selector)`: Returns true if visible.
+- `web.hover(selector)`: Hover mouse over element.
+- `web.scrollIntoView(selector)`: Scroll to element.
+- `web.press(selector, key)`: Press keyboard key (e.g. 'Enter') on element.
+- `web.log(msg)`: Prints message to UI log.
+- `web.findRowIndex(rowSelector, cellText)`: Returns index of row containing text.
+- `page`: The raw Playwright Page/Frame object is still available if absolutely necessary, but PREFER `web` methods.
 
-SECTION 2: LOCATING LISTS / TABLES (GENERIC STRUCTURAL APPROACH)
-- **CRITICAL**: Do NOT search for specific framework classes (like .ant-table-row, .art-table-row) unless you see them in the HTML.
-- **Step 1: Identify Row Pattern (GENERIC STRUCTURE FIRST)**
-  - Inside the Body Area, look for **REPEATING SIBLING ELEMENTS**.
-  - **PRIORITY 1 (Standard Table)**: If the structure is `<table>`, simply use `tbody tr`.
-  - **PRIORITY 2 (Div Table)**: If using `div`s, look for direct children of the body container that repeat.
-  - **AVOID PREFIXES**: Do NOT rely on 'ant-', 'art-', 'el-' prefixes. Instead, check if the element tag is `tr` or if it has a generic class like `row`.
-  - **Selector Strategy**: `page.locator('tbody tr')` or `page.locator('.table-body > div')`.
+OUTPUT FORMAT:
+```groovy
+// PLAN:
+// 1. [Step 1 description]
+// 2. [Step 2 description]
+// ...
 
-SECTION 3: ACCESSING COLUMNS / CELL VALUES
-- When the user refers to a specific column (e.g., '订单号' column), map it to a REAL header in the HTML.
-- Strategy:
-  1) Locate the table container.
-  2) Inspect header cells (<th>) and find the index of the target column by its visible text.
-  3) Use that index to access the corresponding <td> in each row.
-- Example approach:
-  def headerCells = table.locator('thead tr th')
-  int colIndex = -1
-  for (int i = 0; i < headerCells.count(); i++) {
-      def text = headerCells.nth(i).innerText().trim()
-      if (text.contains('订单号')) { colIndex = i; break }
-  }
-  if (colIndex >= 0) {
-      def firstRowCell = table.locator('tbody tr').first().locator('td').nth(colIndex)
-      def orderNo = firstRowCell.innerText().trim()
-  }
-- If exact header text from the user is not present, choose the closest matching header in HTML.
+// CODE:
+web.log("Starting task...")
+// ... implementation ...
+```
 
-SECTION 4: OPERATIONS ON LIST ITEMS (select row, row-level buttons, batch actions)
-- Selecting rows:
-  - If the user says '选中第一条', prefer using the first visible data row in the identified table.
-  - Try checkboxes inside the first row, or click the row itself if the UI supports row selection.
-- Row-level buttons (e.g., '审核', '推单'):
-  - For a given row (first row or matched by some cell value), search inside that row for a button with the requested text.
-  - Example: row.locator("button:has-text('审核')").click()
-- Batch action buttons above the list:
-  - Look for buttons near the table header area or in toolbars that contain the requested text.
-- Always ensure you operate on the row/table that matches the result list determined in SECTION 2.
+SECTION 1: INTERACTION
+- Use `web.clickButton('登录')` instead of complex selectors for buttons with text.
+- Use `web.type('#username', 'admin')` for inputs.
 
-SECTION 5: PAGINATION OF RESULT LISTS
-- If the user mentions pagination (next page, previous page, go to page X), look for a pagination widget near the bottom of the result list.
-- Common patterns: '下一页', '上一页', '>' '<', numeric page buttons.
-- Use robust selectors like:
-  page.locator(".ant-pagination-next button").click()
-  or page.locator("text='下一页'").click()
-- After clicking a pagination control, wait for the table to refresh (e.g., wait for some row text to change, or re-wait for the tbody rows).
-- When iterating multiple pages, structure the code in a loop and include clear logs for each page.
+SECTION 2: TABLES & LISTS
+- Identify the row selector (e.g., `tbody tr`).
+- To find a specific row by text (e.g. order number), use:
+  `int index = web.findRowIndex('tbody tr', 'ORDER_123')`
+  `if (index >= 0) { ... }`
+- To iterate rows:
+  `int count = web.count('tbody tr')`
+  `for (int i=0; i<count; i++) { ... }`
 
-WAITING AND LOGGING RULES (APPLY TO ALL SECTIONS)
-- **MANDATORY**: Before interacting with ANY element (especially '待发货' or table rows), WAIT for it to be visible.
-- **CRITICAL STRICT MODE RULE**: When waiting for a list of elements (like table rows), NEVER wait on the list locator itself. Always wait on the **first** element or the container.
-  * BAD: `page.locator('tbody tr').waitFor(...)` (Throws Strict Mode Error if multiple rows exist)
-  * GOOD: `page.locator('tbody tr').first().waitFor(...)`
-- Use: `page.locator('...').waitFor(new com.microsoft.playwright.Locator.WaitForOptions().setTimeout(60000))`
-- If searching for text like '待发货', wait for it first: `page.locator("text='待发货'").first().waitFor(...)`
-- Do NOT call `page.waitForLoadState("networkidle")` or `frame.waitForLoadState("networkidle")`. These signatures are invalid; rely on locator-based waits instead.
-- Use 'println' (not System.out.println) for logging so it appears in the UI:
-  - e.g., println '开始查询待发货订单', println '等待查询结果加载', println '已选中第一条订单', etc.
+SECTION 3: SELECTORS
+- Use specific IDs or Classes found in the HTML.
+- Do NOT guess prefixes (like .ant-, .el-). Only use what you see.
+- **Text Priority**: If the User Task refers to an element by text (e.g. "待发货"), PREFER selectors that use that text (e.g. `text='待发货'` or `:has-text('待发货')`). Avoid using obscure internal values (like `value="WaitOuterSent"`) unless necessary for uniqueness.
 
-VISUAL FEEDBACK (OPTIONAL BUT RECOMMENDED)
-- Before performing click/check/fill on a locator, highlight the element so the user can see it.
-- Use this pattern where appropriate:
-  def el = page.locator('selector')
-  el.scrollIntoViewIfNeeded()
-  el.evaluate("e => e.style.border = '3px solid red'")
-  page.waitForTimeout(500)
-  el.click()
+Example:
+```groovy
+// PLAN:
+// 1. Wait for table to load.
+// 2. Find row with 'Order 123'.
+// 3. Click 'Detail' button in that row.
 
-OUTPUT FORMAT
-- Output ONLY valid Groovy code. No markdown, no explanations, no ```.
+web.waitFor('.data-table')
+int rowIndex = web.findRowIndex('.data-table tr', 'Order 123')
+if (rowIndex != -1) {
+    web.log("Found order at row " + rowIndex)
+    // Click button inside that row. Note: construct selector for specific row
+    web.click(".data-table tr .btn-detail", rowIndex) 
+} else {
+    web.log("Order not found")
+}
+```
+
+Output ONLY valid Groovy code (including the Plan comments).

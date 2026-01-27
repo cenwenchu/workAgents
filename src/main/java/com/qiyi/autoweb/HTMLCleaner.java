@@ -26,11 +26,17 @@ public class HTMLCleaner {
     // href, src: 链接和资源
     // title, alt: 辅助文本
     // data-*: 有时用于测试定位 (如 data-testid)
+    // for: label 关联
     private static final Set<String> ATTRIBUTES_TO_KEEP = new HashSet<>(Arrays.asList(
             "id", "class", "name", 
             "type", "value", "placeholder", 
             "href", "src", "action", "method",
-            "role", "title", "alt", "target"
+            "role", "title", "alt", "target", "for"
+    ));
+
+    // 需要保留的空标签（自闭合或通常为空但有意义的标签）
+    private static final Set<String> VOID_TAGS = new HashSet<>(Arrays.asList(
+            "img", "input", "br", "hr", "textarea", "button", "select", "iframe"
     ));
 
     public static String clean(String html) {
@@ -44,12 +50,19 @@ public class HTMLCleaner {
         // 2. 移除注释
         removeComments(doc);
 
-        // 3. 清理属性
+        // 3. 清理属性 & 截断长文本/数据
         Elements allElements = doc.getAllElements();
         for (Element el : allElements) {
             List<String> attributesToRemove = new ArrayList<>();
             for (Attribute attr : el.attributes()) {
                 String key = attr.getKey().toLowerCase();
+                String val = attr.getValue();
+
+                // 截断过长的 data URI
+                if ((key.equals("src") || key.equals("href")) && val.startsWith("data:") && val.length() > 100) {
+                     attr.setValue(val.substring(0, 50) + "...(truncated)");
+                     continue;
+                }
                 
                 // 保留白名单属性
                 if (ATTRIBUTES_TO_KEEP.contains(key)) continue;
@@ -60,7 +73,7 @@ public class HTMLCleaner {
                 // 保留 data-testid 等测试专用属性，或者其他可能的 data- 属性
                 // 为了保险，保留所有 data- 属性，除非它们太长
                 if (key.startsWith("data-")) {
-                    if (attr.getValue().length() > 50) { // 如果 data 属性值太长（可能是json数据），则移除
+                    if (val.length() > 50) { // 如果 data 属性值太长（可能是json数据），则移除
                         attributesToRemove.add(key);
                     }
                     continue;
@@ -73,12 +86,15 @@ public class HTMLCleaner {
             for (String attrKey : attributesToRemove) {
                 el.removeAttr(attrKey);
             }
-            
-            // 如果是空标签且没有重要属性（除了结构性标签如 div, span, p, table, tr, td 等），可能考虑移除？
-            // 暂时不移除空标签，因为可能是占位符或者等待动态加载的容器
         }
 
-        // 4. 输出清理后的 HTML
+        // 4. 截断长文本节点
+        truncateLongText(doc.body());
+
+        // 5. 移除完全空的无用容器节点
+        pruneEmptyNodes(doc.body());
+
+        // 6. 输出清理后的 HTML
         // 使用 prettyPrint(false) 可以压缩空白，但可能会影响文本内容的阅读（虽然 HTML 渲染时会合并空白）
         // 为了 LLM 阅读方便，保持一定的格式可能更好，或者压缩为单行。
         // 这里选择压缩为紧凑格式，因为 Token 数量是主要瓶颈。
@@ -93,6 +109,46 @@ public class HTMLCleaner {
         
         return cleaned;
     }
+
+    private static void truncateLongText(Element element) {
+        // 处理当前元素的直接文本节点
+        for (org.jsoup.nodes.TextNode textNode : element.textNodes()) {
+            String text = textNode.text();
+            if (text.length() > 500) {
+                textNode.text(text.substring(0, 500) + "...(truncated)");
+            }
+        }
+        // 递归处理子元素
+        for (Element child : element.children()) {
+            truncateLongText(child);
+        }
+    }
+
+    private static void pruneEmptyNodes(Element element) {
+        // 后序遍历：先处理子节点
+        for (int i = element.children().size() - 1; i >= 0; i--) {
+            pruneEmptyNodes(element.child(i));
+        }
+
+        // 根节点（body）不删除
+        if (element.tagName().equals("body")) return;
+
+        // 如果是保护标签，不删除
+        if (VOID_TAGS.contains(element.tagName().toLowerCase())) return;
+
+        // 如果有属性（清理后剩余的属性都是白名单内的），保留
+        if (element.attributes().size() > 0) return;
+
+        // 如果有子节点（经过剪枝后剩余的），保留
+        if (!element.children().isEmpty()) return;
+
+        // 如果有文本内容（非空白），保留
+        if (element.hasText()) return;
+
+        // 否则删除（无属性、无子节点、无文本的空容器）
+        element.remove();
+    }
+
 
     private static void removeComments(org.jsoup.nodes.Node node) {
         for (int i = 0; i < node.childNodeSize();) {

@@ -655,8 +655,8 @@ public class AutoWebAgent {
 
                     String freshCleanedHtml = HTMLCleaner.clean(freshHtml);
                     
-                    if (freshCleanedHtml.length() > 100000) {
-                        freshCleanedHtml = freshCleanedHtml.substring(0, 100000) + "...(truncated)";
+                    if (freshCleanedHtml.length() > 500000) {
+                        freshCleanedHtml = freshCleanedHtml.substring(0, 500000) + "...(truncated)";
                     }
                     uiLogger.accept("已获取页面内容，清理后大小: " + freshCleanedHtml.length());
                     
@@ -664,7 +664,7 @@ public class AutoWebAgent {
                     saveDebugArtifacts(freshHtml, freshCleanedHtml, null, uiLogger);
                     
                     // 2. Generate Code
-                    String code = generateGroovyScript(currentPrompt, freshCleanedHtml);
+                    String code = generateGroovyScript(currentPrompt, freshCleanedHtml, uiLogger);
                     
                     // Save generated code to debug file
                     saveDebugArtifacts(null, null, code, uiLogger);
@@ -727,8 +727,8 @@ public class AutoWebAgent {
                     }
 
                     String freshCleanedHtml = HTMLCleaner.clean(freshHtml);
-                    if (freshCleanedHtml.length() > 100000) {
-                        freshCleanedHtml = freshCleanedHtml.substring(0, 100000) + "...(truncated)";
+                    if (freshCleanedHtml.length() > 500000) {
+                        freshCleanedHtml = freshCleanedHtml.substring(0, 500000) + "...(truncated)";
                     }
 
                     // Save HTML debug files
@@ -739,7 +739,8 @@ public class AutoWebAgent {
                         freshCleanedHtml,
                         previousCode,
                         execOutput,
-                        refineHint
+                        refineHint,
+                        uiLogger
                     );
 
                     String finalRefinedCode = refinedCode;
@@ -835,12 +836,16 @@ public class AutoWebAgent {
         new Thread(refreshContextAction).start();
     }
 
-    private static String generateGroovyScript(String userPrompt, String cleanedHtml) {
+    private static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger) {
         if (GROOVY_SCRIPT_PROMPT_TEMPLATE == null || GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
             loadPrompts();
         }
 
         String prompt = String.format(GROOVY_SCRIPT_PROMPT_TEMPLATE, userPrompt, cleanedHtml);
+        
+        if (uiLogger != null) {
+            uiLogger.accept("Prompt Context Length (Get Code): " + prompt.length() + " chars");
+        }
 
         System.out.println("Generating code with LLM...");
         String code = LLMUtil.chatWithDeepSeek(prompt);
@@ -857,7 +862,8 @@ public class AutoWebAgent {
         String cleanedHtml,
         String previousCode,
         String execOutput,
-        String refineHint
+        String refineHint,
+        java.util.function.Consumer<String> uiLogger
     ) {
         if (REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE == null || REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
             loadPrompts();
@@ -871,6 +877,10 @@ public class AutoWebAgent {
             execOutput,
             refineHint
         );
+        
+        if (uiLogger != null) {
+            uiLogger.accept("Prompt Context Length (Refine Code): " + prompt.length() + " chars");
+        }
 
         System.out.println("Refining code with LLM...");
         String code = LLMUtil.chatWithDeepSeek(prompt);
@@ -881,9 +891,29 @@ public class AutoWebAgent {
     }
 
     private static void executeWithGroovy(String scriptCode, Object pageOrFrame, java.util.function.Consumer<String> logger) throws Exception {
+        // 1. Static Linting
+        java.util.List<String> lintErrors = GroovyLinter.check(scriptCode);
+        if (!lintErrors.isEmpty()) {
+            StringBuilder sb = new StringBuilder("Static Analysis Found Issues:\n");
+            for (String err : lintErrors) {
+                sb.append("- ").append(err).append("\n");
+            }
+            logger.accept(sb.toString());
+            
+            // Abort on security violations
+            boolean hasSecurityError = lintErrors.stream().anyMatch(e -> e.startsWith("Security Error"));
+            if (hasSecurityError) {
+                 throw new RuntimeException("Execution aborted due to security violations.");
+            }
+        }
+
         try {
             groovy.lang.Binding binding = new groovy.lang.Binding();
             binding.setVariable("page", pageOrFrame);
+            
+            // Inject WebDSL
+            WebDSL dsl = new WebDSL(pageOrFrame, logger);
+            binding.setVariable("web", dsl);
             
             // Redirect print output to our UI logger
             binding.setVariable("out", new java.io.PrintWriter(new java.io.Writer() {
