@@ -27,7 +27,7 @@ public class AutoWebAgent {
             //         "再输出页面底部显示的总记录数（比如“共xx条”）。" +
             //         "最后选中第一页第一条记录，并点击“审核推单”。";
 
-            String userPrompt = "请帮我查询待发货所有的订单，支持翻页，并且逐条输出所有字段。";
+            String userPrompt = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\\\"列名:列内容（去掉回车换行）\\\"，然后用\\\"｜\\\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
 
             System.out.println("No arguments provided. Running default example:");
             System.out.println("URL: " + url);
@@ -524,7 +524,7 @@ public class AutoWebAgent {
 
         JFrame frame = new JFrame("AutoWeb 网页自动化控制台");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(900, 950);
+        frame.setSize(1100, 950);
         frame.setLayout(new BorderLayout());
 
         // Close Playwright on exit
@@ -542,6 +542,13 @@ public class AutoWebAgent {
         JButton btnGetCode = new JButton("生成代码");
         JButton btnRefine = new JButton("修正代码");
         JButton btnExecute = new JButton("执行代码");
+
+        // Customize Execute button style
+        btnExecute.setFont(new Font(btnExecute.getFont().getName(), Font.BOLD, 14));
+        btnExecute.setForeground(java.awt.Color.WHITE);
+        btnExecute.setBackground(new java.awt.Color(0, 153, 51)); // Vibrant Green
+        btnExecute.setOpaque(true);
+        btnExecute.setBorderPainted(false);
         
         // --- Top Area: Settings + Prompt ---
         JPanel topContainer = new JPanel(new BorderLayout());
@@ -564,7 +571,7 @@ public class AutoWebAgent {
         JList<String> modelList = new JList<>(models);
         modelList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         JScrollPane modelScroll = new JScrollPane(modelList);
-        modelScroll.setPreferredSize(new Dimension(150, 60));
+        modelScroll.setPreferredSize(new Dimension(180, 80));
         
         // Default selection
         String defaultModel = "DeepSeek";
@@ -581,23 +588,25 @@ public class AutoWebAgent {
         leftSettings.add(lblModel);
         leftSettings.add(modelScroll);
         
-        JPanel rightSettings = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        JPanel rightSettings = new JPanel(new BorderLayout());
+        JPanel rightTop = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         JButton btnRefreshContext = new JButton("刷新");
         JButton btnReloadPrompts = new JButton("重载提示规则");
-        rightSettings.add(btnRefreshContext);
-        rightSettings.add(btnReloadPrompts);
+        rightTop.add(btnRefreshContext);
+        rightTop.add(btnReloadPrompts);
+        
+        JPanel rightBottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+        rightBottom.add(btnGetCode);
+        rightBottom.add(btnRefine);
+        rightBottom.add(btnExecute);
+
+        rightSettings.add(rightTop, BorderLayout.NORTH);
+        rightSettings.add(rightBottom, BorderLayout.SOUTH);
         
         selectionPanel.add(leftSettings, BorderLayout.WEST);
         selectionPanel.add(rightSettings, BorderLayout.EAST);
         
-        // Row 2: Operation Buttons
-        JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
-        actionPanel.add(btnGetCode);
-        actionPanel.add(btnRefine);
-        actionPanel.add(btnExecute);
-
         settingsArea.add(selectionPanel);
-        settingsArea.add(actionPanel);
         
         topContainer.add(settingsArea, BorderLayout.NORTH);
 
@@ -612,7 +621,7 @@ public class AutoWebAgent {
         promptPanel.add(promptScroll, BorderLayout.CENTER);
 
         JPanel refinePanel = new JPanel(new BorderLayout());
-        refinePanel.setBorder(BorderFactory.createTitledBorder("Refine 修正提示"));
+        refinePanel.setBorder(BorderFactory.createTitledBorder("补充说明提示信息"));
         JTextArea refineArea = new JTextArea();
         refineArea.setLineWrap(true);
         refineArea.setWrapStyleWord(true);

@@ -22,10 +22,15 @@ CRITICAL FIX REQUIREMENTS:
 - **Two-Stage Process**: 
 -  1. Analyze the Error and HTML. Create a "Fix Plan".
 -  2. Generate the corrected Groovy code based on the plan.
+- **Pagination Requirement**: If the User Task asks for "all" records (e.g. "查询所有", "query all"), you MUST check for pagination (Next button or Infinite Scroll) and use the appropriate DSL method (`extractPagesTable` or `extractTableData`). Do NOT just extract the first page unless no pagination exists.
 -  All non-code commentary (Fix Plan, reasoning, notes) MUST be output as Groovy line comments starting with `//`. Do NOT output bare text that could break code execution.
 - **Variable Rule**: Do NOT redeclare variables.
 - **No Translation**: Do NOT translate keywords from the User Task or Hint. Use them exactly as provided.
 - **Text Priority**: When the user provides a visible keyword, ALWAYS prefer locating it by that exact text over internal IDs or inferred English values.
+- **Popup/Modal Data**: When extracting info (counts, messages, reasons) from a modal, ALWAYS prefer `extractModalData` with regex for ALL fields. Do NOT try to `getText` on sub-elements (like `.error-message`) unless regex fails, as structure is often flat.
+  - Regex must include a capturing group `()`.
+  - **Robust Regex**: Text often lacks standard separators or has erratic spacing. ALWAYS make separators (like colons) optional (e.g. `[:：\s]*`) to handle various formats.
+  - Example: `def res = web.extractModalData('.modal', ['key': 'LabelText[:：\s]*(CapturedValue)'])`
 - Do NOT wait for hidden inputs to be visible; click the label or parent (the DSL handles this).
 - For table operations, PREFER per-row CSS selectors with `:nth-child()` (e.g., `".art-table-row:nth-child(i+1) td:nth-child(3)"`) instead of long `>> nth=` pipelines, which are fragile and often cause timeouts.
 - For flaky elements, increase robustness with `web.withMaxRetries(5)` or `web.clickWithRetry('#selector')`. Adjust timeouts via `web.withDefaultTimeout(40000)`.
@@ -76,7 +81,21 @@ API REFERENCE (DSL - variable 'web'):
   - `extractFirstPageTable(containerSelector, rowSelector, columnsMap)`: Returns first-page structured rows.
   - `extractPagesTable(containerSelector, rowSelector, columnsMap, nextBtnSelector, maxPages)`: **POWERFUL**. Extracts data across multiple pages by clicking 'next' button.
   - `locateItem(containerSelector, rowSelector, textToFind)`: **POWERFUL**. Scrolls until item is found and visible. Returns `boolean`.
+  - `extractModalData(modalSelector, regexPatternsMap)`: **POWERFUL**. Extracts data from a popup using regex. Example: `web.extractModalData('.modal', ['success': '成功.*?(\\d+)'])`.
+  - `closeModal(modalSelector, closeBtnSelector)`: Closes a modal and waits for it to vanish.
+  - `dismissPopups(selectors...)`: Try to click specified selectors to close ads/notifications.
+  - `navigate(url)`: Navigates to a specific URL.
+  - `reload()`: Reloads the current page.
+  - `goBack()`: Navigates back in history.
+  - `returnToFirstPage()`: **RECOMMENDED**. Tries to click "Page 1" button; if hidden, tries iterative "Previous" button clicks; falls back to reload. Handles waiting for page refresh.
 - PREFER these DSL methods over raw Playwright calls.
+
+SECTION 4: RETURN TO START & STATE MANAGEMENT
+- If the task requires returning to the first item (e.g. "回到第一条") after processing/pagination:
+  - If you have paginated or scrolled, the first item is likely no longer visible.
+  - **USE `web.returnToFirstPage()`**. This smartly clicks "Page 1" or reloads if necessary.
+  - Do NOT manually click "1" unless specific logic requires it.
+  - Do NOT assume `web.scrollToTop()` is enough if you are on page 5.
 
 Output ONLY the final Groovy code (including the Plan comments).
 

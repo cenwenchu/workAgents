@@ -14,7 +14,9 @@ import java.util.function.Consumer;
 public class WebDSL {
 
     private final Page page;
-    private final Frame frame;
+    private Frame frame;
+    private String savedFrameName;
+    private String savedFrameUrl;
     private final Consumer<String> logger;
     private int defaultTimeout = 30000;
     private int maxRetries = 3;
@@ -23,6 +25,10 @@ public class WebDSL {
         if (context instanceof Frame) {
             this.frame = (Frame) context;
             this.page = this.frame.page();
+            try {
+                this.savedFrameName = this.frame.name();
+                this.savedFrameUrl = this.frame.url();
+            } catch (Exception ignored) {}
         } else {
             this.page = (Page) context;
             this.frame = null;
@@ -40,12 +46,260 @@ public class WebDSL {
         return this;
     }
 
+    private Frame ensureFrame() {
+        if (frame == null) return null;
+        if (!frame.isDetached()) return frame;
+        
+        log("Notice: Current frame is detached. Attempting to re-locate frame...");
+        
+        // 1. Try name
+        if (savedFrameName != null && !savedFrameName.isEmpty()) {
+            Frame f = page.frame(savedFrameName);
+            if (f != null && !f.isDetached()) {
+                this.frame = f;
+                log("  -> Recovered frame by name: " + savedFrameName);
+                return f;
+            }
+        }
+        
+        // 2. Try URL match
+        if (savedFrameUrl != null && !savedFrameUrl.isEmpty()) {
+            for (Frame f : page.frames()) {
+                if (!f.isDetached() && savedFrameUrl.equals(f.url())) {
+                    this.frame = f;
+                    log("  -> Recovered frame by URL: " + savedFrameUrl);
+                    return f;
+                }
+            }
+        }
+        
+        log("  -> Failed to recover frame. Falling back to main page context.");
+        this.frame = null; // Downgrade to page
+        return null;
+    }
+
     private Locator locator(String selector) {
-        if (frame != null) {
-            return frame.locator(selector);
+        Frame f = ensureFrame();
+        if (f != null) {
+            return f.locator(selector);
         } else {
             return page.locator(selector);
         }
+    }
+
+    public void navigate(String url) {
+        log("Action: Navigate to '" + url + "'");
+        page.navigate(url);
+    }
+
+    public void reload() {
+        log("Action: Reload page");
+        page.reload();
+        page.waitForLoadState();
+    }
+    
+    public void goBack() {
+        log("Action: Go back");
+        page.goBack();
+        page.waitForLoadState();
+    }
+
+    /**
+     * Tries to return to the first page of results.
+     * Strategy:
+     * 1. Try to find and click the "Page 1" button directly if visible.
+     * 2. If not found (e.g. hidden behind ellipsis), try finding "Previous Page" button and click it repeatedly until disabled.
+     * 3. Fallback to reload().
+     */
+    public void returnToFirstPage() {
+        log("Action: Returning to first page...");
+        
+        // 1. Try clicking "Page 1" directly (Fast Path)
+        // Many frameworks (AntD, Bootstrap) keep Page 1 visible even when deep in pagination.
+        String[] pageOneSelectors = {
+            ".ant-pagination-item-1",                // Ant Design
+            ".el-pager li.number:text('1')",         // Element UI
+            "li.pagination-item-1",
+            "ul.pagination li:first-child a",
+            "button[aria-label='Page 1']",
+            "button:text-is('1')"
+        };
+
+        for (String sel : pageOneSelectors) {
+            try {
+                Locator loc = locator(sel).first();
+                // Check visibility: if 1 is hidden behind '...', this will fail, which is good -> go to step 2
+                if (loc.isVisible()) {
+                    // Check if already active/selected
+                    String classAttr = loc.getAttribute("class");
+                    if (classAttr != null && (classAttr.contains("active") || classAttr.contains("selected"))) {
+                        log("  -> Already on Page 1 (" + sel + ")");
+                        return;
+                    }
+                    
+                    // If visible but not active, click it
+                    log("  -> Clicking Page 1 button: " + sel);
+                    highlight(loc);
+                    loc.click();
+                    // Wait for it to become active to ensure page transition
+                    try {
+                        loc.waitFor(new Locator.WaitForOptions()
+                            .setTimeout(5000)
+                            .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE));
+                        // Heuristic: wait a bit more for table to refresh
+                        wait(2000); 
+                    } catch (Exception e) {
+                        wait(2000); // Fallback wait
+                    }
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+        
+        // 2. Iterative "Previous Page" (Robust Path)
+        // User suggestion: "Most safe is clicking previous page until first page"
+        log("  -> 'Page 1' not directly accessible. Trying 'Previous' button loop...");
+        String[] prevSelectors = {
+            ".ant-pagination-prev",          // Ant Design
+            "button.btn-prev",               // Element UI
+            "li.page-item.prev",             // Bootstrap (container)
+            "a[aria-label='Previous']",      // Bootstrap (link)
+            "button[aria-label='Previous']", // Generic
+            "button:has-text('<')",          // Generic symbol
+            ".pagination-prev"               // Generic class
+        };
+        
+        for (String prevSel : prevSelectors) {
+            try {
+                Locator prevBtn = locator(prevSel).first();
+                if (prevBtn.isVisible()) {
+                    int maxClicks = 50; // Safety limit
+                    int clicks = 0;
+                    
+                    while (clicks < maxClicks) {
+                        // Check disabled state
+                        boolean isDisabled = prevBtn.isDisabled();
+                        String classAttr = prevBtn.getAttribute("class");
+                        if (classAttr != null && (classAttr.contains("disabled") || classAttr.contains("disable"))) {
+                            isDisabled = true;
+                        }
+                        String ariaDisabled = prevBtn.getAttribute("aria-disabled");
+                        if ("true".equals(ariaDisabled)) {
+                            isDisabled = true;
+                        }
+                        
+                        if (isDisabled) {
+                            log("  -> Reached start (Previous button disabled).");
+                            return;
+                        }
+                        
+                        log("  -> Clicking Previous (" + prevSel + ") - Step " + (clicks + 1));
+                        highlight(prevBtn);
+                        prevBtn.click();
+                        wait(1000); // Wait for page load
+                        clicks++;
+                    }
+                    
+                    if (clicks >= maxClicks) {
+                         log("  -> Warning: Reached max clicks on Previous button. Stopping.");
+                    }
+                    return; // We tried our best with this selector
+                }
+            } catch (Exception ignored) {}
+        }
+        
+        // 3. Fallback: Reload
+        log("  -> Page 1 / Previous button not found. Falling back to reload().");
+        reload();
+    }
+
+    // --- Modal / Popup Handling ---
+
+    /**
+     * Extracts data from a modal/popup using regex patterns on its text content.
+     * @param modalSelector Selector for the modal container (e.g. ".ant-modal-content")
+     * @param regexPatterns Map of field name to regex pattern. The regex MUST contain at least one capturing group ().
+     *                      Example: {"success": "成功.*?(\\d+)"}
+     * @return Map of extracted values. If a pattern doesn't match, the value will be null.
+     */
+    public java.util.Map<String, String> extractModalData(String modalSelector, java.util.Map<String, String> regexPatterns) {
+        log("Action: Extracting data from modal '" + modalSelector + "'");
+        java.util.Map<String, String> results = new java.util.HashMap<>();
+        try {
+            waitFor(modalSelector);
+            // Wait a bit for content to settle
+            wait(500);
+            String text = getText(modalSelector); // Gets all text in the modal
+            // Normalize text for easier matching (replace newlines with spaces)
+            String normalizedText = normalizeText(text);
+            log("  -> Modal Text (preview): " + (normalizedText.length() > 100 ? normalizedText.substring(0, 100) + "..." : normalizedText));
+            
+            for (java.util.Map.Entry<String, String> entry : regexPatterns.entrySet()) {
+                String key = entry.getKey();
+                String regex = entry.getValue();
+                try {
+                    java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);
+                    java.util.regex.Matcher m = p.matcher(normalizedText);
+                    if (m.find() && m.groupCount() >= 1) {
+                        results.put(key, m.group(1));
+                        log("  -> Extracted " + key + ": " + m.group(1));
+                    } else {
+                        // Try matching against original text if normalized failed
+                        m = p.matcher(text);
+                        if (m.find() && m.groupCount() >= 1) {
+                            results.put(key, m.group(1));
+                            log("  -> Extracted " + key + ": " + m.group(1));
+                        } else {
+                            log("  -> Warning: Could not match pattern for '" + key + "' using regex: " + regex);
+                        }
+                    }
+                } catch (Exception re) {
+                    log("  -> Regex Error for '" + key + "': " + re.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log("Error extracting modal data: " + e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Closes a modal by clicking a specific button (e.g. "X" or "Close").
+     * Handles waiting and verification.
+     */
+    public void closeModal(String modalSelector, String closeButtonSelector) {
+        log("Action: Closing modal '" + modalSelector + "' using button '" + closeButtonSelector + "'");
+        try {
+            Locator loc = locator(modalSelector).first();
+            if (loc.isVisible()) {
+                click(closeButtonSelector);
+                // Wait for it to disappear (optional, short timeout)
+                try {
+                    loc.waitFor(new Locator.WaitForOptions()
+                        .setState(com.microsoft.playwright.options.WaitForSelectorState.HIDDEN)
+                        .setTimeout(2000));
+                } catch (Exception ignore) {}
+            }
+        } catch (Exception e) {
+             log("Warning: Failed to close modal cleanly: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Attempts to dismiss common nuisance popups if they exist.
+     * @param selectors List of selectors to try clicking (e.g. ".close-ad", "button:has-text('Not Now')")
+     */
+    public void dismissPopups(String... selectors) {
+         for (String sel : selectors) {
+             try {
+                 Locator loc = locator(sel).first();
+                 if (loc.isVisible()) {
+                     log("Action: Dismissing popup via '" + sel + "'");
+                     loc.click();
+                     wait(500);
+                 }
+             } catch (Exception ignored) {}
+         }
     }
 
     // --- Logging ---
@@ -491,9 +745,14 @@ public class WebDSL {
 
             // Check next button
             try {
+                // Try to wait for the next button to be attached/visible
+                try {
+                    locator(nextBtnSelector).first().waitFor(new Locator.WaitForOptions().setTimeout(2000));
+                } catch (Exception ignored) {}
+
                 Locator nextBtn = locator(nextBtnSelector).first();
                 if (nextBtn.count() == 0 || !nextBtn.isVisible()) {
-                    log("Next button not found or invisible. Stopping.");
+                    log("Next button '" + nextBtnSelector + "' not found or invisible. Stopping.");
                     break;
                 }
                 
