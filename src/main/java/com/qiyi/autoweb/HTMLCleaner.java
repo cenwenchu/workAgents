@@ -12,6 +12,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * HTML 清理与压缩工具
+ * 负责移除无关标签/属性、截断长文本，并生成适合 LLM 的紧凑 HTML
+ */
 public class HTMLCleaner {
 
     // 只需要移除完全无用的标签，保留结构
@@ -39,8 +43,14 @@ public class HTMLCleaner {
             "img", "input", "br", "hr", "textarea", "button", "select", "iframe"
     ));
 
+    /**
+     * 清理 HTML 内容，尽量保留结构与可定位信息
+     * @param html 原始 HTML
+     * @return 清理后的 HTML 片段
+     */
     public static String clean(String html) {
         if (html == null || html.isEmpty()) return "";
+        System.out.println("HTMLCleaner.before:\n" + html.length());
 
         Document doc = Jsoup.parse(html);
 
@@ -109,10 +119,14 @@ public class HTMLCleaner {
         
         // 进一步压缩连续空白
         cleaned = cleaned.replaceAll("\\s+", " ").trim();
+        System.out.println("HTMLCleaner.after:\n" + cleaned.length());
         
         return cleaned;
     }
 
+    /**
+     * 递归截断过长的文本节点，避免单节点占用过多 token
+     */
     private static void truncateLongText(Element element) {
         // 处理当前元素的直接文本节点
         for (org.jsoup.nodes.TextNode textNode : element.textNodes()) {
@@ -127,6 +141,9 @@ public class HTMLCleaner {
         }
     }
 
+    /**
+     * 递归移除无属性、无子节点、无文本的空容器
+     */
     private static void pruneEmptyNodes(Element element) {
         // 后序遍历：先处理子节点
         for (int i = element.children().size() - 1; i >= 0; i--) {
@@ -153,6 +170,9 @@ public class HTMLCleaner {
     }
 
 
+    /**
+     * 递归移除 HTML 注释节点
+     */
     private static void removeComments(org.jsoup.nodes.Node node) {
         for (int i = 0; i < node.childNodeSize();) {
             org.jsoup.nodes.Node child = node.childNode(i);

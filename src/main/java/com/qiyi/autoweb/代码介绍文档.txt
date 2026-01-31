@@ -1,0 +1,100 @@
+整体流程（从入口到执行）
+
+- 入口在 AutoWebAgent.java ：连接浏览器、选择当前 Page/Frame，然后启动 Swing 控制台 AutoWebAgentUI.createGUI 。
+- UI 上“生成计划/生成代码/修正代码/执行代码”分别走：payload 组装（ PayloadSupport.java ）→ 模型调用封装（ GroovySupport.java ）→（代码时）Groovy 静态检查（ GroovyLinter.java ）→ Groovy 执行绑定 WebDSL（ WebDSL.java ）。
+- 页面数据采集发生在 AutoWebAgent.prepareStepHtmls ：按计划 step 采集 RAW_HTML 或 ARIA_SNAPSHOT，清洗/截断后写入缓存（ HtmlSnapshotDao.java ）。
+## 各类中文说明（autoweb 包）
+### 1) AutoWebAgent：系统入口 + 采集/执行编排
+- 核心职责
+  - 启动：连接浏览器、找到目标页面/上下文、启动 UI（ run/main ）。
+  - 提供一组“门面式静态方法”：把 URL 解析/上下文选择/payload 生成/采集/LLM/执行等能力集中暴露给 UI。
+- 关键数据结构
+  - HtmlCaptureMode：RAW_HTML / ARIA_SNAPSHOT（ enum ）。
+  - PlanStep/PlanParseResult/HtmlSnapshot/ModelSession（ 结构体定义 ）。
+- 关键方法与机制
+  - prepareStepHtmls(...) ：按计划步骤采集页面信息（ 实现 ）
+    - 复用：同 URL 的 step 会复用首次采集结果，避免重复采集（snapshotByUrl）。
+    - 缓存：采集前先读缓存，采集后写缓存（调用 HtmlSnapshotDao ）。
+    - 上下文选择：采集时会扫描 frames，优先选“最佳内容 frame”（通过 PlanRoutingSupport.scanContexts ）。
+    - 入口动作：对非当前页 step，可从 entryAction 抽取引号内 token（ firstQuotedToken ），尝试点击以进入业务区域/新开页（ 相关代码段 ）。
+    - UI 干扰控制：采集前最小化控制台窗口、结束后恢复（ capture/minimize/restore ）。
+  - getPageContent(...) ：按模式返回 RAW_HTML 或 ariaSnapshot（ 入口 ）。
+  - cleanCapturedContent(...) ：RAW_HTML 走 HTMLCleaner；ARIA_SNAPSHOT 走换行归一+大长度截断（ 实现 ）。
+  - CDP AXTree：保留了 Accessibility.getFullAXTree 逻辑与过滤（ getA11yFullAxTreeJson ），但 ARIA_SNAPSHOT 主路径使用 locator("body").ariaSnapshot() 。
+### 2) AutoWebAgentUI：Swing 控制台 + 多模型并发调度
+- 核心职责
+  - 提供“计划生成 / 代码生成 / 修正代码 / 执行”的可视化操作面板，管理多模型会话状态（sessionsByModel）、按钮状态、执行日志与标签页展示。
+- 关键方法（用户按钮）
+  - “生成计划” btnPlan.addActionListener （ 入口 ）
+    - 支持两种路径：直接生成计划（PLAN_ONLY/PLAN_ENTRY）与“补充入口地址后修正规划”（PLAN_REFINE）。
+    - “补充入口地址”并不是 btnRefinePlan 按钮触发，而是当检测到某些模型计划未确认入口时，在“生成计划”里弹窗引导并走 PLAN_REFINE（ pendingEntryModels 分支 ）。
+  - “生成代码” btnGetCode.addActionListener ：先确保计划可用，再单线程队列采集 HTML，最后并发请求模型生成代码（关键链路见日志片段区域 CODEGEN 相关段 ）。
+  - “修正代码” btnRefine.addActionListener ：会重新抓取当前页面 freshHtml + clean，再构建 REFINE_CODE payload，并调用 generateRefinedGroovyScript （ REFINE_CODE 相关段 ）。
+  - “执行代码” btnExecute.addActionListener ：确保 live page、必要时导航到入口 URL、重新识别最佳上下文，再执行 Groovy（ 执行段 ）。
+- 关键机制
+  - setActionButtonsEnabled(...) ：统一控制按钮可用性，避免并发操作（ 方法 ）。
+  - refreshRootPageRefIfNeeded(...) ：执行/采集前刷新 rootPageRef，避免“历史 URL/已关闭页面复用”问题（位于本文件后半段）。
+- 关于“修正计划/分步执行”两个按钮
+  - btnRefinePlan 与 btnStepExecute 目前 只创建/布局/参与 enable/disable ，没有 addActionListener 、也没有 ActionMap/InputMap 绑定引用点（可由引用扫描看出仅出现在定义和 setActionButtonsEnabled/清空 busy 判断中， grep 结果对应区域 ）。
+  - 现有“修正规划（PLAN_REFINE）”能力由“生成计划”按钮在 pending-entry 分支中触发，而非“修正计划”按钮。
+### 3) WebDSL：给 Groovy/LLM 的高层自动化 DSL
+- 核心职责
+  - 封装 Playwright Page/Frame 的常用操作，降低大模型脚本幻觉率：更稳的 locator、更强兜底、更明确日志。
+- 关键机制
+  - Frame 断开恢复：保存 frameName/frameUrl，detached 时尝试重定位，失败回退 page（ ensureFrame ）。
+  - a11y 风格 selector：支持 textbox[...] / button[...] / link[...] 等别名，优先转 getByLabel/getByPlaceholder/role= （ tryBuildA11yLocator ，以及 normalize 逻辑 normalizeA11yAliasSegment ）。
+  - 登录页超时提示：timeout 且疑似登录页时，改写为更明确异常（ rewriteIfLogin ）。
+  - 表格/列表抽取：提供分页、虚拟滚动、去重、滚动容器自动识别等（核心公开方法名见 extractPagesTable/extractList/extractModalData 等 ）。
+  - Groovy 兜底分发： methodMissing 会做“最相似方法匹配+参数适配”，提升脚本容错（ methodMissing ）。
+### 4) PayloadSupport：把“任务 + 页面数据”组织成模型可读 payload
+- 核心职责
+  - 统一不同阶段 MODE 的 payload 格式：PLAN_ONLY / PLAN_ENTRY / PLAN_REFINE / CODEGEN / REFINE_CODE（ 实现 ）。
+- 关键方法
+  - buildPlanOnlyPayload/buildPlanEntryPayload/buildPlanRefinePayload ：提取用户提供 URL / URL 映射 / SAME_PAGE_OPERATION（ PLAN payload ）。
+  - buildCodegenPayload ：拼接 PLAN + STEP_HTMLS_CLEANED（ CODEGEN ）。
+  - buildRefinePayload ：额外携带 CURRENT_PAGE_HTML_CLEANED + 用户 URL 映射，便于“就地修正”（ REFINE_CODE ）。
+- 关键机制
+  - chooseCurrentUrl(...) ：当 currentPageUrl 不可靠时，尝试用 snapshots 的 URL 作为 CURRENT_PAGE_URL（ chooseCurrentUrl ）。
+  - appendStepHtmlsCleaned(...) ：限制最大字符数、对重复 URL 只保留 “DUPLICATE_URL: SAME_AS_STEP x”（ 实现 ）。
+### 5) PlanRoutingSupport：URL/计划解析 + 上下文选择与导航
+- 核心职责
+  - URL 抽取/规整、计划文本解析、入口地址补全提示、上下文扫描与执行前导航。
+- 关键方法
+  - URL 工具： looksLikeUrl/stripUrlQuery/extractFirstUrlFromText/extractUrlMappingsFromText （ 实现 ）。
+  - 计划解析： parsePlanFromText （识别 Step 块、confirmed 判断、提取 Target URL/Entry Point Action 等）（ 实现 ）。
+  - 入口补全提示： buildEntryInputHint （从未确认步骤推断需要哪些“页面入口地址”标签）（ 实现 ）。
+  - 上下文扫描： scanContexts/selectBestContext/waitAndFindContext/reloadAndFindContext （优先 iframe，按可见面积与 URL 选择）（ 实现 ）。
+  - 执行前导航： ensureRootPageAtUrl + waitForUrlPrefix （处理登录等待、忽略 query）（ 实现 ）。
+  - 选择入口 URL： chooseExecutionEntryUrl （从 steps/snapshots/userPrompt 逐级回退）（ 实现 ）。
+### 6) StorageSupport：调试落盘、脱敏、字节统计、safePageUrl
+- 核心职责
+  - 把 payload/prompt/response 等调试材料落盘到 autoweb/debug，自动脱敏并记录摘要（ 实现 ）。
+- 关键方法
+  - saveDebugArtifact ：文件名含 ts/model/mode/kind，内容含 SHA256（ 实现 ）。
+  - logRequestBytes/logPayloadSummary ：打印 prompt/payload 字节数与 payload 概要（ 实现 ）。
+  - redactForDebug ：对 key/token/Authorization 等做正则脱敏（ 实现 ）。
+### 7) HtmlSnapshotDao：采集缓存读写
+- 核心职责
+  - 以 url + entryAction + captureMode(+a11yInterestingOnly) 生成 key，把 raw/cleaned HTML 持久化到 autoweb/cache（ 实现 ）。
+- 关键机制
+  - ARIA_SNAPSHOT 才纳入 interestingOnly 到 key，RAW_HTML 兼容 legacy key（ readCachedHtml ）。
+### 8) HTMLCleaner：RAW_HTML 清洗与压缩
+- 核心职责
+  - 用 jsoup 移除脚本/样式等噪声、保留关键属性、截断长文本、剪枝空节点并压缩空白（ clean ）。
+### 9) GroovySupport：提示词加载、模型调用、代码归一化、Groovy 执行封装
+- 核心职责
+  - 统一 LLM 调用（不同供应商）、调试落盘、以及“生成/修正 Groovy 脚本”的 prompt 拼装。
+  - 执行时将 page 与 web(WebDSL) 注入 Groovy 运行环境。
+- 关键方法
+  - loadPrompts ：从 autoweb/skills 读取提示模板（ 实现 ）。
+  - generateGroovyScript / generateRefinedGroovyScript ：根据 payload MODE 裁剪模板块、拼 prompt、调用模型并保存 payload/prompt/response（ 实现 ）。
+  - normalizeGeneratedGroovy ：把模型输出里 PLAN/THINK 等段落转成 Groovy 注释、并对常见抽取脚本形态做归一化（ 实现 ）。
+  - executeWithGroovy ：lint → 绑定 page/web/out → GroovyShell.evaluate（ 实现 ）。
+  - callModel ：按模型名路由到 LLMUtil，并做 code fence 清理与耗时日志（ 实现 ）。
+### 10) GroovyLinter：执行前静态安全/语法检查
+- 核心职责
+  - 拦截危险模式（System.exit/exec/while(true) 等）+ Groovy 语法解析检查（ 实现 ）。
+### 11) AutoWebAgentUtils：目录清理、调试保存、LLM 超时包装
+- 核心职责
+  - 清理 autoweb/debug 与 autoweb/cache；保存调试代码变体；对部分模型调用加超时（ 实现 ）。
+如果你希望我把 btnRefinePlan （修正计划）和 btnStepExecute （分步执行）补齐成可用功能，我可以直接按现有状态机把它们接到：PLAN_REFINE（复用“补充入口地址”路径）和 “按 Step 执行/回放” 两条链路上。

@@ -3,13 +3,18 @@ package com.qiyi.autoweb;
 import com.microsoft.playwright.Frame;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.options.AriaRole;
 import com.alibaba.fastjson2.JSON;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * A High-level DSL (Domain-Specific Language) wrapper for Playwright to simplify LLM-generated scripts
- * and reduce hallucination/errors.
+ * 面向 LLM 的高层自动化 DSL
+ * 封装 Playwright 常用能力，降低脚本生成幻觉与执行错误
  */
 public class WebDSL {
 
@@ -20,7 +25,12 @@ public class WebDSL {
     private final Consumer<String> logger;
     private int defaultTimeout = 30000;
     private int maxRetries = 3;
+    
+    private static final Pattern ARIA_LABEL_ONLY_PATTERN = Pattern.compile("^\\s*\\[\\s*aria-label\\s*=\\s*(['\"])(.*?)\\1\\s*\\]\\s*$", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * 创建 DSL 上下文，支持 Page 或 Frame
+     */
     public WebDSL(Object context, Consumer<String> logger) {
         if (context instanceof Frame) {
             this.frame = (Frame) context;
@@ -36,16 +46,25 @@ public class WebDSL {
         this.logger = logger;
     }
 
+    /**
+     * 设置默认超时时间
+     */
     public WebDSL withDefaultTimeout(int timeoutMs) {
         this.defaultTimeout = timeoutMs;
         return this;
     }
     
+    /**
+     * 设置操作重试次数
+     */
     public WebDSL withMaxRetries(int retries) {
         this.maxRetries = Math.max(1, retries);
         return this;
     }
 
+    /**
+     * 确保 Frame 可用，必要时自动恢复
+     */
     private Frame ensureFrame() {
         if (frame == null) return null;
         if (!frame.isDetached()) return frame;
@@ -78,18 +97,362 @@ public class WebDSL {
         return null;
     }
 
+    /**
+     * 生成更稳健的定位器，支持 a11y 风格别名
+     */
     private Locator locator(String selector) {
         Frame f = ensureFrame();
-        if (f != null) {
-            return f.locator(selector);
-        } else {
-            return page.locator(selector);
+        Locator a11y = tryBuildA11yLocator(f, selector);
+        if (a11y != null) return a11y;
+        
+        String normalized = normalizeSelectorString(selector);
+        if (selector != null && normalized != null && !normalized.equals(selector)) {
+            log("Selector: Normalize '" + selector + "' -> '" + normalized + "'");
         }
+        if (f != null) {
+            return f.locator(normalized);
+        } else {
+            return page.locator(normalized);
+        }
+    }
+    
+    private String extractOnlyAriaLabel(String selector) {
+        if (selector == null) return null;
+        Matcher m = ARIA_LABEL_ONLY_PATTERN.matcher(selector);
+        if (!m.matches()) return null;
+        String v = m.group(2);
+        if (v == null) return null;
+        v = v.trim();
+        return v.isEmpty() ? null : v;
+    }
+    
+    private String normalizeLabelTextForSearch(String label) {
+        if (label == null) return null;
+        String v = label.trim();
+        if (v.startsWith("请输入")) v = v.substring("请输入".length()).trim();
+        if (v.isEmpty()) return null;
+        return v;
+    }
+    
+    private Locator resolveInputLocatorFromAriaLabel(String labelRaw) {
+        String label = firstNonEmpty(labelRaw);
+        if (label == null) return null;
+        String label2 = normalizeLabelTextForSearch(label);
+        Frame f = ensureFrame();
+        String[] candidates = (label2 != null && !label2.equals(label))
+                ? new String[]{label, label2}
+                : new String[]{label};
+        
+        for (String v : candidates) {
+            try {
+                Locator byLabel = (f != null) ? f.getByLabel(v) : page.getByLabel(v);
+                waitForLocatorAttached(byLabel.first(), 500);
+                if (byLabel.count() > 0) return byLabel;
+            } catch (Exception ignored) {}
+            try {
+                Locator byPlaceholder = (f != null) ? f.getByPlaceholder(v) : page.getByPlaceholder(v);
+                waitForLocatorAttached(byPlaceholder.first(), 500);
+                if (byPlaceholder.count() > 0) return byPlaceholder;
+            } catch (Exception ignored) {}
+            try {
+                String esc = escapeForSelectorValue(v);
+                String roleSel = "role=textbox[name=\"" + esc + "\"]";
+                Locator byRole = (f != null) ? f.locator(roleSel) : page.locator(roleSel);
+                waitForLocatorAttached(byRole.first(), 500);
+                if (byRole.count() > 0) return byRole;
+            } catch (Exception ignored) {}
+            try {
+                String esc = escapeForSelectorValue(v);
+                String css = "input[placeholder=\"" + esc + "\"], textarea[placeholder=\"" + esc + "\"]";
+                Locator byCss = (f != null) ? f.locator(css) : page.locator(css);
+                waitForLocatorAttached(byCss.first(), 500);
+                if (byCss.count() > 0) return byCss;
+            } catch (Exception ignored) {}
+        }
+        
+        return null;
+    }
+    
+    private boolean isLoginPageLikely() {
+        try {
+            String title = page.title();
+            if (title == null) title = "";
+            boolean titleLogin = title.contains("登录");
+            if (!titleLogin) return false;
+            boolean hasPwd = false;
+            boolean hasLoginBtn = false;
+            boolean hasBrand = false;
+            try { hasPwd = page.locator("input[type='password']").count() > 0; } catch (Exception ignored) {}
+            try { hasLoginBtn = page.locator("button:has-text('登录'), input[type='submit'][value*='登录']").count() > 0; } catch (Exception ignored) {}
+            try { hasBrand = page.locator("text=聚水潭").count() > 0; } catch (Exception ignored) {}
+            return hasPwd || hasLoginBtn || hasBrand;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+    
+    private boolean isTimeoutError(RuntimeException e) {
+        if (e == null) return false;
+        String m = e.getMessage();
+        if (m == null) m = "";
+        return m.contains("Timeout") || m.contains("TimeoutError") || m.contains("timeout");
+    }
+    
+    private RuntimeException rewriteIfLogin(RuntimeException e, String desc) {
+        if (!isTimeoutError(e)) return null;
+        if (!isLoginPageLikely()) return null;
+        String url = "";
+        String title = "";
+        try { url = page.url(); } catch (Exception ignored) {}
+        try { title = page.title(); } catch (Exception ignored) {}
+        String msg = "当前页面疑似登录页，无法继续执行（" + (desc == null ? "" : desc) + "）。请先在浏览器完成登录后重试。title=" + (title == null ? "" : title) + ", url=" + (url == null ? "" : url);
+        return new RuntimeException(msg, e);
+    }
+    
+    private static final Pattern A11Y_ALIAS_PATTERN = Pattern.compile("^\\s*(a11y\\s*:\\s*)?(textbox|combobox|button|link|checkbox|radio|tab|option|menuitem)\\s*(\\[.*\\])?\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern A11Y_ATTR_PATTERN = Pattern.compile("\\[\\s*([a-zA-Z_][\\w-]*)\\s*=\\s*(['\"])(.*?)\\2\\s*\\]");
+    
+    private Locator tryBuildA11yLocator(Frame f, String selector) {
+        if (selector == null) return null;
+        if (selector.contains(">>")) return null;
+        
+        Matcher m = A11Y_ALIAS_PATTERN.matcher(selector);
+        if (!m.matches()) return null;
+        
+        boolean forcedA11y = m.group(1) != null && !m.group(1).trim().isEmpty();
+        String alias = m.group(2) == null ? "" : m.group(2).toLowerCase();
+        Map<String, String> attrs = parseA11yAttrs(selector);
+        if (!forcedA11y && isAmbiguousTagAlias(alias) && !hasA11yOnlyAttrs(attrs)) return null;
+        String role = aliasToRole(alias);
+        
+        String placeholder = firstNonEmpty(attrs.get("placeholder"));
+        if (placeholder != null) {
+            if (alias.equals("textbox") || alias.equals("combobox")) {
+                log("Selector: A11y '" + selector + "' -> byPlaceholder '" + placeholder + "'");
+                if (f != null) return f.getByPlaceholder(placeholder);
+                return page.getByPlaceholder(placeholder);
+            }
+        }
+        
+        String label = firstNonEmpty(attrs.get("label"));
+        if (label != null) {
+            if (alias.equals("textbox") || alias.equals("combobox") || alias.equals("checkbox") || alias.equals("radio")) {
+                log("Selector: A11y '" + selector + "' -> byLabel '" + label + "'");
+                if (f != null) return f.getByLabel(label);
+                return page.getByLabel(label);
+            }
+        }
+        
+        String name = firstNonEmpty(attrs.get("name"));
+        if (name == null) name = firstNonEmpty(attrs.get("text"));
+        if (name == null) name = firstNonEmpty(attrs.get("title"));
+        if (name == null) name = label;
+        if (name != null) {
+            String roleSelector = buildRoleSelector(role, name, attrs);
+            if (roleSelector != null) {
+                log("Selector: A11y '" + selector + "' -> '" + roleSelector + "'");
+                if (f != null) return f.locator(roleSelector);
+                return page.locator(roleSelector);
+            }
+        }
+        
+        AriaRole ariaRole = aliasToAriaRole(alias);
+        if (ariaRole != null) {
+            log("Selector: A11y '" + selector + "' -> getByRole " + ariaRole);
+            if (f != null) return f.getByRole(ariaRole);
+            return page.getByRole(ariaRole);
+        }
+        
+        return null;
+    }
+    
+    private String normalizeSelectorString(String selector) {
+        if (selector == null) return null;
+        String trimmed = selector.trim();
+        if (trimmed.isEmpty()) return selector;
+        String lower = trimmed.toLowerCase();
+        if (!(lower.contains("textbox")
+                || lower.contains("combobox")
+                || lower.contains("button")
+                || lower.contains("link")
+                || lower.contains("checkbox")
+                || lower.contains("radio")
+                || lower.contains("tab")
+                || lower.contains("option")
+                || lower.contains("menuitem"))) return selector;
+        
+        if (trimmed.contains(">>")) {
+            String[] parts = trimmed.split(">>");
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < parts.length; i++) {
+                String part = parts[i].trim();
+                if (!part.isEmpty()) {
+                    part = normalizeA11yAliasSegment(part);
+                }
+                if (i > 0) sb.append(" >> ");
+                sb.append(part);
+            }
+            return sb.toString();
+        }
+        
+        return normalizeA11yAliasSegment(trimmed);
+    }
+    
+    private String normalizeA11yAliasSegment(String segment) {
+        Matcher m = A11Y_ALIAS_PATTERN.matcher(segment);
+        if (!m.matches()) return segment;
+        
+        String aliasLower = m.group(2) == null ? "" : m.group(2).toLowerCase();
+        boolean forcedA11y = m.group(1) != null && !m.group(1).trim().isEmpty();
+        Map<String, String> attrs = parseA11yAttrs(segment);
+        if (!forcedA11y && isAmbiguousTagAlias(aliasLower) && !hasA11yOnlyAttrs(attrs)) return segment;
+        
+        String alias = aliasLower;
+        String role = aliasToRole(alias);
+        
+        String placeholder = firstNonEmpty(attrs.get("placeholder"));
+        if (placeholder != null) {
+            String escaped = escapeForSelectorValue(placeholder);
+            if (alias.equals("textbox")) {
+                return "input[placeholder=\"" + escaped + "\"], textarea[placeholder=\"" + escaped + "\"]";
+            }
+            if (alias.equals("combobox")) {
+                return "input[placeholder=\"" + escaped + "\"]";
+            }
+        }
+        
+        String label = firstNonEmpty(attrs.get("label"));
+        if (label != null) {
+            String escaped = escapeForSelectorValue(label);
+            String roleSelector = buildRoleSelector(role, label, attrs);
+            if (roleSelector != null) return roleSelector;
+        }
+        
+        String name = firstNonEmpty(attrs.get("name"));
+        if (name != null) {
+            String escaped = escapeForSelectorValue(name);
+            String roleSelector = buildRoleSelector(role, name, attrs);
+            if (roleSelector != null) return roleSelector;
+        }
+        
+        if (role != null) return "role=" + role;
+        return segment;
+    }
+    
+    private String buildRoleSelector(String role, String name, Map<String, String> attrs) {
+        if (role == null) return null;
+        StringBuilder sb = new StringBuilder();
+        sb.append("role=").append(role);
+        if (name != null) {
+            String escaped = escapeForSelectorValue(name);
+            sb.append("[name=\"").append(escaped).append("\"]");
+        }
+        String checked = normalizeRoleBool(attrs.get("checked"));
+        if (checked != null) sb.append("[checked=").append(checked).append("]");
+        String selected = normalizeRoleBool(attrs.get("selected"));
+        if (selected != null) sb.append("[selected=").append(selected).append("]");
+        String pressed = normalizeRoleBool(attrs.get("pressed"));
+        if (pressed != null) sb.append("[pressed=").append(pressed).append("]");
+        String expanded = normalizeRoleBool(attrs.get("expanded"));
+        if (expanded != null) sb.append("[expanded=").append(expanded).append("]");
+        String disabled = normalizeRoleBool(attrs.get("disabled"));
+        if (disabled != null) sb.append("[disabled=").append(disabled).append("]");
+        return sb.toString();
+    }
+    
+    private String normalizeRoleBool(String v) {
+        if (v == null) return null;
+        String t = v.trim().toLowerCase();
+        if (t.isEmpty()) return null;
+        if (t.equals("true") || t.equals("false")) return t;
+        if (t.equals("mixed")) return t;
+        return null;
+    }
+    
+    private String aliasToRole(String alias) {
+        if (alias == null) return null;
+        switch (alias.toLowerCase()) {
+            case "textbox": return "textbox";
+            case "combobox": return "combobox";
+            case "button": return "button";
+            case "link": return "link";
+            case "checkbox": return "checkbox";
+            case "radio": return "radio";
+            case "tab": return "tab";
+            case "option": return "option";
+            case "menuitem": return "menuitem";
+            default: return null;
+        }
+    }
+    
+    private boolean isAmbiguousTagAlias(String alias) {
+        if (alias == null) return false;
+        String a = alias.toLowerCase();
+        return a.equals("button") || a.equals("option") || a.equals("link");
+    }
+    
+    private boolean hasA11yOnlyAttrs(Map<String, String> attrs) {
+        if (attrs == null || attrs.isEmpty()) return false;
+        for (String k : attrs.keySet()) {
+            if (k == null) continue;
+            String key = k.toLowerCase();
+            if (key.equals("text") || key.equals("label")) return true;
+            if (key.equals("pressed") || key.equals("expanded") || key.equals("selected") || key.equals("checked") || key.equals("disabled")) return true;
+        }
+        return false;
+    }
+    
+    private AriaRole aliasToAriaRole(String alias) {
+        if (alias == null) return null;
+        switch (alias.toLowerCase()) {
+            case "textbox": return AriaRole.TEXTBOX;
+            case "combobox": return AriaRole.COMBOBOX;
+            case "button": return AriaRole.BUTTON;
+            case "link": return AriaRole.LINK;
+            case "checkbox": return AriaRole.CHECKBOX;
+            case "radio": return AriaRole.RADIO;
+            case "tab": return AriaRole.TAB;
+            case "option": return AriaRole.OPTION;
+            case "menuitem": return AriaRole.MENUITEM;
+            default: return null;
+        }
+    }
+    
+    private Map<String, String> parseA11yAttrs(String s) {
+        Map<String, String> out = new HashMap<>();
+        if (s == null) return out;
+        Matcher m = A11Y_ATTR_PATTERN.matcher(s);
+        while (m.find()) {
+            String k = m.group(1);
+            String v = m.group(3);
+            if (k == null) continue;
+            k = k.trim().toLowerCase();
+            if (v == null) v = "";
+            out.put(k, v);
+        }
+        return out;
+    }
+    
+    private String firstNonEmpty(String v) {
+        if (v == null) return null;
+        String t = v.trim();
+        if (t.isEmpty()) return null;
+        return t;
+    }
+    
+    private String escapeForSelectorValue(String v) {
+        if (v == null) return "";
+        return v.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     public void navigate(String url) {
-        log("Action: Navigate to '" + url + "'");
-        page.navigate(url);
+        String u = url == null ? "" : url.trim();
+        u = u.replace("`", "").trim();
+        if ((u.startsWith("'") && u.endsWith("'")) || (u.startsWith("\"") && u.endsWith("\""))) {
+            if (u.length() >= 2) u = u.substring(1, u.length() - 1).trim();
+        }
+        log("Action: Navigate to '" + u + "'");
+        page.navigate(u);
     }
 
     /**
@@ -291,10 +654,20 @@ public class WebDSL {
         log("Action: Extracting data from modal '" + modalSelector + "'");
         java.util.Map<String, String> results = new java.util.HashMap<>();
         try {
-            waitFor(modalSelector);
+            Locator modalLoc = resolveModalLocator(modalSelector);
+            if (modalLoc == null) throw new RuntimeException("Modal not found");
+            try {
+                modalLoc.waitFor(new Locator.WaitForOptions()
+                        .setTimeout(2000)
+                        .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE));
+            } catch (Exception ignored) {
+                modalLoc = resolveModalLocator(null);
+            }
+            if (modalLoc == null || modalLoc.count() == 0) throw new RuntimeException("Modal not found");
+            if (!modalLoc.isVisible()) throw new RuntimeException("Modal not visible");
             // Wait a bit for content to settle
             wait(500);
-            String text = getText(modalSelector); // Gets all text in the modal
+            String text = modalLoc.innerText();
             // Normalize text for easier matching (replace newlines with spaces)
             String normalizedText = normalizeText(text);
             log("  -> Modal Text (preview): " + (normalizedText.length() > 100 ? normalizedText.substring(0, 100) + "..." : normalizedText));
@@ -335,19 +708,84 @@ public class WebDSL {
     public void closeModal(String modalSelector, String closeButtonSelector) {
         log("Action: Closing modal '" + modalSelector + "' using button '" + closeButtonSelector + "'");
         try {
-            Locator loc = locator(modalSelector).first();
-            if (loc.isVisible()) {
-                click(closeButtonSelector);
+            Locator loc = resolveModalLocator(modalSelector);
+            if (loc == null || loc.count() == 0 || !loc.isVisible()) {
+                loc = resolveModalLocator(null);
+            }
+            if (loc != null && loc.count() > 0 && loc.isVisible()) {
+                boolean closed = false;
+                try {
+                    click(closeButtonSelector);
+                    closed = true;
+                } catch (Exception ignored) {}
+                
+                if (!closed) {
+                    String[] fallbackButtons = new String[] {
+                            ".ant-modal-close",
+                            ".ant-drawer-close",
+                            "button:has-text('关闭')",
+                            "button:has-text('确定')",
+                            "button:has-text('取消')",
+                            "button[aria-label='Close']",
+                            "role=button[name='关闭']",
+                            "role=button[name='确定']"
+                    };
+                    for (String sel : fallbackButtons) {
+                        try {
+                            Locator btn = loc.locator(sel).first();
+                            if (btn.count() == 0) continue;
+                            if (!btn.isVisible()) continue;
+                            highlight(btn);
+                            btn.click();
+                            closed = true;
+                            break;
+                        } catch (Exception ignored) {}
+                    }
+                }
                 // Wait for it to disappear (optional, short timeout)
                 try {
                     loc.waitFor(new Locator.WaitForOptions()
-                        .setState(com.microsoft.playwright.options.WaitForSelectorState.HIDDEN)
-                        .setTimeout(2000));
+                            .setState(com.microsoft.playwright.options.WaitForSelectorState.HIDDEN)
+                            .setTimeout(2000));
                 } catch (Exception ignore) {}
             }
         } catch (Exception e) {
              log("Warning: Failed to close modal cleanly: " + e.getMessage());
         }
+    }
+
+    private Locator resolveModalLocator(String preferredSelector) {
+        String preferred = preferredSelector == null ? "" : preferredSelector.trim();
+        String[] candidates = new String[] {
+                preferred,
+                ".ant-modal-content",
+                ".ant-modal",
+                ".ant-drawer-content",
+                ".ant-drawer",
+                ".el-dialog",
+                ".el-dialog__wrapper",
+                "[role='dialog']",
+                "[aria-modal='true']",
+                "[data-testid*='modal']",
+                ".modal"
+        };
+        
+        for (String sel : candidates) {
+            if (sel == null) continue;
+            String s = sel.trim();
+            if (s.isEmpty()) continue;
+            try {
+                Locator loc = locator(s).first();
+                waitForLocatorAttached(loc, 500);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                if (!preferred.isEmpty() && !s.equals(preferred)) {
+                    log("  -> Modal fallback selector: '" + s + "'");
+                }
+                return loc;
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
     
     /**
@@ -384,6 +822,8 @@ public class WebDSL {
                 action.run();
                 return;
             } catch (RuntimeException e) {
+                RuntimeException login = rewriteIfLogin(e, desc);
+                if (login != null) throw login;
                 last = e;
                 attempt++;
                 log("Retry " + attempt + "/" + maxRetries + " for " + desc);
@@ -400,6 +840,8 @@ public class WebDSL {
             try {
                 return supplier.get();
             } catch (RuntimeException e) {
+                RuntimeException login = rewriteIfLogin(e, desc);
+                if (login != null) throw login;
                 last = e;
                 attempt++;
                 log("Retry " + attempt + "/" + maxRetries + " for " + desc);
@@ -416,11 +858,25 @@ public class WebDSL {
         log("Action: Click '" + selector + "'");
         retry(() -> {
             Locator loc = locator(selector).first();
-            if (loc.count() > 0 && !loc.isVisible()) {
-                loc.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } if (el.parentElement) { el.parentElement.click(); return; } el.click(); }");
-                return;
+            int count = 0;
+            try { count = loc.count(); } catch (Exception ignored) {}
+            if (count == 0 && isCheckboxIntent(selector)) {
+                log("  -> Click target not found. Trying checkbox fallback...");
+                Locator alt = tryFallbackCheckboxLocator(selector);
+                if (alt != null) loc = alt.first();
             }
-            waitFor(selector);
+            
+            try {
+                if (loc.count() > 0 && !loc.isVisible()) {
+                    loc.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } const box = el.closest('.ant-checkbox') || el.closest('[role=checkbox]'); if (box) { box.click(); return; } if (el.parentElement) { el.parentElement.click(); return; } el.click(); }");
+                    return;
+                }
+            } catch (Exception ignored) {}
+            
+            try {
+                loc.waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+            } catch (Exception ignored) {}
+            
             highlight(loc);
             loc.click();
         }, "click " + selector);
@@ -438,9 +894,27 @@ public class WebDSL {
     public void type(String selector, String text) {
         log("Action: Type '" + text + "' into '" + selector + "'");
         retry(() -> {
-            waitFor(selector);
-            highlight(selector);
-            locator(selector).first().fill(text);
+            String ariaLabel = extractOnlyAriaLabel(selector);
+            Locator target = locator(selector).first();
+            try {
+                waitFor(selector);
+                target = locator(selector).first();
+            } catch (RuntimeException e) {
+                if (ariaLabel != null) {
+                    Locator alt = resolveInputLocatorFromAriaLabel(ariaLabel);
+                    if (alt != null) {
+                        log("  -> Type fallback: aria-label '" + ariaLabel + "'");
+                        target = alt.first();
+                        target.waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+                    } else {
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            }
+            highlight(target);
+            target.fill(text);
         }, "type into " + selector);
     }
     
@@ -448,13 +922,35 @@ public class WebDSL {
         log("Action: Check '" + selector + "'");
         retry(() -> {
             Locator loc = locator(selector).first();
+            int count = 0;
+            try { count = loc.count(); } catch (Exception ignored) {}
+            if (count == 0) {
+                log("  -> Check target not found. Trying checkbox fallback...");
+                Locator alt = tryFallbackCheckboxLocator(selector);
+                if (alt != null) {
+                    Locator a = alt.first();
+                    waitForLocatorAttached(a, 2000);
+                    if (a.count() > 0) {
+                        if (a.isVisible()) {
+                            highlight(a);
+                            try { a.check(); return; } catch (Exception ignored) {}
+                            a.click();
+                            return;
+                        } else {
+                            a.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } const box = el.closest('.ant-checkbox') || el.closest('[role=checkbox]'); if (box) { box.click(); return; } if (el.parentElement) el.parentElement.click(); }");
+                            return;
+                        }
+                    }
+                }
+            }
+            
             if (loc.isVisible()) {
                 waitFor(selector);
                 highlight(loc);
                 loc.check();
-            } else {
-                loc.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } if (el.parentElement) el.parentElement.click(); }");
+                return;
             }
+            loc.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } const box = el.closest('.ant-checkbox') || el.closest('[role=checkbox]'); if (box) { box.click(); return; } if (el.parentElement) el.parentElement.click(); }");
         }, "check " + selector);
     }
     
@@ -543,6 +1039,7 @@ public class WebDSL {
 
     public void waitFor(String selector) {
         log("Wait: For element '" + selector + "'");
+        String ariaLabel = extractOnlyAriaLabel(selector);
         Locator loc = locator(selector).first();
         try {
             boolean isCheckboxSelector = selector.contains("checkbox") || selector.contains("ant-checkbox-input");
@@ -553,7 +1050,21 @@ public class WebDSL {
                 return;
             }
         } catch (Exception ignored) {}
-        loc.waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+        try {
+            loc.waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+        } catch (RuntimeException e) {
+            if (ariaLabel != null) {
+                Locator alt = resolveInputLocatorFromAriaLabel(ariaLabel);
+                if (alt != null) {
+                    log("  -> Wait fallback: aria-label '" + ariaLabel + "'");
+                    alt.first().waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+                    return;
+                }
+            }
+            RuntimeException login = rewriteIfLogin(e, "waitFor " + selector);
+            if (login != null) throw login;
+            throw e;
+        }
     }
     
     public void waitFor(String selector, Number timeout) {
@@ -630,12 +1141,18 @@ public class WebDSL {
      */
     public void scrollToTop(String selector) {
         log("Action: Scroll '" + selector + "' to top");
+        if (!exists(selector)) {
+            log("Warning: scrollToTop target not found: '" + selector + "'");
+            scrollToTop();
+            return;
+        }
         highlight(selector);
         locator(selector).first().evaluate("el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll', { bubbles: true })); }");
     }
     
     private int getScrollTop(String selector) {
         try {
+            if (!exists(selector)) return 0;
             Object v = locator(selector).first().evaluate("el => el.scrollTop");
             return (v instanceof Number) ? ((Number) v).intValue() : 0;
         } catch (Exception e) {
@@ -645,6 +1162,7 @@ public class WebDSL {
     
     private int getMaxScrollTop(String selector) {
         try {
+            if (!exists(selector)) return 0;
             Object v = locator(selector).first().evaluate("el => el.scrollHeight - el.clientHeight");
             return (v instanceof Number) ? ((Number) v).intValue() : 0;
         } catch (Exception e) {
@@ -810,14 +1328,9 @@ public class WebDSL {
 
             // Check next button
             try {
-                // Try to wait for the next button to be attached/visible
-                try {
-                    locator(nextBtnSelector).first().waitFor(new Locator.WaitForOptions().setTimeout(2000));
-                } catch (Exception ignored) {}
-
-                Locator nextBtn = locator(nextBtnSelector).first();
-                if (nextBtn.count() == 0 || !nextBtn.isVisible()) {
-                    log("Next button '" + nextBtnSelector + "' not found or invisible. Stopping.");
+                Locator nextBtn = resolveNextPaginationButton(nextBtnSelector);
+                if (nextBtn == null || nextBtn.count() == 0 || !nextBtn.isVisible()) {
+                    log("Next button not found or invisible. Stopping.");
                     break;
                 }
                 
@@ -840,6 +1353,99 @@ public class WebDSL {
         }
         
         return allData;
+    }
+    
+    private void waitForLocatorAttached(Locator loc, int timeoutMs) {
+        try {
+            if (loc == null) return;
+            loc.waitFor(new Locator.WaitForOptions()
+                    .setTimeout(timeoutMs)
+                    .setState(com.microsoft.playwright.options.WaitForSelectorState.ATTACHED));
+        } catch (Exception ignored) {}
+    }
+    
+    private Locator tryFallbackCheckboxLocator(String selector) {
+        if (selector == null) return null;
+        String s = selector.trim();
+        if (s.isEmpty()) return null;
+        
+        String[] candidates = new String[] {
+                s.replace("input[type='checkbox']", ".ant-checkbox-input").replace("input[type=\"checkbox\"]", ".ant-checkbox-input").replace("input[type=checkbox]", ".ant-checkbox-input"),
+                ".art-table-row:first-child .ant-checkbox-input",
+                ".ant-table-row:first-child .ant-checkbox-input",
+                "role=checkbox",
+                "a11y:checkbox"
+        };
+        
+        for (String c : candidates) {
+            if (c == null) continue;
+            String t = c.trim();
+            if (t.isEmpty()) continue;
+            try {
+                Locator loc = locator(t);
+                if (loc.count() > 0) {
+                    if (!t.equals(s)) log("  -> Checkbox fallback selector: '" + t + "'");
+                    return loc;
+                }
+            } catch (Exception ignored) {}
+        }
+        log("  -> Checkbox fallback exhausted: '" + selector + "'");
+        return null;
+    }
+    
+    private boolean isCheckboxIntent(String selector) {
+        if (selector == null) return false;
+        String s = selector.toLowerCase();
+        return s.contains("checkbox")
+                || s.contains(".ant-checkbox")
+                || s.contains("[role=checkbox]")
+                || s.contains("role=checkbox")
+                || s.contains("input[type=\"checkbox\"")
+                || s.contains("input[type='checkbox'")
+                || s.contains("input[type=checkbox");
+    }
+    
+    private Locator resolveNextPaginationButton(String preferredSelector) {
+        String preferred = preferredSelector == null ? "" : preferredSelector.trim();
+        String[] candidates = new String[] {
+                preferredSelector,
+                ".ant-pagination-next:not(.ant-pagination-disabled) button",
+                ".ant-pagination-next:not(.ant-pagination-disabled)",
+                ".ant-pagination-next button",
+                "li:has-text('下一页') button",
+                "li[title*='下一页'] button",
+                "button[aria-label*='下一页']",
+                "button[aria-label*='Next']",
+                "role=button[name=\"right\"]",
+                "role=button[name=\"下一页\"]"
+        };
+        
+        for (String sel : candidates) {
+            if (sel == null) continue;
+            String s = sel.trim();
+            if (s.isEmpty()) continue;
+            try {
+                Locator loc = locator(s).first();
+                waitForLocatorAttached(loc, 800);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                String classAttr = null;
+                try { classAttr = loc.getAttribute("class"); } catch (Exception ignored) {}
+                boolean disabled = false;
+                try { disabled = loc.isDisabled(); } catch (Exception ignored) {}
+                if (classAttr != null && classAttr.toLowerCase().contains("disabled")) disabled = true;
+                String ariaDisabled = null;
+                try { ariaDisabled = loc.getAttribute("aria-disabled"); } catch (Exception ignored) {}
+                if ("true".equalsIgnoreCase(ariaDisabled)) disabled = true;
+                if (disabled) continue;
+                if (!preferred.isEmpty() && !s.equals(preferred)) {
+                    log("  -> Next button fallback selector: '" + s + "'");
+                }
+                return loc;
+            } catch (Exception ignored) {}
+        }
+        log("  -> Next button not found for preferred='" + preferredSelector + "'");
+        return null;
     }
     
     private boolean isScrollable(String selector) {
@@ -941,6 +1547,9 @@ public class WebDSL {
             try {
                 Locator containers = locator(containerSelector);
                 int c = containers.count();
+                if (c == 0) {
+                    containerSelector = null;
+                } else {
                 for (int i = 0; i < c; i++) {
                     Locator container = containers.nth(i);
                     try {
@@ -983,14 +1592,18 @@ public class WebDSL {
                         }
                     } catch (Exception ignored) {}
                 }
+                }
             } catch (Exception ignored) {}
-            if (isScrollable(containerSelector)) {
+            if (containerSelector != null && isScrollable(containerSelector)) {
                 return containerSelector;
             }
         }
         // Try to detect scrollable ancestor of the first row
         try {
-            Locator row = locator(rowSelector).first();
+            if (rowSelector == null || rowSelector.trim().isEmpty()) throw new RuntimeException("empty rowSelector");
+            Locator rows = locator(rowSelector);
+            if (rows.count() == 0) throw new RuntimeException("rowSelector not found");
+            Locator row = rows.first();
             // Mark scrollable ancestor with a data attribute
             row.evaluate("el => { " +
                     "let p = el.parentElement; " +
@@ -1010,12 +1623,31 @@ public class WebDSL {
                 return "[data-webdsl-scroll-target='1']";
             }
         } catch (Exception ignored) {}
+        
+        String[] commonContainers = new String[] {
+                ".art-table-body",
+                ".ant-table-body",
+                ".ant-table-content",
+                ".ant-table-tbody",
+                ".el-table__body-wrapper"
+        };
+        for (String c : commonContainers) {
+            try {
+                if (exists(c) && isScrollable(c)) return c;
+            } catch (Exception ignored) {}
+        }
         // Fallback to original selector
         return containerSelector;
     }
     
     public void ensureAtTop(String selector) {
         log("Action: Ensure '" + selector + "' at top");
+        if (!exists(selector)) {
+            log("Warning: EnsureAtTop target not found: '" + selector + "'. Scrolling window top as fallback");
+            scrollToTop();
+            page.waitForTimeout(150);
+            return;
+        }
         // Try multiple strategies to reliably return to top
         for (int i = 0; i < 5 && !isAtTop(selector); i++) {
             try {
@@ -1074,6 +1706,10 @@ public class WebDSL {
      */
     public void scrollBy(String selector, int amount) {
         log("Action: Scroll '" + selector + "' by " + amount + "px");
+        if (!exists(selector)) {
+            log("Warning: scrollBy target not found: '" + selector + "'");
+            return;
+        }
         highlight(selector);
         locator(selector).first().evaluate("el => { el.scrollTop += " + amount + "; el.dispatchEvent(new Event('scroll', { bubbles: true })); }");
     }
@@ -1099,16 +1735,36 @@ public class WebDSL {
     // --- Visual Feedback ---
     
     private void highlight(String selector) {
-        highlight(locator(selector).first());
+        try {
+            Locator loc = locator(selector).first();
+            int c = 0;
+            try { c = loc.count(); } catch (Exception ignored) {}
+            if (c == 0) return;
+            highlight(loc);
+        } catch (Exception ignored) {}
     }
 
     private void highlight(Locator loc) {
         try {
+            int c = 0;
+            try { c = loc.count(); } catch (Exception ignored) {}
+            if (c == 0) return;
             loc.evaluate("e => { e.style.border = '3px solid red'; e.style.backgroundColor = 'rgba(255,0,0,0.1)'; }");
             // brief pause to make it visible
             page.waitForTimeout(200);
         } catch (Exception e) {
             // Ignore highlight errors (e.g. if element detached)
+        }
+    }
+
+    private boolean exists(String selector) {
+        if (selector == null) return false;
+        String s = selector.trim();
+        if (s.isEmpty()) return false;
+        try {
+            return locator(s).count() > 0;
+        } catch (Exception ignored) {
+            return false;
         }
     }
     
