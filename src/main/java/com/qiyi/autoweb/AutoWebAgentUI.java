@@ -11,6 +11,8 @@ import com.qiyi.util.PlayWrightUtil;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 
 import static com.qiyi.autoweb.AutoWebAgent.*;
 
@@ -95,6 +97,17 @@ class AutoWebAgentUI {
         java.util.concurrent.atomic.AtomicBoolean forceNewPageOnExecute = new java.util.concurrent.atomic.AtomicBoolean(false);
         java.util.concurrent.atomic.AtomicLong uiEpoch = new java.util.concurrent.atomic.AtomicLong(0);
         java.util.concurrent.ConcurrentHashMap<String, ModelSession> sessionsByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, String> latestCodeByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, java.util.Set<Integer>> checkedPlanStepsByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, java.util.Map<Integer, Boolean>> stepStatusByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, java.util.Map<Integer, String>> stepErrorByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, String> executionSummaryByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, Integer> stepCursorByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, Boolean> lastStepExecSingleByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, Integer> lastPlanCodeDebugHash = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, Integer> lastPlanCodeRenderDebugHash = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.atomic.AtomicBoolean tableRefreshing = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicBoolean dividerSnapping = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         JFrame frame = new JFrame("AutoWeb 网页自动化控制台");
         AGENT_FRAME = frame;
@@ -107,6 +120,11 @@ class AutoWebAgentUI {
         JButton btnRefinePlan = new JButton("修正计划");
         JButton btnRefine = new JButton("修正代码");
         JButton btnStepExecute = new JButton("分步执行");
+        Color lightBlue = new Color(173, 216, 230);
+        btnExecute.setBackground(lightBlue);
+        btnStepExecute.setBackground(lightBlue);
+        btnExecute.setOpaque(true);
+        btnStepExecute.setOpaque(true);
 
         java.util.function.Consumer<String> setStage = (stage) -> {};
         
@@ -125,7 +143,7 @@ class AutoWebAgentUI {
         JList<String> modelList = new JList<>(models);
         modelList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         JScrollPane modelScroll = new JScrollPane(modelList);
-        modelScroll.setPreferredSize(new Dimension(160, 90));
+        modelScroll.setPreferredSize(new Dimension(120, 90));
         
         String defaultModel = "DeepSeek";
         if ("QWEN_MAX".equals(ACTIVE_MODEL)) defaultModel = "Qwen-Max";
@@ -203,16 +221,16 @@ class AutoWebAgentUI {
         JCheckBox chkUseA11yTree = new JCheckBox("采集 HTML 使用 Accessibility Tree");
         chkUseA11yTree.setAlignmentX(Component.LEFT_ALIGNMENT);
         chkUseA11yTree.setSelected(true);
-        settingsArea.add(Box.createVerticalStrut(6));
-        settingsArea.add(chkUseA11yTree);
-
         JCheckBox chkA11yInterestingOnly = new JCheckBox("Accessibility Tree 仅保留语义节点(interestingOnly)");
         chkA11yInterestingOnly.setAlignmentX(Component.LEFT_ALIGNMENT);
-        chkA11yInterestingOnly.setSelected(true);
+        chkA11yInterestingOnly.setSelected(false);
         chkA11yInterestingOnly.setEnabled(true);
         chkUseA11yTree.addActionListener(e -> chkA11yInterestingOnly.setEnabled(chkUseA11yTree.isSelected()));
-        settingsArea.add(Box.createVerticalStrut(4));
-        settingsArea.add(chkA11yInterestingOnly);
+        JPanel a11yPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        a11yPanel.add(chkUseA11yTree);
+        a11yPanel.add(chkA11yInterestingOnly);
+        settingsArea.add(Box.createVerticalStrut(6));
+        settingsArea.add(a11yPanel);
         
         topContainer.add(settingsArea, BorderLayout.NORTH);
 
@@ -226,7 +244,7 @@ class AutoWebAgentUI {
         promptPanel.add(promptScroll, BorderLayout.CENTER);
 
         JPanel refinePanel = new JPanel(new BorderLayout());
-        refinePanel.setBorder(BorderFactory.createTitledBorder("补充说明提示信息"));
+        refinePanel.setBorder(BorderFactory.createTitledBorder("补充任务说明"));
         JTextArea refineArea = new JTextArea();
         refineArea.setLineWrap(true);
         refineArea.setWrapStyleWord(true);
@@ -245,6 +263,216 @@ class AutoWebAgentUI {
         JTabbedPane codeTabs = new JTabbedPane();
         codePanel.add(codeTabs, BorderLayout.CENTER);
 
+        javax.swing.table.DefaultTableModel planCodeTableModel = new javax.swing.table.DefaultTableModel(new Object[]{"选择/状态", "Plan", "Code"}, 0) {
+            public boolean isCellEditable(int row, int column) {
+                return column == 0;
+            }
+            public Class<?> getColumnClass(int columnIndex) {
+                return columnIndex == 0 ? Object.class : String.class;
+            }
+        };
+        JTable planCodeTable = new JTable(planCodeTableModel);
+        planCodeTable.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        planCodeTable.setRowHeight(22);
+        planCodeTable.setFillsViewportHeight(true);
+        planCodeTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        planCodeTable.setShowHorizontalLines(true);
+        planCodeTable.setShowVerticalLines(true);
+        planCodeTable.setGridColor(new Color(140, 140, 140));
+        planCodeTable.setRowMargin(3);
+        planCodeTable.setIntercellSpacing(new Dimension(2, 2));
+        planCodeTable.getColumnModel().getColumn(0).setPreferredWidth(60);
+        planCodeTable.getColumnModel().getColumn(0).setMinWidth(52);
+        planCodeTable.getColumnModel().getColumn(0).setMaxWidth(70);
+        planCodeTable.getColumnModel().getColumn(0).setCellRenderer(new StepSelectStatusRenderer());
+        planCodeTable.getColumnModel().getColumn(0).setCellEditor(new StepSelectStatusEditor());
+        planCodeTable.getColumnModel().getColumn(1).setCellRenderer(new MultiLineTableCellRenderer());
+        planCodeTable.getColumnModel().getColumn(2).setCellRenderer(new CodeStepCellRenderer());
+        applyTableHeaderStyle(planCodeTable);
+        JScrollPane planCodeScroll = new JScrollPane(planCodeTable);
+
+        JTextArea execSummaryArea = new JTextArea(8, 10);
+        execSummaryArea.setEditable(false);
+        execSummaryArea.setLineWrap(true);
+        execSummaryArea.setWrapStyleWord(true);
+        JScrollPane execSummaryScroll = new JScrollPane(execSummaryArea);
+        JPanel execSummaryPanel = new JPanel(new BorderLayout());
+        execSummaryPanel.setBorder(BorderFactory.createTitledBorder("结果执行展示区"));
+        execSummaryPanel.add(execSummaryScroll, BorderLayout.CENTER);
+
+        JPanel planCodeDisplayPanel = new JPanel(new BorderLayout());
+        planCodeDisplayPanel.setBorder(BorderFactory.createTitledBorder("Plan&Code 展示区"));
+        planCodeDisplayPanel.add(planCodeScroll, BorderLayout.CENTER);
+        planCodeDisplayPanel.add(execSummaryPanel, BorderLayout.SOUTH);
+
+        Runnable refreshPlanCodePanel = () -> {
+            int idx = codeTabs.getSelectedIndex();
+            tableRefreshing.set(true);
+            try {
+                if (idx < 0) {
+                    updatePlanCodeTableRows(
+                            planCodeTable,
+                            planCodeTableModel,
+                            java.util.Collections.emptyList(),
+                            java.util.Collections.emptyList(),
+                            java.util.Collections.emptySet(),
+                            java.util.Collections.emptyMap()
+                    );
+                    execSummaryArea.setText("");
+                    return;
+                }
+                String modelName = codeTabs.getTitleAt(idx);
+                JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
+                JTextArea ta = (JTextArea) sp.getViewport().getView();
+                String codeText = ta.getText();
+                if (modelName != null && codeText != null) {
+                    latestCodeByModel.put(modelName, codeText);
+                }
+                ModelSession s = sessionsByModel.get(modelName);
+                java.util.Set<Integer> checked = checkedPlanStepsByModel.getOrDefault(modelName, java.util.Collections.emptySet());
+                java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.getOrDefault(modelName, java.util.Collections.emptyMap());
+                java.util.List<String> planRows = buildPlanStepRows(s, codeText);
+                java.util.List<String> codeRows = buildCodeStepRows(codeText, s);
+                updatePlanCodeTableRows(
+                        planCodeTable,
+                        planCodeTableModel,
+                        planRows,
+                        codeRows,
+                        checked,
+                        statusMap
+                );
+                adjustPlanCodeColumnWidths(planCodeTable);
+                adjustPlanCodeRowHeights(planCodeTable, 1, 2);
+                int rowCount = planCodeTable.getRowCount();
+                if (rowCount > 0) {
+                    int headerHeight = planCodeTable.getTableHeader() == null ? 0 : planCodeTable.getTableHeader().getPreferredSize().height;
+                    int height = 0;
+                    for (int r = 0; r < rowCount; r++) {
+                        height += planCodeTable.getRowHeight(r);
+                    }
+                    if (height <= 0) {
+                        height = rowCount * planCodeTable.getRowHeight();
+                    }
+                    height = Math.max(120, height + headerHeight + 16);
+                    Dimension extent = planCodeScroll.getViewport().getExtentSize();
+                    int width = Math.max(400, Math.max(planCodeTable.getPreferredSize().width, extent.width));
+                    Dimension target = new Dimension(width, height);
+                    planCodeTable.setPreferredScrollableViewportSize(target);
+                    planCodeTable.setPreferredSize(target);
+                    planCodeTable.setSize(target);
+                    planCodeScroll.getViewport().setViewSize(target);
+                }
+                planCodeTable.revalidate();
+                planCodeTable.repaint();
+                planCodeScroll.revalidate();
+                planCodeScroll.repaint();
+                planCodeDisplayPanel.revalidate();
+                planCodeDisplayPanel.repaint();
+                if (modelName != null && codeText != null && !codeText.trim().isEmpty()) {
+                    int hash = codeText.hashCode() ^ rowCount;
+                    Integer lastHash = lastPlanCodeRenderDebugHash.get(modelName);
+                    if (lastHash == null || lastHash != hash) {
+                        lastPlanCodeRenderDebugHash.put(modelName, hash);
+                        Dimension tableSize = planCodeTable.getSize();
+                        Dimension tablePref = planCodeTable.getPreferredSize();
+                        Dimension viewportExtent = planCodeScroll.getViewport().getExtentSize();
+                        int headerHeight = planCodeTable.getTableHeader() == null ? 0 : planCodeTable.getTableHeader().getPreferredSize().height;
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("MODEL=").append(modelName).append("\n");
+                        sb.append("ROW_COUNT=").append(rowCount).append("\n");
+                        sb.append("PLAN_ROWS=").append(planRows == null ? 0 : planRows.size()).append("\n");
+                        sb.append("CODE_ROWS=").append(codeRows == null ? 0 : codeRows.size()).append("\n");
+                        sb.append("ROW_HEIGHT=").append(planCodeTable.getRowHeight()).append("\n");
+                        sb.append("COL0_WIDTH=").append(planCodeTable.getColumnModel().getColumn(0).getWidth()).append("\n");
+                        sb.append("COL1_WIDTH=").append(planCodeTable.getColumnModel().getColumn(1).getWidth()).append("\n");
+                        sb.append("COL2_WIDTH=").append(planCodeTable.getColumnModel().getColumn(2).getWidth()).append("\n");
+                        sb.append("TABLE_SIZE=").append(tableSize.width).append("x").append(tableSize.height).append("\n");
+                        sb.append("TABLE_PREF=").append(tablePref.width).append("x").append(tablePref.height).append("\n");
+                        sb.append("VIEWPORT_EXTENT=").append(viewportExtent.width).append("x").append(viewportExtent.height).append("\n");
+                        sb.append("HEADER_HEIGHT=").append(headerHeight).append("\n");
+                        sb.append("CODE_BYTES=").append(utf8Bytes(codeText)).append("\n");
+                        String path = saveDebugArtifact(newDebugTimestamp(), modelName, "UI", "plan_code_render_diag", sb.toString(), null);
+                        if (path != null) {
+                            System.out.println("Debug Saved: " + path);
+                        }
+                    }
+                }
+                execSummaryArea.setText(executionSummaryByModel.getOrDefault(modelName, ""));
+                if (planCodeTableModel.getRowCount() == 0 && codeText != null && !codeText.trim().isEmpty()) {
+                    int hash = codeText.hashCode();
+                    Integer lastHash = modelName == null ? null : lastPlanCodeDebugHash.get(modelName);
+                    if (modelName != null && (lastHash == null || lastHash != hash)) {
+                        lastPlanCodeDebugHash.put(modelName, hash);
+                        PlanParseResult parsed = parsePlanFromText(codeText);
+                        int sessionSteps = s == null || s.steps == null ? 0 : s.steps.size();
+                        int parsedSteps = parsed == null || parsed.steps == null ? 0 : parsed.steps.size();
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("MODEL=").append(modelName).append("\n");
+                        sb.append("CODE_BYTES=").append(utf8Bytes(codeText)).append("\n");
+                        sb.append("HAS_PLAN_START=").append(codeText.contains("PLAN_START")).append("\n");
+                        sb.append("HAS_PLAN_END=").append(codeText.contains("PLAN_END")).append("\n");
+                        sb.append("HAS_STEP_TOKEN=").append(codeText.contains("Step") || codeText.contains("步骤")).append("\n");
+                        sb.append("SESSION_STEPS=").append(sessionSteps).append("\n");
+                        sb.append("PARSED_STEPS=").append(parsedSteps).append("\n");
+                        sb.append("PLAN_ROWS=").append(planRows == null ? 0 : planRows.size()).append("\n");
+                        sb.append("CODE_ROWS=").append(codeRows == null ? 0 : codeRows.size()).append("\n");
+                        sb.append("CODE_HEAD=").append(truncate(codeText, 800)).append("\n");
+                        String path = saveDebugArtifact(newDebugTimestamp(), modelName, "UI", "plan_code_table_empty", sb.toString(), null);
+                        if (path != null) {
+                            System.out.println("Debug Saved: " + path);
+                        }
+                    }
+                }
+            } finally {
+                tableRefreshing.set(false);
+            }
+        };
+
+        planCodeTable.addComponentListener(new ComponentAdapter() {
+            public void componentResized(ComponentEvent e) {
+                adjustPlanCodeColumnWidths(planCodeTable);
+                adjustPlanCodeRowHeights(planCodeTable, 1, 2);
+                SwingUtilities.invokeLater(refreshPlanCodePanel);
+            }
+            public void componentShown(ComponentEvent e) {
+                SwingUtilities.invokeLater(refreshPlanCodePanel);
+            }
+        });
+        planCodeScroll.getViewport().addChangeListener(e -> SwingUtilities.invokeLater(refreshPlanCodePanel));
+
+        codeTabs.addChangeListener(e -> {
+            int idx = codeTabs.getSelectedIndex();
+            if (idx >= 0) {
+                String modelName = codeTabs.getTitleAt(idx);
+                if (modelName != null) {
+                    stepCursorByModel.put(modelName, 0);
+                    stepStatusByModel.remove(modelName);
+                }
+            }
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
+        });
+
+        planCodeTableModel.addTableModelListener(e -> {
+            if (tableRefreshing.get()) return;
+            if (e.getType() != javax.swing.event.TableModelEvent.UPDATE) return;
+            if (e.getColumn() != 0) return;
+            int row = e.getFirstRow();
+            if (row < 0) return;
+            int idx = codeTabs.getSelectedIndex();
+            if (idx < 0) return;
+            String modelName = codeTabs.getTitleAt(idx);
+            Object orderObj = planCodeTable.getClientProperty("stepOrder");
+            if (!(orderObj instanceof java.util.List)) return;
+            java.util.List<Integer> order = (java.util.List<Integer>) orderObj;
+            if (row >= order.size()) return;
+            Integer stepIndex = order.get(row);
+            if (stepIndex == null) return;
+            Object cell = planCodeTableModel.getValueAt(row, 0);
+            boolean checked = cell instanceof StepCellData && ((StepCellData) cell).checked;
+            java.util.Set<Integer> set = checkedPlanStepsByModel.computeIfAbsent(modelName, k -> new java.util.HashSet<>());
+            if (checked) set.add(stepIndex); else set.remove(stepIndex);
+        });
+
         JPanel outputPanel = new JPanel(new BorderLayout());
         outputPanel.setBorder(BorderFactory.createTitledBorder("执行日志"));
         JTextArea outputArea = new JTextArea();
@@ -258,8 +486,11 @@ class AutoWebAgentUI {
 
         JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topContainer, bottomSplit);
         mainSplit.setResizeWeight(0.15);
+
+        JSplitPane mainHorizontalSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, mainSplit, planCodeDisplayPanel);
+        mainHorizontalSplit.setResizeWeight(0.5);
         
-        frame.add(mainSplit, BorderLayout.CENTER);
+        frame.add(mainHorizontalSplit, BorderLayout.CENTER);
 
         java.util.function.Consumer<String> uiLogger = (msg) -> {
              SwingUtilities.invokeLater(() -> {
@@ -315,6 +546,13 @@ class AutoWebAgentUI {
             try { refineArea.setText(""); } catch (Exception ignored) {}
             try { outputArea.setText(""); } catch (Exception ignored) {}
             try { codeTabs.removeAll(); } catch (Exception ignored) {}
+            try { latestCodeByModel.clear(); } catch (Exception ignored) {}
+            try { checkedPlanStepsByModel.clear(); } catch (Exception ignored) {}
+            try { stepStatusByModel.clear(); } catch (Exception ignored) {}
+            try { stepErrorByModel.clear(); } catch (Exception ignored) {}
+            try { executionSummaryByModel.clear(); } catch (Exception ignored) {}
+            try { stepCursorByModel.clear(); } catch (Exception ignored) {}
+            try { SwingUtilities.invokeLater(refreshPlanCodePanel); } catch (Exception ignored) {}
             try { uiEpoch.incrementAndGet(); } catch (Exception ignored) {}
             
             try {
@@ -432,7 +670,13 @@ class AutoWebAgentUI {
                                             if (idx >= 0) {
                                                 JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
                                                 JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                                ta.setText(finalText);
+                                            ta.setText(finalText);
+                                            stepStatusByModel.remove(modelName);
+                                            stepErrorByModel.remove(modelName);
+                                            executionSummaryByModel.remove(modelName);
+                                            stepCursorByModel.remove(modelName);
+                                            checkedPlanStepsByModel.remove(modelName);
+                                            refreshPlanCodePanel.run();
                                             }
                                         });
                                         uiLogger.accept("阶段结束: model=" + modelName + ", action=PLAN_REFINE, confirmed=" + parsed.confirmed + ", steps=" + (parsed.steps == null ? 0 : parsed.steps.size()));
@@ -452,7 +696,9 @@ class AutoWebAgentUI {
                                     setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
                                     uiLogger.accept("所有模型生成完成。");
                                     if (isPlanReadyForModels(selectedModels, sessionsByModel, currentPrompt)) {
-                                        showPlanReadyDialog(frame);
+                                        showPlanReadyDialog(frame, () -> {
+                                            if (btnGetCode != null) btnGetCode.doClick();
+                                        });
                                     }
                                 });
                             }
@@ -467,6 +713,7 @@ class AutoWebAgentUI {
             outputArea.setText("");
             hasExecuted.set(false);
             codeTabs.removeAll();
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
             
             uiLogger.accept("=== UI: 点击生成计划 | models=" + selectedModels.size() + " ===");
 
@@ -519,6 +766,12 @@ class AutoWebAgentUI {
                                         JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
                                         JTextArea ta = (JTextArea) sp.getViewport().getView();
                                         ta.setText(finalPlanResult);
+                                        stepStatusByModel.remove(modelName);
+                                        stepErrorByModel.remove(modelName);
+                                        executionSummaryByModel.remove(modelName);
+                                        stepCursorByModel.remove(modelName);
+                                        checkedPlanStepsByModel.remove(modelName);
+                                        refreshPlanCodePanel.run();
                                     }
                                 });
                                 if (parsed.steps == null || parsed.steps.isEmpty()) {
@@ -564,7 +817,9 @@ class AutoWebAgentUI {
                                 setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
                                 uiLogger.accept("所有模型生成完成。");
                                 if (isPlanReadyForModels(selectedModels, sessionsByModel, currentPrompt)) {
-                                    showPlanReadyDialog(frame);
+                                    showPlanReadyDialog(frame, () -> {
+                                        if (btnGetCode != null) btnGetCode.doClick();
+                                    });
                                 }
                             });
                         }
@@ -735,6 +990,7 @@ class AutoWebAgentUI {
             outputArea.setText("");
             hasExecuted.set(false);
             codeTabs.removeAll();
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
 
             uiLogger.accept("=== UI: 点击生成代码 | selectedModels=" + selectedModels.size() + ", readyModels=" + readyModels.size() + " ===");
 
@@ -849,11 +1105,22 @@ class AutoWebAgentUI {
 
                                     SwingUtilities.invokeLater(() -> {
                                         int idx = codeTabs.indexOfTab(modelName);
+                                        if (idx < 0) {
+                                            JTextArea ta = new JTextArea(finalCode);
+                                            ta.setFont(new Font("Monospaced", Font.PLAIN, 12));
+                                            codeTabs.addTab(modelName, new JScrollPane(ta));
+                                            idx = codeTabs.indexOfTab(modelName);
+                                        }
                                         if (idx >= 0) {
                                             JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
                                             JTextArea ta = (JTextArea) sp.getViewport().getView();
                                             ta.setText(finalCode);
+                                            codeTabs.setSelectedIndex(idx);
                                         }
+                                        latestCodeByModel.put(modelName, finalCode);
+                                        stepStatusByModel.remove(modelName);
+                                        stepCursorByModel.remove(modelName);
+                                        refreshPlanCodePanel.run();
                                     });
                                 } catch (Exception ex) {
                                     try {
@@ -1009,6 +1276,12 @@ class AutoWebAgentUI {
 
                     SwingUtilities.invokeLater(() -> {
                         codeArea.setText(finalRefinedCode);
+                        latestCodeByModel.put(modelName, finalRefinedCode);
+                                        stepStatusByModel.remove(modelName);
+                                        stepErrorByModel.remove(modelName);
+                                        executionSummaryByModel.remove(modelName);
+                        stepCursorByModel.remove(modelName);
+                        refreshPlanCodePanel.run();
                         setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
                     });
                     setStage.accept(finalRefinedCode.trim().isEmpty() ? "NONE" : "READY_EXECUTE");
@@ -1020,6 +1293,183 @@ class AutoWebAgentUI {
                     });
                     setStage.accept("NONE");
                     uiLogger.accept("Refine 失败: " + ex.getMessage());
+                }
+            }).start();
+        });
+
+        btnStepExecute.addActionListener(e -> {
+            int selectedIndex = codeTabs.getSelectedIndex();
+            if (selectedIndex < 0) {
+                JOptionPane.showMessageDialog(frame, "请先选择一个包含代码的标签页。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            String modelName = codeTabs.getTitleAt(selectedIndex);
+            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(selectedIndex);
+            JTextArea codeArea = (JTextArea) sp.getViewport().getView();
+            String code = codeArea.getText();
+            if (code == null || code.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "当前没有可执行的代码。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            ModelSession session = sessionsByModel.get(modelName);
+            java.util.List<PlanStep> steps = getStepsForStepExecution(session, code);
+            if (steps.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "未找到可分步执行的步骤。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            java.util.Set<Integer> checkedSteps = checkedPlanStepsByModel.getOrDefault(modelName, java.util.Collections.emptySet());
+            if (!checkedSteps.isEmpty()) {
+                java.util.List<PlanStep> selectedSteps = new java.util.ArrayList<>();
+                for (PlanStep step : steps) {
+                    if (step != null && checkedSteps.contains(step.index)) {
+                        selectedSteps.add(step);
+                    }
+                }
+                if (selectedSteps.isEmpty()) {
+                    JOptionPane.showMessageDialog(frame, "选中的步骤在当前代码中未找到。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+                boolean singleSelected = selectedSteps.size() == 1;
+                lastStepExecSingleByModel.put(modelName, singleSelected);
+                if (singleSelected) {
+                    stepStatusByModel.remove(modelName);
+                    stepErrorByModel.remove(modelName);
+                    executionSummaryByModel.remove(modelName);
+                }
+                java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+                java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+                stepCursorByModel.put(modelName, 0);
+                SwingUtilities.invokeLater(refreshPlanCodePanel);
+                setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
+                outputArea.setText("");
+                uiLogger.accept("=== 分步执行开始: 已选步骤 " + selectedSteps.size() + " ===");
+                setStage.accept("EXECUTING");
+                new Thread(() -> {
+                    try {
+                        String currentPrompt = promptArea.getText();
+                        String entryUrl = chooseExecutionEntryUrl(session, currentPrompt);
+                        Page liveRootPage = ensureLiveRootPage(rootPageRef, connectionRef, forceNewPageOnExecute, hasExecuted, uiLogger);
+                        String beforeUrl = safePageUrl(liveRootPage);
+                        boolean hasLivePage = !beforeUrl.isEmpty() && !"about:blank".equalsIgnoreCase(beforeUrl);
+                        if (entryUrl == null || entryUrl.trim().isEmpty()) {
+                            if (!hasLivePage) {
+                                throw new RuntimeException("未找到入口URL，且当前浏览器没有可用页面。请在“用户任务”里包含入口链接（https://...），或先生成计划并补充入口地址。");
+                            } else {
+                                uiLogger.accept("执行前导航: 未提供入口URL，将使用当前页面 | current=" + beforeUrl);
+                            }
+                        }
+                        ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
+                        for (int i = 0; i < selectedSteps.size(); i++) {
+                            PlanStep step = selectedSteps.get(i);
+                            if (step == null) continue;
+                            int stepIndex = step.index;
+                            String stepCode = buildStepExecutionCode(code, stepIndex);
+                            if (stepCode == null || stepCode.trim().isEmpty()) {
+                                statusMap.put(stepIndex, false);
+                                errorMap.put(stepIndex, "未找到步骤代码");
+                                executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                                SwingUtilities.invokeLater(refreshPlanCodePanel);
+                                uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | 未找到步骤代码 ===");
+                                continue;
+                            }
+                            uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
+                            try {
+                                ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
+                                Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
+                                executeWithGroovy(stepCode, executionTarget, uiLogger);
+                                hasExecuted.set(true);
+                                statusMap.put(stepIndex, true);
+                                errorMap.remove(stepIndex);
+                                stepCursorByModel.put(modelName, i + 1);
+                                uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
+                            } catch (Exception stepEx) {
+                                statusMap.put(stepIndex, false);
+                                String reason = stepEx.getMessage();
+                                if (reason == null || reason.trim().isEmpty()) reason = stepEx.toString();
+                                errorMap.put(stepIndex, reason);
+                                uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + reason + " ===");
+                            }
+                            executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                            SwingUtilities.invokeLater(refreshPlanCodePanel);
+                        }
+                        SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
+                        setStage.accept("READY_EXECUTE");
+                    } catch (Exception ex) {
+                        SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
+                        setStage.accept("READY_EXECUTE");
+                        uiLogger.accept("=== 执行失败: " + ex.getMessage() + " ===");
+                    } finally {
+                        checkedPlanStepsByModel.remove(modelName);
+                        SwingUtilities.invokeLater(refreshPlanCodePanel);
+                    }
+                }).start();
+                return;
+            }
+            int cursor = stepCursorByModel.getOrDefault(modelName, 0);
+            if (cursor >= steps.size()) {
+                stepCursorByModel.put(modelName, 0);
+                SwingUtilities.invokeLater(refreshPlanCodePanel);
+                cursor = 0;
+            }
+            final int cursorForExec = cursor;
+            int stepIndex = steps.get(cursorForExec).index;
+            String stepCode = buildStepExecutionCode(code, stepIndex);
+            if (stepCode == null || stepCode.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "未找到步骤代码，请确保代码中包含 Step 注释。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
+            outputArea.setText("");
+            uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
+            setStage.accept("EXECUTING");
+            new Thread(() -> {
+                boolean ok = false;
+                String errorReason = null;
+                try {
+                    String currentPrompt = promptArea.getText();
+                    String entryUrl = chooseExecutionEntryUrl(session, currentPrompt);
+                    Page liveRootPage = ensureLiveRootPage(rootPageRef, connectionRef, forceNewPageOnExecute, hasExecuted, uiLogger);
+                    String beforeUrl = safePageUrl(liveRootPage);
+                    boolean hasLivePage = !beforeUrl.isEmpty() && !"about:blank".equalsIgnoreCase(beforeUrl);
+                    if (cursorForExec == 0) {
+                        if (entryUrl == null || entryUrl.trim().isEmpty()) {
+                            if (!hasLivePage) {
+                                throw new RuntimeException("未找到入口URL，且当前浏览器没有可用页面。请在“用户任务”里包含入口链接（https://...），或先生成计划并补充入口地址。");
+                            } else {
+                                uiLogger.accept("执行前导航: 未提供入口URL，将使用当前页面 | current=" + beforeUrl);
+                            }
+                        }
+                        ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
+                    }
+                    ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
+                    Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
+                    executeWithGroovy(stepCode, executionTarget, uiLogger);
+                    hasExecuted.set(true);
+                    ok = true;
+                    stepCursorByModel.put(modelName, cursorForExec + 1);
+                    uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
+                } catch (Exception ex) {
+                    errorReason = ex.getMessage();
+                    if (errorReason == null || errorReason.trim().isEmpty()) errorReason = ex.toString();
+                    uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + errorReason + " ===");
+                } finally {
+                    boolean status = ok;
+                    java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+                    java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+                    statusMap.put(stepIndex, status);
+                    if (status) {
+                        errorMap.remove(stepIndex);
+                    } else {
+                        errorMap.put(stepIndex, errorReason == null ? "未知原因" : errorReason);
+                    }
+                    executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                    SwingUtilities.invokeLater(() -> {
+                        refreshPlanCodePanel.run();
+                        setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                    });
+                    setStage.accept("READY_EXECUTE");
+                    checkedPlanStepsByModel.remove(modelName);
+                    SwingUtilities.invokeLater(refreshPlanCodePanel);
                 }
             }).start();
         });
@@ -1051,6 +1501,17 @@ class AutoWebAgentUI {
                 }
             }
 
+            ModelSession session = sessionsByModel.get(modelName);
+            java.util.List<PlanStep> steps = getStepsForStepExecution(session, code);
+            if (steps.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "未找到可分步执行的步骤。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            stepCursorByModel.put(modelName, 0);
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
+
             setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
             outputArea.setText(""); 
             uiLogger.accept("=== 开始执行代码 ===");
@@ -1059,7 +1520,6 @@ class AutoWebAgentUI {
             new Thread(() -> {
                 try {
                     String currentPrompt = promptArea.getText();
-                    ModelSession session = sessionsByModel.get(modelName);
                     String entryUrl = chooseExecutionEntryUrl(session, currentPrompt);
                     uiLogger.accept("执行准备: model=" + modelName + ", entryUrl=" + (entryUrl == null ? "(null)" : entryUrl));
 
@@ -1074,17 +1534,42 @@ class AutoWebAgentUI {
                         }
                     }
                     ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
-
-                    ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
-                    Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
-                    if (hasExecuted.get()) {
-                         uiLogger.accept("检测到代码已执行过，正在重置页面状态...");
-                         ContextWrapper freshContext = reloadAndFindContext(liveRootPage, uiLogger);
-                         executionTarget = freshContext.context;
+                    for (int i = 0; i < steps.size(); i++) {
+                        PlanStep step = steps.get(i);
+                        if (step == null) continue;
+                        int stepIndex = step.index;
+                        String stepCode = buildStepExecutionCode(code, stepIndex);
+                        if (stepCode == null || stepCode.trim().isEmpty()) {
+                            statusMap.put(stepIndex, false);
+                            errorMap.put(stepIndex, "未找到步骤代码");
+                            executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                            uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | 未找到步骤代码 ===");
+                            SwingUtilities.invokeLater(refreshPlanCodePanel);
+                            continue;
+                        }
+                        uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
+                        try {
+                            ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
+                            Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
+                            executeWithGroovy(stepCode, executionTarget, uiLogger);
+                            hasExecuted.set(true);
+                            statusMap.put(stepIndex, true);
+                            errorMap.remove(stepIndex);
+                            stepCursorByModel.put(modelName, i + 1);
+                            uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
+                        } catch (Exception stepEx) {
+                            statusMap.put(stepIndex, false);
+                            String reason = stepEx.getMessage();
+                            if (reason == null || reason.trim().isEmpty()) reason = stepEx.toString();
+                            errorMap.put(stepIndex, reason);
+                            uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + reason + " ===");
+                            SwingUtilities.invokeLater(refreshPlanCodePanel);
+                            continue;
+                        }
+                        executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                        SwingUtilities.invokeLater(refreshPlanCodePanel);
                     }
-                    
-                    executeWithGroovy(code, executionTarget, uiLogger);
-                    hasExecuted.set(true);
+                    executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
                     
                     SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
                     setStage.accept("READY_EXECUTE");
@@ -1098,11 +1583,581 @@ class AutoWebAgentUI {
         });
 
         Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-        int width = 800;
-        int height = screenSize.height - 50;
+        int width = (int) (screenSize.width * (5.0 / 6.0));
+        int height = (int) (screenSize.height * (5.0 / 6.0));
         frame.setSize(width, height);
-        frame.setLocation(screenSize.width - width, 0);
+        frame.setLocation((screenSize.width - width) / 2, (screenSize.height - height) / 2);
         frame.setVisible(true);
+        frame.addComponentListener(new ComponentAdapter() {
+            public void componentResized(ComponentEvent e) {
+                mainHorizontalSplit.setDividerLocation(0.5);
+            }
+        });
+        SwingUtilities.invokeLater(() -> mainHorizontalSplit.setDividerLocation(0.5));
+    }
+
+    private static java.util.List<PlanStep> getStepsForStepExecution(ModelSession session, String code) {
+        java.util.List<PlanStep> steps = session == null ? null : session.steps;
+        if (steps == null || steps.isEmpty()) {
+            PlanParseResult parsed = parsePlanFromText(code);
+            steps = parsed == null ? null : parsed.steps;
+        }
+        if (steps == null || steps.isEmpty()) return java.util.Collections.emptyList();
+        java.util.List<PlanStep> sorted = new java.util.ArrayList<>(steps);
+        sorted.sort(java.util.Comparator.comparingInt(a -> a == null ? Integer.MAX_VALUE : a.index));
+        return sorted;
+    }
+
+    private static String buildExecutionSummary(java.util.Map<Integer, Boolean> statusMap, java.util.Map<Integer, String> errorMap) {
+        if (statusMap == null || statusMap.isEmpty()) return "";
+        int success = 0;
+        int fail = 0;
+        java.util.List<Integer> successSteps = new java.util.ArrayList<>();
+        java.util.List<Integer> failSteps = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<Integer, Boolean> entry : statusMap.entrySet()) {
+            if (Boolean.TRUE.equals(entry.getValue())) {
+                success++;
+                if (entry.getKey() != null) successSteps.add(entry.getKey());
+            } else {
+                fail++;
+                if (entry.getKey() != null) failSteps.add(entry.getKey());
+            }
+        }
+        java.util.Collections.sort(successSteps);
+        java.util.Collections.sort(failSteps);
+        StringBuilder sb = new StringBuilder();
+        sb.append("执行成功").append(success).append("步，执行失败").append(fail).append("步");
+        for (Integer stepIndex : successSteps) {
+            sb.append("\n【执行成功：步骤").append(stepIndex).append("】");
+        }
+        for (Integer stepIndex : failSteps) {
+            String reason = errorMap == null ? null : errorMap.get(stepIndex);
+            if (reason == null || reason.trim().isEmpty()) reason = "未知原因";
+            sb.append("\n【执行失败：步骤").append(stepIndex).append("，原因：").append(reason).append("】");
+        }
+        return sb.toString();
+    }
+
+    private static String buildStepExecutionCode(String code, int stepIndex) {
+        if (code == null || code.trim().isEmpty()) return "";
+        String src = stripPlanBlock(code);
+        // 支持 //、/* */、*、# 等多种 Step 标记前缀
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#\\s*)?(?:Step|步骤)\\s*(\\d+).*$");
+        java.util.regex.Matcher m = p.matcher(src);
+        java.util.List<Integer> starts = new java.util.ArrayList<>();
+        java.util.List<Integer> nums = new java.util.ArrayList<>();
+        while (m.find()) {
+            starts.add(m.start());
+            try {
+                nums.add(Integer.parseInt(m.group(1)));
+            } catch (Exception ignored) {
+                nums.add(nums.size() + 1);
+            }
+        }
+        if (starts.isEmpty()) return "";
+        starts.add(src.length());
+        int targetStart = -1;
+        int targetEnd = -1;
+        for (int i = 0; i < nums.size(); i++) {
+            if (nums.get(i) == stepIndex) {
+                targetStart = starts.get(i);
+                targetEnd = starts.get(i + 1);
+                break;
+            }
+        }
+        if (targetStart < 0 || targetEnd < 0) return "";
+        String prelude = src.substring(0, starts.get(0));
+        String block = src.substring(targetStart, Math.min(targetEnd, src.length()));
+        if (!prelude.isEmpty() && !prelude.endsWith("\n")) prelude = prelude + "\n";
+        return prelude + block;
+    }
+
+    private static java.util.List<String> buildPlanStepRows(ModelSession session, String code) {
+        java.util.List<PlanStep> steps = session == null ? null : session.steps;
+        if (steps == null || steps.isEmpty()) {
+            PlanParseResult parsed = parsePlanFromText(code);
+            steps = parsed == null ? null : parsed.steps;
+        }
+        if (steps == null || steps.isEmpty()) return java.util.Collections.emptyList();
+        java.util.List<PlanStep> stepsSorted = new java.util.ArrayList<>(steps);
+        stepsSorted.sort(java.util.Comparator.comparingInt(a -> a == null ? Integer.MAX_VALUE : a.index));
+        java.util.List<String> rows = new java.util.ArrayList<>();
+        for (PlanStep step : stepsSorted) {
+            if (step == null) continue;
+            String desc = step.description == null ? "" : step.description.trim();
+            String url = step.targetUrl == null ? "" : step.targetUrl.trim();
+            String entry = step.entryAction == null ? "" : step.entryAction.trim();
+            String status = step.status == null ? "" : step.status.trim();
+            StringBuilder line = new StringBuilder();
+            line.append("Step ").append(step.index).append(": ");
+            if (!desc.isEmpty()) line.append(desc);
+            if (!url.isEmpty()) line.append(" | URL=").append(url);
+            if (!entry.isEmpty()) line.append(" | Entry=").append(entry);
+            if (!status.isEmpty()) line.append(" | Status=").append(status);
+            rows.add(line.toString());
+        }
+        return rows;
+    }
+
+    private static java.util.List<String> buildCodeStepRows(String code, ModelSession session) {
+        if (code == null || code.trim().isEmpty()) return java.util.Collections.emptyList();
+        boolean looksLikePlanOnly = code.contains("PLAN_START") && !code.contains("web.");
+        if (looksLikePlanOnly) return java.util.Collections.emptyList();
+        java.util.List<PlanStep> steps = session == null ? null : session.steps;
+        if (steps == null || steps.isEmpty()) {
+            PlanParseResult parsed = parsePlanFromText(code);
+            steps = parsed == null ? null : parsed.steps;
+        }
+        java.util.Map<Integer, String> mapped = extractCodeByStep(stripPlanBlock(code));
+        if (steps == null || steps.isEmpty()) {
+            if (mapped.isEmpty()) return java.util.Collections.emptyList();
+            java.util.List<Integer> order = new java.util.ArrayList<>(mapped.keySet());
+            order.sort(Integer::compareTo);
+            java.util.List<String> rows = new java.util.ArrayList<>();
+            for (Integer idx : order) {
+                if (idx == null) continue;
+                String line = mapped.get(idx);
+                if (line == null) line = "";
+                if (line.trim().isEmpty()) line = "（未生成可执行代码）";
+                rows.add("Step " + idx + ": " + line);
+            }
+            return rows;
+        }
+        java.util.List<PlanStep> sorted = new java.util.ArrayList<>(steps);
+        sorted.sort(java.util.Comparator.comparingInt(a -> a == null ? Integer.MAX_VALUE : a.index));
+        java.util.List<String> rows = new java.util.ArrayList<>();
+        for (PlanStep step : sorted) {
+            if (step == null) continue;
+            String line = mapped.get(step.index);
+            if (line == null) line = "";
+            if (line.trim().isEmpty()) line = "（未生成可执行代码）";
+            rows.add("Step " + step.index + ": " + line);
+        }
+        return rows;
+    }
+
+    private static java.util.Map<Integer, String> extractCodeByStep(String code) {
+        java.util.Map<Integer, String> res = new java.util.HashMap<>();
+        if (code == null || code.trim().isEmpty()) return res;
+        String src = stripPlanBlock(code);
+        // 支持 //、/* */、*、# 等多种 Step 标记前缀
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#\\s*)?(?:Step|步骤)\\s*(\\d+).*$");
+        java.util.regex.Matcher m = p.matcher(src);
+        java.util.List<Integer> starts = new java.util.ArrayList<>();
+        java.util.List<Integer> nums = new java.util.ArrayList<>();
+        while (m.find()) {
+            starts.add(m.start());
+            try {
+                nums.add(Integer.parseInt(m.group(1)));
+            } catch (Exception ignored) {
+                nums.add(nums.size() + 1);
+            }
+        }
+        if (starts.isEmpty()) return res;
+        starts.add(src.length());
+        for (int i = 0; i < nums.size(); i++) {
+            int start = starts.get(i);
+            int end = starts.get(i + 1);
+            String block = src.substring(start, Math.min(end, src.length()));
+            String cleaned = stripCodeCommentsForDisplay(block);
+            res.put(nums.get(i), cleaned == null ? "" : cleaned.trim());
+        }
+        return res;
+    }
+
+    private static String stripPlanBlock(String code) {
+        if (code == null) return "";
+        int ps = code.indexOf("PLAN_START");
+        int pe = code.indexOf("PLAN_END");
+        if (ps >= 0 && pe > ps) {
+            int start = code.lastIndexOf("/*", ps);
+            int end = code.indexOf("*/", pe);
+            if (start >= 0 && end > pe) {
+                return code.substring(0, start) + code.substring(end + 2);
+            }
+            // PLAN 块未包裹在块注释内时，直接截断移除
+            int after = pe + "PLAN_END".length();
+            return code.substring(0, ps) + code.substring(Math.min(after, code.length()));
+        }
+        return code;
+    }
+
+    private static String stripCodeCommentsForDisplay(String code) {
+        if (code == null || code.trim().isEmpty()) return "";
+        String cleaned = code.replaceAll("(?s)/\\*.*?\\*/", " ");
+        cleaned = cleaned.replaceAll("(?m)^\\s*//.*$", " ");
+        cleaned = collapseBlankLines(cleaned);
+        return cleaned;
+    }
+
+    private static String collapseBlankLines(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text.replaceAll("(?m)(\\n\\s*\\n)+", "\n\n");
+    }
+
+    private static void updatePlanCodeTableRows(
+            JTable table,
+            javax.swing.table.DefaultTableModel model,
+            java.util.List<String> planRows,
+            java.util.List<String> codeRows,
+            java.util.Set<Integer> checkedSteps,
+            java.util.Map<Integer, Boolean> statusMap
+    ) {
+        if (model == null) return;
+        model.setRowCount(0);
+        java.util.Map<Integer, String> planByStep = new java.util.HashMap<>();
+        java.util.Map<Integer, String> codeByStep = new java.util.HashMap<>();
+        java.util.Set<Integer> stepSet = new java.util.TreeSet<>();
+        if (planRows != null) {
+            for (String row : planRows) {
+                Integer stepIndex = parseStepIndex(row);
+                if (stepIndex != null) {
+                    planByStep.put(stepIndex, row);
+                    stepSet.add(stepIndex);
+                }
+            }
+        }
+        if (codeRows != null) {
+            for (String row : codeRows) {
+                Integer stepIndex = parseStepIndex(row);
+                if (stepIndex != null) {
+                    codeByStep.put(stepIndex, row);
+                    stepSet.add(stepIndex);
+                }
+            }
+        }
+        java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (Integer stepIndex : stepSet) {
+            String plan = planByStep.getOrDefault(stepIndex, "");
+            String code = codeByStep.getOrDefault(stepIndex, "");
+            boolean checked = stepIndex != null && checkedSteps != null && checkedSteps.contains(stepIndex);
+            Boolean status = stepIndex == null || statusMap == null ? null : statusMap.get(stepIndex);
+            model.addRow(new Object[]{new StepCellData(checked, status), plan, code});
+            order.add(stepIndex);
+        }
+        if (table != null) {
+            table.putClientProperty("stepOrder", order);
+            adjustPlanCodeRowHeights(table, 1, 2);
+        }
+    }
+
+    private static void adjustPlanCodeRowHeights(JTable table, int planCol, int codeCol) {
+        if (table == null) return;
+        int pCol = Math.min(planCol, table.getColumnCount() - 1);
+        int cCol = Math.min(codeCol, table.getColumnCount() - 1);
+        int pWidth = table.getColumnModel().getColumn(pCol).getWidth();
+        int cWidth = table.getColumnModel().getColumn(cCol).getWidth();
+        if (pWidth <= 0 && table.getParent() != null) pWidth = table.getParent().getWidth() / 3;
+        if (cWidth <= 0 && table.getParent() != null) cWidth = table.getParent().getWidth() * 2 / 3;
+        if (pWidth <= 0) pWidth = 200;
+        if (cWidth <= 0) cWidth = 400;
+        for (int r = 0; r < table.getRowCount(); r++) {
+            java.awt.Component pComp = table.prepareRenderer(table.getCellRenderer(r, pCol), r, pCol);
+            java.awt.Component cComp = table.prepareRenderer(table.getCellRenderer(r, cCol), r, cCol);
+            if (pComp instanceof JTextArea) {
+                ((JTextArea) pComp).setSize(new Dimension(pWidth, Integer.MAX_VALUE));
+            } else {
+                pComp.setSize(new Dimension(pWidth, pComp.getPreferredSize().height));
+            }
+            if (cComp instanceof JTextArea) {
+                ((JTextArea) cComp).setSize(new Dimension(cWidth, Integer.MAX_VALUE));
+            } else {
+                cComp.setSize(new Dimension(cWidth, cComp.getPreferredSize().height));
+            }
+            int h = Math.max(pComp.getPreferredSize().height, cComp.getPreferredSize().height) + table.getRowMargin();
+            int target = Math.max(22, h);
+            table.setRowHeight(r, target);
+        }
+    }
+
+    private static void adjustPlanCodeColumnWidths(JTable table) {
+        if (table == null) return;
+        if (table.getColumnCount() < 3) return;
+        int total = table.getWidth();
+        java.awt.Container parent = table.getParent();
+        if (parent instanceof javax.swing.JViewport) {
+            total = ((javax.swing.JViewport) parent).getExtentSize().width;
+        } else if (total <= 0 && parent != null) {
+            total = parent.getWidth();
+        }
+        if (total <= 0) total = 600;
+        int fixed = table.getColumnModel().getColumn(0).getWidth();
+        if (fixed <= 0) fixed = table.getColumnModel().getColumn(0).getPreferredWidth();
+        int remaining = Math.max(240, total - fixed);
+        int plan = Math.max(120, remaining / 3);
+        int code = Math.max(200, remaining - plan);
+        table.getColumnModel().getColumn(1).setPreferredWidth(plan);
+        table.getColumnModel().getColumn(1).setMinWidth(120);
+        table.getColumnModel().getColumn(1).setWidth(plan);
+        table.getColumnModel().getColumn(2).setPreferredWidth(code);
+        table.getColumnModel().getColumn(2).setMinWidth(200);
+        table.getColumnModel().getColumn(2).setWidth(code);
+        int totalWidth = fixed + plan + code;
+        if (totalWidth < total) totalWidth = total;
+        Dimension pref = table.getPreferredSize();
+        table.setPreferredSize(new Dimension(totalWidth, pref.height));
+        table.revalidate();
+    }
+
+    private static Integer parseStepIndex(String row) {
+        if (row == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:Step|步骤)\\s*(\\d+)").matcher(row);
+        if (!m.find()) return null;
+        try {
+            return Integer.parseInt(m.group(1));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String truncate(String text, int max) {
+        if (text == null) return "";
+        if (max <= 0) return "";
+        if (text.length() <= max) return text;
+        return text.substring(0, max);
+    }
+
+    private static void applyTableHeaderStyle(JTable table) {
+        if (table == null) return;
+        javax.swing.table.JTableHeader header = table.getTableHeader();
+        if (header == null) return;
+        Color headerBg = new Color(220, 235, 255);
+        Color headerFg = new Color(30, 30, 30);
+        Color headerLine = new Color(120, 120, 120);
+        header.setBackground(headerBg);
+        header.setForeground(headerFg);
+        header.setFont(header.getFont().deriveFont(Font.BOLD));
+        Dimension pref = header.getPreferredSize();
+        header.setPreferredSize(new Dimension(pref.width, 28));
+        javax.swing.table.DefaultTableCellRenderer renderer = new javax.swing.table.DefaultTableCellRenderer();
+        renderer.setHorizontalAlignment(SwingConstants.CENTER);
+        renderer.setVerticalAlignment(SwingConstants.CENTER);
+        renderer.setOpaque(true);
+        renderer.setBackground(headerBg);
+        renderer.setForeground(headerFg);
+        renderer.setBorder(BorderFactory.createMatteBorder(0, 0, 2, 1, headerLine));
+        header.setDefaultRenderer(renderer);
+    }
+
+    private static class StepCellData {
+        boolean checked;
+        Boolean status;
+
+        StepCellData(boolean checked, Boolean status) {
+            this.checked = checked;
+            this.status = status;
+        }
+    }
+
+    private static class MultiLineTableCellRenderer extends JTextArea implements javax.swing.table.TableCellRenderer {
+        MultiLineTableCellRenderer() {
+            setLineWrap(true);
+            setWrapStyleWord(true);
+            setOpaque(true);
+        }
+
+        public java.awt.Component getTableCellRendererComponent(
+                JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column
+        ) {
+            setText(value == null ? "" : value.toString());
+            if (isSelected) {
+                setBackground(table.getSelectionBackground());
+                setForeground(table.getSelectionForeground());
+            } else {
+                setBackground(table.getBackground());
+                setForeground(table.getForeground());
+            }
+            setFont(table.getFont());
+            return this;
+        }
+    }
+
+    private static class CodeStepCellRenderer extends JTextArea implements javax.swing.table.TableCellRenderer {
+        CodeStepCellRenderer() {
+            setLineWrap(true);
+            setWrapStyleWord(true);
+            setOpaque(true);
+        }
+
+        public java.awt.Component getTableCellRendererComponent(
+                JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column
+        ) {
+            setText(value == null ? "" : value.toString());
+            if (isSelected) {
+                setBackground(table.getSelectionBackground());
+                setForeground(table.getSelectionForeground());
+            } else {
+                setBackground(new Color(221, 235, 255));
+                setForeground(table.getForeground());
+            }
+            setFont(table.getFont().deriveFont(Font.BOLD));
+            return this;
+        }
+    }
+
+    private static class StepSelectStatusRenderer extends JPanel implements javax.swing.table.TableCellRenderer {
+        private static final Icon OK_ICON = new StatusMarkIcon(true);
+        private static final Icon FAIL_ICON = new StatusMarkIcon(false);
+        private final JCheckBox checkBox = new JCheckBox();
+        private final JLabel statusLabel = new JLabel();
+
+        StepSelectStatusRenderer() {
+            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+            setOpaque(true);
+            checkBox.setOpaque(false);
+            statusLabel.setOpaque(false);
+            checkBox.setAlignmentX(Component.CENTER_ALIGNMENT);
+            statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            add(checkBox);
+            add(statusLabel);
+        }
+
+        public java.awt.Component getTableCellRendererComponent(
+                JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column
+        ) {
+            if (isSelected) {
+                setBackground(table.getSelectionBackground());
+                setForeground(table.getSelectionForeground());
+            } else {
+                setBackground(table.getBackground());
+                setForeground(table.getForeground());
+            }
+            StepCellData data = value instanceof StepCellData ? (StepCellData) value : null;
+            boolean checked = data != null && data.checked;
+            checkBox.setSelected(checked);
+            Boolean status = data == null ? null : data.status;
+            if (status == null) {
+                statusLabel.setIcon(null);
+            } else if (status) {
+                statusLabel.setIcon(OK_ICON);
+            } else {
+                statusLabel.setIcon(FAIL_ICON);
+            }
+            return this;
+        }
+    }
+
+    private static class StepSelectStatusEditor extends javax.swing.AbstractCellEditor implements javax.swing.table.TableCellEditor {
+        private static final Icon OK_ICON = new StatusMarkIcon(true);
+        private static final Icon FAIL_ICON = new StatusMarkIcon(false);
+        private final JPanel panel = new JPanel();
+        private final JCheckBox checkBox = new JCheckBox();
+        private final JLabel statusLabel = new JLabel();
+        private StepCellData data;
+
+        StepSelectStatusEditor() {
+            panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+            panel.setOpaque(true);
+            checkBox.setOpaque(false);
+            statusLabel.setOpaque(false);
+            checkBox.setAlignmentX(Component.CENTER_ALIGNMENT);
+            statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            panel.add(checkBox);
+            panel.add(statusLabel);
+            checkBox.addActionListener(e -> stopCellEditing());
+        }
+
+        public java.awt.Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column) {
+            data = value instanceof StepCellData ? (StepCellData) value : new StepCellData(false, null);
+            checkBox.setSelected(data.checked);
+            Boolean status = data.status;
+            if (status == null) {
+                statusLabel.setIcon(null);
+            } else if (status) {
+                statusLabel.setIcon(OK_ICON);
+            } else {
+                statusLabel.setIcon(FAIL_ICON);
+            }
+            panel.setBackground(isSelected ? table.getSelectionBackground() : table.getBackground());
+            panel.setForeground(isSelected ? table.getSelectionForeground() : table.getForeground());
+            return panel;
+        }
+
+        public Object getCellEditorValue() {
+            if (data == null) data = new StepCellData(false, null);
+            data.checked = checkBox.isSelected();
+            return data;
+        }
+    }
+
+    private static class StatusIconRenderer extends JLabel implements javax.swing.table.TableCellRenderer {
+        private static final Icon OK_ICON = new StatusMarkIcon(true);
+        private static final Icon FAIL_ICON = new StatusMarkIcon(false);
+
+        StatusIconRenderer() {
+            setHorizontalAlignment(SwingConstants.CENTER);
+            setVerticalAlignment(SwingConstants.CENTER);
+            setOpaque(true);
+        }
+
+        public java.awt.Component getTableCellRendererComponent(
+                JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column
+        ) {
+            if (isSelected) {
+                setBackground(table.getSelectionBackground());
+                setForeground(table.getSelectionForeground());
+            } else {
+                setBackground(table.getBackground());
+                setForeground(table.getForeground());
+            }
+            Boolean status = value instanceof Boolean ? (Boolean) value : null;
+            if (status == null) {
+                setIcon(null);
+            } else if (status) {
+                setIcon(OK_ICON);
+            } else {
+                setIcon(FAIL_ICON);
+            }
+            setText("");
+            return this;
+        }
+    }
+
+    private static class StatusMarkIcon implements Icon {
+        private final boolean ok;
+        private final int size;
+
+        StatusMarkIcon(boolean ok) {
+            this.ok = ok;
+            this.size = 12;
+        }
+
+        public int getIconWidth() {
+            return size;
+        }
+
+        public int getIconHeight() {
+            return size;
+        }
+
+        public void paintIcon(Component c, Graphics g, int x, int y) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                if (ok) {
+                    g2.setColor(new Color(16, 128, 64));
+                    int x1 = x + 2;
+                    int y1 = y + size / 2;
+                    int x2 = x + size / 2 - 1;
+                    int y2 = y + size - 3;
+                    int x3 = x + size - 2;
+                    int y3 = y + 2;
+                    g2.drawLine(x1, y1, x2, y2);
+                    g2.drawLine(x2, y2, x3, y3);
+                } else {
+                    g2.setColor(new Color(180, 48, 48));
+                    int x1 = x + 2;
+                    int y1 = y + 2;
+                    int x2 = x + size - 2;
+                    int y2 = y + size - 2;
+                    g2.drawLine(x1, y1, x2, y2);
+                    g2.drawLine(x1, y2, x2, y1);
+                }
+            } finally {
+                g2.dispose();
+            }
+        }
     }
 
     private static void setActionButtonsEnabled(
@@ -1273,10 +2328,10 @@ class AutoWebAgentUI {
         return true;
     }
 
-    private static void showPlanReadyDialog(JFrame frame) {
+    private static void showPlanReadyDialog(JFrame frame, Runnable onGenerateCode) {
         if (frame == null) return;
         Runnable show = () -> {
-            String msg = "计划已生成，可以点击“生成代码”。\n回车后关闭弹窗（也可以手动点击确认）。";
+            String msg = "计划已生成，是否继续生成代码？";
             JDialog dialog = new JDialog(frame, "提示", true);
             JPanel panel = new JPanel(new BorderLayout(12, 12));
             panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -1288,18 +2343,24 @@ class AutoWebAgentUI {
             ta.setOpaque(false);
             ta.setBorder(null);
 
-            JButton ok = new JButton("确认");
-            ok.addActionListener(ev -> dialog.dispose());
+            JButton btnGenerate = new JButton("生成代码");
+            btnGenerate.addActionListener(ev -> {
+                dialog.dispose();
+                if (onGenerateCode != null) onGenerateCode.run();
+            });
+            JButton btnCancel = new JButton("取消");
+            btnCancel.addActionListener(ev -> dialog.dispose());
             JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-            btnPanel.add(ok);
+            btnPanel.add(btnCancel);
+            btnPanel.add(btnGenerate);
 
             panel.add(ta, BorderLayout.CENTER);
             panel.add(btnPanel, BorderLayout.SOUTH);
             dialog.setContentPane(panel);
-            dialog.getRootPane().setDefaultButton(ok);
+            dialog.getRootPane().setDefaultButton(btnGenerate);
             dialog.pack();
             dialog.setLocationRelativeTo(frame);
-            ok.requestFocusInWindow();
+            btnGenerate.requestFocusInWindow();
             dialog.setVisible(true);
         };
         if (SwingUtilities.isEventDispatchThread()) {

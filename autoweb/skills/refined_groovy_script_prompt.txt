@@ -48,6 +48,11 @@ CRITICAL FIX REQUIREMENTS:
 - **Variable Rule**: Do NOT redeclare variables.
 - **No Translation**: Do NOT translate keywords from the User Task or Hint. Use them exactly as provided.
 - **Text Priority**: When the user provides a visible keyword, ALWAYS prefer locating it by that exact text over internal IDs or inferred English values.
+- **Accessibility Tree 模式**: 如果 Context Payload 看起来是 Accessibility Tree/ARIA Snapshot（包含 role/name、AXTree、ariaSnapshot 结构或纯语义节点文本），必须遵循：
+  - 优先基于可见文本/role/name 的选择方式（如 `text='...'` 或 `:has-text('...')`），避免深层 DOM 链路或未出现在快照中的属性。
+  - 优先使用 `web.clickButton('文本')`、`web.waitFor('text=...')`、`web.waitForLoadState()`；页面跳转或弹窗出现后先等待再交互。
+  - 当中文文本可能被空格拆开时，使用正则文本选择器（如 `text=/搜\\s*索/`）。
+  - 尽量避免使用 `nth` 或基于索引的定位，除非快照中只有索引可用且已明确。
 - **Popup/Modal Data**: When extracting info (counts, messages, reasons) from a modal, ALWAYS prefer `extractModalData` with regex for ALL fields. Do NOT try to `getText` on sub-elements (like `.error-message`) unless regex fails, as structure is often flat.
   - Regex must include a capturing group `()`.
   - **Robust Regex**: Text often lacks standard separators or has erratic spacing. ALWAYS make separators (like colons) optional (e.g. `[:：\s]*`) to handle various formats.

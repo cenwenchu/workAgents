@@ -475,10 +475,11 @@ class PlanRoutingSupport {
         res.confirmed = !upper.contains("STATUS: UNKNOWN") && !res.hasQuestion;
 
         // 使用 Step N 作为分段标记，把整段 plan 切成多个 step block
-        java.util.regex.Pattern stepHeader = java.util.regex.Pattern.compile("(?mi)^\\s*\\**Step\\s+(\\d+)\\**[:：]?\\s*$");
+        java.util.regex.Pattern stepHeader = java.util.regex.Pattern.compile("(?mi)^\\s*(?:[-*]\\s*)?\\**(?:Step|步骤)\\s*(\\d+)\\**\\s*[:：]?\\s*(.*)$");
         java.util.regex.Matcher mh = stepHeader.matcher(src);
         java.util.List<Integer> stepStarts = new java.util.ArrayList<>();
         java.util.List<Integer> stepNums = new java.util.ArrayList<>();
+        java.util.List<String> inlineDescs = new java.util.ArrayList<>();
         while (mh.find()) {
             stepStarts.add(mh.start());
             try {
@@ -486,6 +487,8 @@ class PlanRoutingSupport {
             } catch (Exception ignored) {
                 stepNums.add(stepNums.size() + 1);
             }
+            String inline = mh.group(2);
+            inlineDescs.add(inline == null ? "" : inline.trim());
         }
         if (stepNums.isEmpty()) {
             // 找不到 step 头通常意味着模型没按格式输出，此时强制判为未确认
@@ -507,6 +510,12 @@ class PlanRoutingSupport {
             step.entryAction = matchFirst(block, "(?mi)^\\s*-\\s*\\**Entry\\s+Point\\s+Action\\**\\s*[:：]\\s*(.*)$");
             step.status = matchFirst(block, "(?mi)^\\s*-\\s*\\**Status\\**\\s*[:：]\\s*(.*)$");
 
+            if ((step.description == null || step.description.trim().isEmpty()) && i < inlineDescs.size()) {
+                String inline = inlineDescs.get(i);
+                if (inline != null && !inline.trim().isEmpty()) {
+                    step.description = inline.trim();
+                }
+            }
             if (step.targetUrl != null) {
                 step.targetUrl = step.targetUrl.trim().replaceAll("[`*]", "");
             }

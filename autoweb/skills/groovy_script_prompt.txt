@@ -56,6 +56,11 @@ GLOBAL PRINCIPLES:
 - **Waiting**: The DSL handles basic waiting, but be mindful of logical flow.
 - **No Translation**: Do NOT translate keywords from the User Task into other languages. Use them exactly as they appear in the task or HTML.
 - **Text Priority**: When the user provides a visible keyword (e.g., button name, label), ALWAYS prefer locating it by that exact text (e.g., `text='待发货'`) over internal IDs or inferred English values, unless the text is ambiguous.
+- **Accessibility Tree 模式**: 如果 Context Payload 看起来是 Accessibility Tree/ARIA Snapshot（包含 role/name、AXTree、ariaSnapshot 结构或纯语义节点文本），必须遵循：
+  - 优先基于可见文本/role/name 的选择方式（如 `text='...'` 或 `:has-text('...')`），避免深层 DOM 链路或未出现在快照中的属性。
+  - 优先使用 `web.clickButton('文本')`、`web.waitFor('text=...')`、`web.waitForLoadState()`；页面跳转或弹窗出现后先等待再交互。
+  - 当中文文本可能被空格拆开时，使用正则文本选择器（如 `text=/搜\\s*索/`）。
+  - 尽量避免使用 `nth` 或基于索引的定位，除非快照中只有索引可用且已明确。
 
 [CODEGEN_ONLY_START]
 API REFERENCE (DSL - variable 'web'):

@@ -34,6 +34,8 @@
 - 关键机制
   - setActionButtonsEnabled(...) ：统一控制按钮可用性，避免并发操作（ 方法 ）。
   - refreshRootPageRefIfNeeded(...) ：执行/采集前刷新 rootPageRef，避免“历史 URL/已关闭页面复用”问题（位于本文件后半段）。
+  - Plan&Code 展示刷新：refreshPlanCodePanel 会按当前模型 Tab 重建表格行、按 viewport 宽度调列宽/行高并触发重绘；组件 show/resize/viewport 变化后会二次刷新以保证布局稳定。
+  - Plan/Code 行解析：Plan 侧依赖 parsePlanFromText 生成 Step 行；Code 侧会先剔除 PLAN_START~PLAN_END，再从多种注释前缀的 Step 标记中提取分段。
 - 关于“修正计划/分步执行”两个按钮
   - btnRefinePlan 与 btnStepExecute 目前 只创建/布局/参与 enable/disable ，没有 addActionListener 、也没有 ActionMap/InputMap 绑定引用点（可由引用扫描看出仅出现在定义和 setActionButtonsEnabled/清空 busy 判断中， grep 结果对应区域 ）。
   - 现有“修正规划（PLAN_REFINE）”能力由“生成计划”按钮在 pending-entry 分支中触发，而非“修正计划”按钮。
