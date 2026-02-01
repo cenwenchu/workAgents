@@ -9,6 +9,10 @@ import com.microsoft.playwright.Page;
 class PayloadSupport {
     /**
      * 在 currentUrl 与 step snapshot URL 中选择更可靠的当前页
+     *
+     * @param currentUrl 当前页面 URL
+     * @param snapshots 已采集的 step 快照
+     * @return 可靠的当前页 URL
      */
     private static String chooseCurrentUrl(String currentUrl, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots) {
         String cur = currentUrl == null ? "" : currentUrl.trim();
@@ -51,6 +55,10 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_ONLY 模式 payload
+     *
+     * @param currentPage 当前页面
+     * @param userPrompt 用户任务描述
+     * @return payload 文本
      */
     static String buildPlanOnlyPayload(Page currentPage, String userPrompt) {
         return buildPlanOnlyPayload(StorageSupport.safePageUrl(currentPage), userPrompt);
@@ -58,6 +66,10 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_ONLY 模式 payload（使用当前 URL）
+     *
+     * @param currentUrl 当前 URL
+     * @param userPrompt 用户任务描述
+     * @return payload 文本
      */
     static String buildPlanOnlyPayload(String currentUrl, String userPrompt) {
         String userProvidedUrl = PlanRoutingSupport.extractFirstUrlFromText(userPrompt);
@@ -98,6 +110,10 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_ENTRY 模式 payload
+     *
+     * @param currentPage 当前页面
+     * @param userPrompt 用户任务描述
+     * @return payload 文本
      */
     static String buildPlanEntryPayload(Page currentPage, String userPrompt) {
         return buildPlanEntryPayload(StorageSupport.safePageUrl(currentPage), userPrompt);
@@ -105,6 +121,10 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_ENTRY 模式 payload（包含用户 URL 映射）
+     *
+     * @param currentUrl 当前 URL
+     * @param userPrompt 用户任务描述
+     * @return payload 文本
      */
     static String buildPlanEntryPayload(String currentUrl, String userPrompt) {
         String userProvidedUrl = PlanRoutingSupport.extractFirstUrlFromText(userPrompt);
@@ -147,6 +167,11 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_REFINE 模式 payload
+     *
+     * @param currentPage 当前页面
+     * @param userPrompt 用户任务描述
+     * @param refineHint 补充入口说明
+     * @return payload 文本
      */
     static String buildPlanRefinePayload(Page currentPage, String userPrompt, String refineHint) {
         return buildPlanRefinePayload(StorageSupport.safePageUrl(currentPage), userPrompt, refineHint);
@@ -154,6 +179,11 @@ class PayloadSupport {
 
     /**
      * 生成 PLAN_REFINE 模式 payload（包含补充提示与 URL 映射）
+     *
+     * @param currentUrl 当前 URL
+     * @param userPrompt 用户任务描述
+     * @param refineHint 补充入口说明
+     * @return payload 文本
      */
     static String buildPlanRefinePayload(String currentUrl, String userPrompt, String refineHint) {
         java.util.LinkedHashMap<String, String> urlMappings = new java.util.LinkedHashMap<>();
@@ -206,6 +236,11 @@ class PayloadSupport {
 
     /**
      * 生成 CODEGEN 模式 payload
+     *
+     * @param currentPage 当前页面
+     * @param planText 计划文本
+     * @param snapshots 步骤快照
+     * @return payload 文本
      */
     static String buildCodegenPayload(Page currentPage, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots) {
         String currentUrl = chooseCurrentUrl(StorageSupport.safePageUrl(currentPage), snapshots);
@@ -223,6 +258,10 @@ class PayloadSupport {
 
     /**
      * 将步骤 HTML 片段追加到 payload，控制总长度
+     *
+     * @param sb 目标 builder
+     * @param snapshots 步骤快照
+     * @param maxChars 最大字符数
      */
     private static void appendStepHtmlsCleaned(StringBuilder sb, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, int maxChars) {
         if (sb == null) return;
@@ -262,6 +301,17 @@ class PayloadSupport {
         }
     }
 
+    /**
+     * 生成 REFINE_CODE 模式 payload
+     *
+     * @param currentPage 当前页面
+     * @param planText 计划文本
+     * @param snapshots 步骤快照
+     * @param currentCleanedHtml 当前页清洗后的 HTML
+     * @param userPrompt 用户任务描述
+     * @param refineHint 修正提示
+     * @return payload 文本
+     */
     static String buildRefinePayload(Page currentPage, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint) {
         String currentUrl = chooseCurrentUrl(StorageSupport.safePageUrl(currentPage), snapshots);
         StringBuilder sb = new StringBuilder();

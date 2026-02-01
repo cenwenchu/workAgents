@@ -44,6 +44,12 @@ class GroovySupport {
 
     /**
      * 生成 Groovy 代码或计划文本
+     *
+     * @param userPrompt 用户任务描述
+     * @param cleanedHtml 已清洗的 payload
+     * @param uiLogger 可选日志输出
+     * @param modelName 模型名称
+     * @return 模型输出文本
      */
     static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger, String modelName) {
         if (GROOVY_SCRIPT_PROMPT_TEMPLATE == null || GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
@@ -85,6 +91,9 @@ class GroovySupport {
 
     /**
      * 从 payload 中解析 MODE 字段
+     *
+     * @param payload payload 文本
+     * @return 解析到的 MODE
      */
     static String extractModeFromPayload(String payload) {
         if (payload == null) return "";
@@ -120,6 +129,15 @@ class GroovySupport {
 
     /**
      * 根据执行结果和补充说明生成修正后的 Groovy 脚本
+     *
+     * @param originalUserPrompt 用户任务描述
+     * @param cleanedHtml 已清洗的 payload
+     * @param previousCode 旧代码
+     * @param execOutput 执行输出
+     * @param refineHint 修正说明
+     * @param uiLogger 可选日志输出
+     * @param modelName 模型名称
+     * @return 模型输出文本
      */
     static String generateRefinedGroovyScript(
         String originalUserPrompt,
@@ -174,6 +192,9 @@ class GroovySupport {
 
     /**
      * 将模型输出归一化为可执行 Groovy 形式
+     *
+     * @param code 模型输出
+     * @return 归一化后的代码
      */
     static String normalizeGeneratedGroovy(String code) {
         if (code == null) return null;

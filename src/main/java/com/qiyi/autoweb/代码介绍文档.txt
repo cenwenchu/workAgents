@@ -3,6 +3,12 @@
 - 入口在 AutoWebAgent.java ：连接浏览器、选择当前 Page/Frame，然后启动 Swing 控制台 AutoWebAgentUI.createGUI 。
 - UI 上“生成计划/生成代码/修正代码/执行代码”分别走：payload 组装（ PayloadSupport.java ）→ 模型调用封装（ GroovySupport.java ）→（代码时）Groovy 静态检查（ GroovyLinter.java ）→ Groovy 执行绑定 WebDSL（ WebDSL.java ）。
 - 页面数据采集发生在 AutoWebAgent.prepareStepHtmls ：按计划 step 采集 RAW_HTML 或 ARIA_SNAPSHOT，清洗/截断后写入缓存（ HtmlSnapshotDao.java ）。
+核心流程拆解
+- 生成计划：PayloadSupport.buildPlanOnlyPayload/buildPlanEntryPayload → GroovySupport.generateGroovyScript → PlanRoutingSupport.parsePlanFromText → UI 展示 Plan & Code。
+- 生成代码：校验计划可用 → AutoWebAgent.prepareStepHtmls 采集 step HTML → PayloadSupport.buildCodegenPayload → GroovySupport.generateGroovyScript → GroovyLinter → UI 展示。
+- 修正代码：采集当前页 freshHtml → PayloadSupport.buildRefinePayload → GroovySupport.generateRefinedGroovyScript → GroovyLinter → UI 展示。
+- 执行代码：PlanRoutingSupport.ensureRootPageAtUrl 入口导航 → 重新选最佳上下文 → Groovy 执行（WebDSL 绑定）。
+- 分步执行：UI 选择 step → buildStepExecutionCode 抽取 → 逐步执行并汇总执行摘要。
 ## 各类中文说明（autoweb 包）
 ### 1) AutoWebAgent：系统入口 + 采集/执行编排
 - 核心职责

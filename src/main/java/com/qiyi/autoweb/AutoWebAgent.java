@@ -418,14 +418,23 @@ public class AutoWebAgent {
         return StorageSupport.saveDebugArtifact(ts, modelName, mode, kind, content, uiLogger);
     }
 
+    /**
+     * 基于计划步骤与用户任务，推断执行入口 URL
+     */
     static String chooseExecutionEntryUrl(ModelSession session, String currentPrompt) {
         return PlanRoutingSupport.chooseExecutionEntryUrl(session, currentPrompt);
     }
 
+    /**
+     * 确保 rootPage 定位到目标 URL（必要时导航或等待）
+     */
     static boolean ensureRootPageAtUrl(Page rootPage, String targetUrl, java.util.function.Consumer<String> uiLogger) {
         return PlanRoutingSupport.ensureRootPageAtUrl(rootPage, targetUrl, uiLogger);
     }
 
+    /**
+     * 等待并选取最佳执行上下文（主页面或 iframe）
+     */
     static ContextWrapper waitAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         return PlanRoutingSupport.waitAndFindContext(rootPage, uiLogger);
     }
@@ -434,10 +443,21 @@ public class AutoWebAgent {
         return PlanRoutingSupport.scanContexts(page);
     }
 
+    /**
+     * 重新加载页面后选择最佳上下文
+     */
     static ContextWrapper reloadAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         return PlanRoutingSupport.reloadAndFindContext(rootPage, uiLogger);
     }
 
+    /**
+     * 按计划步骤采集页面 HTML 并返回快照
+     *
+     * @param rootPage 根页面
+     * @param steps 计划步骤
+     * @param uiLogger 可选日志输出
+     * @return 采集结果列表
+     */
     static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
@@ -446,6 +466,15 @@ public class AutoWebAgent {
         return prepareStepHtmls(rootPage, steps, uiLogger, HtmlCaptureMode.RAW_HTML);
     }
 
+    /**
+     * 按采集模式采集 HTML 快照（RAW_HTML/ARIA_SNAPSHOT）
+     *
+     * @param rootPage 根页面
+     * @param steps 计划步骤
+     * @param uiLogger 可选日志输出
+     * @param captureMode 采集模式
+     * @return 采集结果列表
+     */
     static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
@@ -455,6 +484,16 @@ public class AutoWebAgent {
         return prepareStepHtmls(rootPage, steps, uiLogger, captureMode, true);
     }
 
+    /**
+     * 按采集模式与 interestingOnly 采集 HTML 快照
+     *
+     * @param rootPage 根页面
+     * @param steps 计划步骤
+     * @param uiLogger 可选日志输出
+     * @param captureMode 采集模式
+     * @param a11yInterestingOnly ARIA 快照是否仅保留语义节点
+     * @return 采集结果列表
+     */
     static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
@@ -674,14 +713,37 @@ public class AutoWebAgent {
         }
     }
 
+    /**
+     * 读取页面内容（默认 RAW_HTML）
+     *
+     * @param pageOrFrame Page 或 Frame
+     * @return 页面内容
+     */
     static String getPageContent(Object pageOrFrame) {
         return getPageContent(pageOrFrame, HtmlCaptureMode.RAW_HTML);
     }
 
+    /**
+    /**
+     * 读取页面内容（按采集模式）
+     *
+     * @param pageOrFrame Page 或 Frame
+     * @param captureMode 采集模式
+     * @return 页面内容
+     */
     static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode) {
         return getPageContent(pageOrFrame, captureMode, true);
     }
 
+    /**
+    /**
+     * 读取页面内容（支持 A11y interestingOnly）
+     *
+     * @param pageOrFrame Page 或 Frame
+     * @param captureMode 采集模式
+     * @param a11yInterestingOnly ARIA 快照是否仅保留语义节点
+     * @return 页面内容
+     */
     static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode, boolean a11yInterestingOnly) {
         HtmlCaptureMode mode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
         if (mode == HtmlCaptureMode.ARIA_SNAPSHOT) {
@@ -937,6 +999,13 @@ public class AutoWebAgent {
         }
     }
 
+    /**
+     * 清洗并截断采集内容，控制 payload 大小
+     *
+     * @param captured 采集内容
+     * @param captureMode 采集模式
+     * @return 清洗后的内容
+     */
     static String cleanCapturedContent(String captured, HtmlCaptureMode captureMode) {
         HtmlCaptureMode mode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
         String out;

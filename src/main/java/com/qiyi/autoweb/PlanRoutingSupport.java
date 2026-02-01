@@ -8,7 +8,10 @@ import com.microsoft.playwright.Page;
  */
 class PlanRoutingSupport {
     /**
-     * 判断字符串是否看起来是 URL
+     * 判断字符串是否为可用的 URL 形态
+     *
+     * @param s 待检查字符串
+     * @return true 表示看起来是 http/https URL
      */
     static boolean looksLikeUrl(String s) {
         if (s == null) return false;
@@ -18,6 +21,9 @@ class PlanRoutingSupport {
 
     /**
      * 去除 URL 的 query 参数，保留 hash
+     *
+     * @param s 原始 URL
+     * @return 去除 query 后的 URL
      */
     static String stripUrlQuery(String s) {
         if (s == null) return "";
@@ -31,7 +37,10 @@ class PlanRoutingSupport {
     }
 
     /**
-     * 去掉反引号/引号包裹的 URL token
+     * 去掉反引号或引号包裹的 URL token
+     *
+     * @param s 原始 token
+     * @return 规范化后的 URL token
      */
     static String normalizeUrlToken(String s) {
         if (s == null) return null;
@@ -59,6 +68,14 @@ class PlanRoutingSupport {
 
     /**
      * 等待页面 URL 前缀匹配目标地址（忽略 query）
+     *
+     * @param page 页面对象
+     * @param expectedPrefix 目标 URL 前缀
+     * @param maxWaitMs 最大等待时间
+     * @param intervalMs 轮询间隔
+     * @param uiLogger 可选日志输出
+     * @param stage 日志阶段标识
+     * @return true 表示在等待时间内到达目标前缀
      */
     static boolean waitForUrlPrefix(Page page, String expectedPrefix, long maxWaitMs, long intervalMs, java.util.function.Consumer<String> uiLogger, String stage) {
         if (page == null) return false;
@@ -99,7 +116,11 @@ class PlanRoutingSupport {
     }
 
     /**
-     * 从计划、快照与用户提示中选出执行入口 URL
+     * 从计划步骤、快照与用户提示中选出执行入口 URL
+     *
+     * @param session 模型会话状态
+     * @param currentPrompt 当前用户提示
+     * @return 推断出的入口 URL（可能为空）
      */
     static String chooseExecutionEntryUrl(AutoWebAgent.ModelSession session, String currentPrompt) {
         try {
@@ -134,6 +155,11 @@ class PlanRoutingSupport {
 
     /**
      * 执行前导航到目标 URL，并等待页面加载完成
+     *
+     * @param rootPage 根页面
+     * @param targetUrl 目标地址
+     * @param uiLogger 可选日志输出
+     * @return true 表示发生了导航，false 表示未导航或未满足条件
      */
     static boolean ensureRootPageAtUrl(Page rootPage, String targetUrl, java.util.function.Consumer<String> uiLogger) {
         if (rootPage == null) return false;
@@ -186,6 +212,9 @@ class PlanRoutingSupport {
 
     /**
      * 扫描页面与 iframe 上下文，选择最佳内容区域
+     *
+     * @param page 根页面
+     * @return 扫描结果，包含所有上下文与最佳候选
      */
     static AutoWebAgent.ScanResult scanContexts(Page page) {
         synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
@@ -288,6 +317,13 @@ class PlanRoutingSupport {
         }
     }
 
+    /**
+     * 从页面与 iframe 上下文中选择最佳执行上下文
+     *
+     * @param rootPage 根页面
+     * @param uiLogger 可选日志输出
+     * @return 最佳上下文包装
+     */
     static AutoWebAgent.ContextWrapper selectBestContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         AutoWebAgent.ScanResult res = scanContexts(rootPage);
         if (res != null && res.best != null) {
@@ -301,6 +337,13 @@ class PlanRoutingSupport {
         return fallback;
     }
 
+    /**
+     * 刷新页面后重新识别最佳上下文
+     *
+     * @param rootPage 根页面
+     * @param uiLogger 可选日志输出
+     * @return 最佳上下文包装
+     */
     static AutoWebAgent.ContextWrapper reloadAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         if (uiLogger != null) uiLogger.accept("正在刷新页面并重新识别最佳上下文...");
         synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
@@ -332,6 +375,13 @@ class PlanRoutingSupport {
         }
     }
 
+    /**
+     * 等待页面稳定后选择最佳上下文
+     *
+     * @param rootPage 根页面
+     * @param uiLogger 可选日志输出
+     * @return 最佳上下文包装
+     */
     static AutoWebAgent.ContextWrapper waitAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         if (rootPage == null) {
             AutoWebAgent.ContextWrapper fallback = new AutoWebAgent.ContextWrapper();
@@ -353,6 +403,12 @@ class PlanRoutingSupport {
         }
     }
 
+    /**
+     * 从文本中提取第一个 URL
+     *
+     * @param text 原始文本
+     * @return 提取到的 URL 或 null
+     */
     static String extractFirstUrlFromText(String text) {
         if (text == null) return null;
         try {
@@ -376,6 +432,12 @@ class PlanRoutingSupport {
         return null;
     }
 
+    /**
+     * 从文本中抽取“页面名称-URL”映射
+     *
+     * @param text 原始文本
+     * @return 顺序保持的映射表
+     */
     static java.util.LinkedHashMap<String, String> extractUrlMappingsFromText(String text) {
         java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
         if (text == null) return out;
@@ -455,6 +517,12 @@ class PlanRoutingSupport {
         return null;
     }
 
+    /**
+     * 解析计划文本为 PlanParseResult
+     *
+     * @param text 模型输出文本
+     * @return 解析结果（包含步骤与确认状态）
+     */
     static AutoWebAgent.PlanParseResult parsePlanFromText(String text) {
         AutoWebAgent.PlanParseResult res = new AutoWebAgent.PlanParseResult();
         if (text == null) return res;
@@ -595,6 +663,13 @@ class PlanRoutingSupport {
         return new java.util.ArrayList<>(labels);
     }
 
+    /**
+     * 生成入口地址补全提示文本
+     *
+     * @param needModels 需要补入口的模型列表
+     * @param sessionsByModel 模型会话状态
+     * @return 提示文本
+     */
     static String buildEntryInputHint(java.util.List<String> needModels, java.util.Map<String, AutoWebAgent.ModelSession> sessionsByModel) {
         java.util.List<String> labels = inferMissingEntryLabels(needModels, sessionsByModel);
         StringBuilder sb = new StringBuilder();
@@ -621,6 +696,13 @@ class PlanRoutingSupport {
         return sb.toString();
     }
 
+    /**
+     * 从文本中按正则提取首个分组
+     *
+     * @param src 源文本
+     * @param regex 正则表达式（含分组）
+     * @return 首个分组匹配结果或 null
+     */
     static String matchFirst(String src, String regex) {
         if (src == null) return null;
         java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);

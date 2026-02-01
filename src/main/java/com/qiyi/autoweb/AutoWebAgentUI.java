@@ -368,61 +368,7 @@ class AutoWebAgentUI {
                 planCodeScroll.repaint();
                 planCodeDisplayPanel.revalidate();
                 planCodeDisplayPanel.repaint();
-                if (modelName != null && codeText != null && !codeText.trim().isEmpty()) {
-                    int hash = codeText.hashCode() ^ rowCount;
-                    Integer lastHash = lastPlanCodeRenderDebugHash.get(modelName);
-                    if (lastHash == null || lastHash != hash) {
-                        lastPlanCodeRenderDebugHash.put(modelName, hash);
-                        Dimension tableSize = planCodeTable.getSize();
-                        Dimension tablePref = planCodeTable.getPreferredSize();
-                        Dimension viewportExtent = planCodeScroll.getViewport().getExtentSize();
-                        int headerHeight = planCodeTable.getTableHeader() == null ? 0 : planCodeTable.getTableHeader().getPreferredSize().height;
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("MODEL=").append(modelName).append("\n");
-                        sb.append("ROW_COUNT=").append(rowCount).append("\n");
-                        sb.append("PLAN_ROWS=").append(planRows == null ? 0 : planRows.size()).append("\n");
-                        sb.append("CODE_ROWS=").append(codeRows == null ? 0 : codeRows.size()).append("\n");
-                        sb.append("ROW_HEIGHT=").append(planCodeTable.getRowHeight()).append("\n");
-                        sb.append("COL0_WIDTH=").append(planCodeTable.getColumnModel().getColumn(0).getWidth()).append("\n");
-                        sb.append("COL1_WIDTH=").append(planCodeTable.getColumnModel().getColumn(1).getWidth()).append("\n");
-                        sb.append("COL2_WIDTH=").append(planCodeTable.getColumnModel().getColumn(2).getWidth()).append("\n");
-                        sb.append("TABLE_SIZE=").append(tableSize.width).append("x").append(tableSize.height).append("\n");
-                        sb.append("TABLE_PREF=").append(tablePref.width).append("x").append(tablePref.height).append("\n");
-                        sb.append("VIEWPORT_EXTENT=").append(viewportExtent.width).append("x").append(viewportExtent.height).append("\n");
-                        sb.append("HEADER_HEIGHT=").append(headerHeight).append("\n");
-                        sb.append("CODE_BYTES=").append(utf8Bytes(codeText)).append("\n");
-                        String path = saveDebugArtifact(newDebugTimestamp(), modelName, "UI", "plan_code_render_diag", sb.toString(), null);
-                        if (path != null) {
-                            System.out.println("Debug Saved: " + path);
-                        }
-                    }
-                }
                 execSummaryArea.setText(executionSummaryByModel.getOrDefault(modelName, ""));
-                if (planCodeTableModel.getRowCount() == 0 && codeText != null && !codeText.trim().isEmpty()) {
-                    int hash = codeText.hashCode();
-                    Integer lastHash = modelName == null ? null : lastPlanCodeDebugHash.get(modelName);
-                    if (modelName != null && (lastHash == null || lastHash != hash)) {
-                        lastPlanCodeDebugHash.put(modelName, hash);
-                        PlanParseResult parsed = parsePlanFromText(codeText);
-                        int sessionSteps = s == null || s.steps == null ? 0 : s.steps.size();
-                        int parsedSteps = parsed == null || parsed.steps == null ? 0 : parsed.steps.size();
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("MODEL=").append(modelName).append("\n");
-                        sb.append("CODE_BYTES=").append(utf8Bytes(codeText)).append("\n");
-                        sb.append("HAS_PLAN_START=").append(codeText.contains("PLAN_START")).append("\n");
-                        sb.append("HAS_PLAN_END=").append(codeText.contains("PLAN_END")).append("\n");
-                        sb.append("HAS_STEP_TOKEN=").append(codeText.contains("Step") || codeText.contains("步骤")).append("\n");
-                        sb.append("SESSION_STEPS=").append(sessionSteps).append("\n");
-                        sb.append("PARSED_STEPS=").append(parsedSteps).append("\n");
-                        sb.append("PLAN_ROWS=").append(planRows == null ? 0 : planRows.size()).append("\n");
-                        sb.append("CODE_ROWS=").append(codeRows == null ? 0 : codeRows.size()).append("\n");
-                        sb.append("CODE_HEAD=").append(truncate(codeText, 800)).append("\n");
-                        String path = saveDebugArtifact(newDebugTimestamp(), modelName, "UI", "plan_code_table_empty", sb.toString(), null);
-                        if (path != null) {
-                            System.out.println("Debug Saved: " + path);
-                        }
-                    }
-                }
             } finally {
                 tableRefreshing.set(false);
             }
@@ -1608,6 +1554,9 @@ class AutoWebAgentUI {
         return sorted;
     }
 
+    /**
+     * 汇总步骤执行结果，生成展示区的执行摘要文本
+     */
     private static String buildExecutionSummary(java.util.Map<Integer, Boolean> statusMap, java.util.Map<Integer, String> errorMap) {
         if (statusMap == null || statusMap.isEmpty()) return "";
         int success = 0;
@@ -1638,6 +1587,9 @@ class AutoWebAgentUI {
         return sb.toString();
     }
 
+    /**
+     * 从完整代码中抽取指定步骤对应的可执行片段
+     */
     private static String buildStepExecutionCode(String code, int stepIndex) {
         if (code == null || code.trim().isEmpty()) return "";
         String src = stripPlanBlock(code);
@@ -1672,6 +1624,9 @@ class AutoWebAgentUI {
         return prelude + block;
     }
 
+    /**
+     * 构建 Plan 列表展示文本（按步骤顺序）
+     */
     private static java.util.List<String> buildPlanStepRows(ModelSession session, String code) {
         java.util.List<PlanStep> steps = session == null ? null : session.steps;
         if (steps == null || steps.isEmpty()) {
@@ -1699,6 +1654,9 @@ class AutoWebAgentUI {
         return rows;
     }
 
+    /**
+     * 构建 Code 列表展示文本（按步骤顺序）
+     */
     private static java.util.List<String> buildCodeStepRows(String code, ModelSession session) {
         if (code == null || code.trim().isEmpty()) return java.util.Collections.emptyList();
         boolean looksLikePlanOnly = code.contains("PLAN_START") && !code.contains("web.");
@@ -1736,6 +1694,9 @@ class AutoWebAgentUI {
         return rows;
     }
 
+    /**
+     * 解析代码中的 Step 标记并按步骤编号归档
+     */
     private static java.util.Map<Integer, String> extractCodeByStep(String code) {
         java.util.Map<Integer, String> res = new java.util.HashMap<>();
         if (code == null || code.trim().isEmpty()) return res;
@@ -1765,6 +1726,9 @@ class AutoWebAgentUI {
         return res;
     }
 
+    /**
+     * 移除 PLAN_START~PLAN_END 计划块，保留可执行脚本部分
+     */
     private static String stripPlanBlock(String code) {
         if (code == null) return "";
         int ps = code.indexOf("PLAN_START");
@@ -1782,6 +1746,9 @@ class AutoWebAgentUI {
         return code;
     }
 
+    /**
+     * 清理代码注释，便于在 Code 列简要展示
+     */
     private static String stripCodeCommentsForDisplay(String code) {
         if (code == null || code.trim().isEmpty()) return "";
         String cleaned = code.replaceAll("(?s)/\\*.*?\\*/", " ");
@@ -1841,6 +1808,9 @@ class AutoWebAgentUI {
         }
     }
 
+    /**
+     * 按内容高度自适应 Plan/Code 两列的行高
+     */
     private static void adjustPlanCodeRowHeights(JTable table, int planCol, int codeCol) {
         if (table == null) return;
         int pCol = Math.min(planCol, table.getColumnCount() - 1);
@@ -1870,6 +1840,9 @@ class AutoWebAgentUI {
         }
     }
 
+    /**
+     * 按视口宽度重新分配 Plan/Code 列宽，确保 Code 列填满展示区
+     */
     private static void adjustPlanCodeColumnWidths(JTable table) {
         if (table == null) return;
         if (table.getColumnCount() < 3) return;
