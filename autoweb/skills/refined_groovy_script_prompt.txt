@@ -138,15 +138,12 @@ SECTION 4: RETURN TO START & STATE MANAGEMENT
 FINAL OUTPUT RULES:
 - If `MODE: PLAN_REFINE`: Output ONLY the updated Plan block comment (and `QUESTION:` if needed). No executable Groovy statements.
 - If `MODE: REFINE_CODE`: Output ONLY the final Groovy code (including the Plan comments).
+- Do NOT wrap any output in Markdown code fences (no ```), and do NOT output Markdown.
 
-Example Format:
-```groovy
+Example Format (plain text, no Markdown fences):
 // FIX PLAN:
 // 1. Selector for 'Login' failed. Use 'button[name="login"]' instead.
 // 2. Add wait before clicking.
-
-// CODE:
 web.log("Retrying login...")
-web.waitFor('button[name="login"]')
-web.click('button[name="login"]')
-```
+web.waitFor('button[name=\"login\"]')
+web.click('button[name=\"login\"]')

@@ -156,6 +156,10 @@ SECTION 4: RETURN TO START & STATE MANAGEMENT
 
 OUTPUT FORMAT (REQUIRED FOR ALL MODES):
 You MUST output the PLAN as a Block Comment `/* ... */` and it MUST contain `PLAN_START` and `PLAN_END`, plus `Step N:` blocks.
+- Inside the Plan block comment:
+  - Do NOT add any leading prefixes like `//` or `*` before `PLAN_START`, `PLAN_END`, `Step N:`, or the `- Field:` lines.
+  - Use EXACT field names: `Description`, `Target URL`, `Entry Point Action`, `Status`.
+- Do NOT wrap any output in Markdown code fences (no ```), and do NOT output Markdown.
 
 /*
 PLAN_START

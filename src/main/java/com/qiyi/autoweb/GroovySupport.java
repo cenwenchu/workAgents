@@ -23,16 +23,22 @@ class GroovySupport {
 
             Path groovyPromptPath = skillsDir.resolve("groovy_script_prompt.txt");
             if (Files.exists(groovyPromptPath)) {
-                GROOVY_SCRIPT_PROMPT_TEMPLATE = new String(Files.readAllBytes(groovyPromptPath), java.nio.charset.StandardCharsets.UTF_8);
-                System.out.println("Loaded groovy_script_prompt.txt");
+                String next = new String(Files.readAllBytes(groovyPromptPath), java.nio.charset.StandardCharsets.UTF_8);
+                if (!next.equals(GROOVY_SCRIPT_PROMPT_TEMPLATE)) {
+                    GROOVY_SCRIPT_PROMPT_TEMPLATE = next;
+                    System.out.println("Loaded groovy_script_prompt.txt");
+                }
             } else {
                 System.err.println("Warning: groovy_script_prompt.txt not found at " + groovyPromptPath.toAbsolutePath());
             }
 
             Path refinedPromptPath = skillsDir.resolve("refined_groovy_script_prompt.txt");
             if (Files.exists(refinedPromptPath)) {
-                REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE = new String(Files.readAllBytes(refinedPromptPath), java.nio.charset.StandardCharsets.UTF_8);
-                System.out.println("Loaded refined_groovy_script_prompt.txt");
+                String next = new String(Files.readAllBytes(refinedPromptPath), java.nio.charset.StandardCharsets.UTF_8);
+                if (!next.equals(REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE)) {
+                    REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE = next;
+                    System.out.println("Loaded refined_groovy_script_prompt.txt");
+                }
             } else {
                 System.err.println("Warning: refined_groovy_script_prompt.txt not found at " + refinedPromptPath.toAbsolutePath());
             }
@@ -52,9 +58,7 @@ class GroovySupport {
      * @return 模型输出文本
      */
     static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger, String modelName) {
-        if (GROOVY_SCRIPT_PROMPT_TEMPLATE == null || GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
-            loadPrompts();
-        }
+        loadPrompts();
 
         String mode = extractModeFromPayload(cleanedHtml);
         String template = GROOVY_SCRIPT_PROMPT_TEMPLATE;
@@ -148,9 +152,7 @@ class GroovySupport {
         java.util.function.Consumer<String> uiLogger,
         String modelName
     ) {
-        if (REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE == null || REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE.isEmpty()) {
-            loadPrompts();
-        }
+        loadPrompts();
 
         String mode = extractModeFromPayload(cleanedHtml);
         String template = REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE;
@@ -199,7 +201,9 @@ class GroovySupport {
     static String normalizeGeneratedGroovy(String code) {
         if (code == null) return null;
         String normalized = code;
-        normalized = normalized.replaceAll("(?m)^(\\s*)(PLAN:|THINK:|ANALYSIS:|REASONING:|思考过程|计划|PLAN_START|PLAN_END|QUESTION:)\\b", "$1// $2");
+        normalized = normalizePlanBlockCommentFormat(normalized);
+        normalized = normalized.replaceAll("(?m)^(\\s*)(PLAN:|THINK:|ANALYSIS:|REASONING:|思考过程|计划|QUESTION:)\\b", "$1// $2");
+        normalized = commentPlanMarkersOutsideBlockComment(normalized);
         normalized = normalized.replaceAll("(?m)^(\\s*)(-\\s*[Pp]lan\\b.*)", "$1// $2");
         normalized = normalized.replaceAll("(?m)^(\\s*)(\\*\\s*[Pp]lan\\b.*)", "$1// $2");
         normalized = normalized.replaceAll("(?m)^(\\s*)(\\[Plan\\].*)", "$1// $2");
@@ -252,6 +256,81 @@ class GroovySupport {
         }
         normalized = escapeNonInterpolatedDollarInDoubleQuotedStrings(normalized);
         return normalized;
+    }
+
+    private static String normalizePlanBlockCommentFormat(String code) {
+        if (code == null) return null;
+        int ps = code.indexOf("PLAN_START");
+        int pe = code.indexOf("PLAN_END");
+        if (ps < 0 || pe < 0 || pe <= ps) return code;
+        int blockStart = code.lastIndexOf("/*", ps);
+        if (blockStart < 0) return code;
+        int blockEnd = code.indexOf("*/", pe);
+        if (blockEnd < 0) return code;
+
+        String before = code.substring(0, blockStart + 2);
+        String inside = code.substring(blockStart + 2, blockEnd);
+        String after = code.substring(blockEnd);
+
+        String[] lines = inside.split("\\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            int p = 0;
+            while (p < line.length() && Character.isWhitespace(line.charAt(p))) p++;
+            String indent = line.substring(0, p);
+            String rest = line.substring(p);
+            if (rest.startsWith("*")) {
+                rest = rest.substring(1);
+                if (!rest.isEmpty() && rest.charAt(0) == ' ') rest = rest.substring(1);
+            }
+            if (rest.startsWith("//")) {
+                rest = rest.substring(2);
+                if (!rest.isEmpty() && rest.charAt(0) == ' ') rest = rest.substring(1);
+            }
+            lines[i] = indent + rest;
+        }
+        String rebuiltInside = String.join("\n", lines);
+        return before + rebuiltInside + after;
+    }
+
+    private static String commentPlanMarkersOutsideBlockComment(String code) {
+        if (code == null) return null;
+        String[] lines = code.split("\\n", -1);
+        boolean inBlock = false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (!inBlock) {
+                String trimmed = line == null ? "" : line.trim();
+                if (trimmed.startsWith("PLAN_START") || trimmed.startsWith("PLAN_END")) {
+                    lines[i] = "// " + line;
+                }
+            }
+            inBlock = updateBlockCommentState(inBlock, line);
+        }
+        return String.join("\n", lines);
+    }
+
+    private static boolean updateBlockCommentState(boolean inBlock, String line) {
+        if (line == null || line.isEmpty()) return inBlock;
+        int i = 0;
+        int n = line.length();
+        boolean state = inBlock;
+        while (i < n - 1) {
+            char c = line.charAt(i);
+            char d = line.charAt(i + 1);
+            if (!state && c == '/' && d == '*') {
+                state = true;
+                i += 2;
+                continue;
+            }
+            if (state && c == '*' && d == '/') {
+                state = false;
+                i += 2;
+                continue;
+            }
+            i++;
+        }
+        return state;
     }
 
     private static String escapeNonInterpolatedDollarInDoubleQuotedStrings(String code) {

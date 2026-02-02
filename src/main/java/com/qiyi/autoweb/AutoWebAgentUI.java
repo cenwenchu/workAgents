@@ -1770,7 +1770,7 @@ class AutoWebAgentUI {
         if (code == null || code.trim().isEmpty()) return "";
         String src = stripPlanBlock(code);
         // 支持 //、/* */、*、# 等多种 Step 标记前缀
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#\\s*)?(?:Step|步骤)\\s*(\\d+).*$");
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#+\\s*)?(?:[-–—*>•]+\\s*)?(?:Step|步骤)\\s*[:：#\\-]?\\s*(\\d+).*$");
         java.util.regex.Matcher m = p.matcher(src);
         java.util.List<Integer> starts = new java.util.ArrayList<>();
         java.util.List<Integer> nums = new java.util.ArrayList<>();
@@ -1878,7 +1878,7 @@ class AutoWebAgentUI {
         if (code == null || code.trim().isEmpty()) return res;
         String src = stripPlanBlock(code);
         // 支持 //、/* */、*、# 等多种 Step 标记前缀
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#\\s*)?(?:Step|步骤)\\s*(\\d+).*$");
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#+\\s*)?(?:[-–—*>•]+\\s*)?(?:Step|步骤)\\s*[:：#\\-]?\\s*(\\d+).*$");
         java.util.regex.Matcher m = p.matcher(src);
         java.util.List<Integer> starts = new java.util.ArrayList<>();
         java.util.List<Integer> nums = new java.util.ArrayList<>();

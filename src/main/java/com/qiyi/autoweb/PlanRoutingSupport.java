@@ -537,14 +537,20 @@ class PlanRoutingSupport {
             res.planText = src;
         }
 
-        String upper = src.toUpperCase();
+        String parseSrc = res.planText == null ? src : res.planText;
+        parseSrc = parseSrc.replaceAll("(?m)^\\s*/\\*.*$", "");
+        parseSrc = parseSrc.replaceAll("(?m)^\\s*\\*/\\s*$", "");
+        parseSrc = parseSrc.replaceAll("(?m)^\\s*\\*\\s?", "");
+        parseSrc = parseSrc.replaceAll("(?m)^\\s*//\\s?", "");
+
+        String upper = parseSrc.toUpperCase();
         res.hasQuestion = upper.contains("QUESTION:");
         // confirmed 的含义：模型认为计划已可执行（无 QUESTION 且无 UNKNOWN）
         res.confirmed = !upper.contains("STATUS: UNKNOWN") && !res.hasQuestion;
 
         // 使用 Step N 作为分段标记，把整段 plan 切成多个 step block
         java.util.regex.Pattern stepHeader = java.util.regex.Pattern.compile("(?mi)^\\s*(?:[-*]\\s*)?\\**(?:Step|步骤)\\s*(\\d+)\\**\\s*[:：]?\\s*(.*)$");
-        java.util.regex.Matcher mh = stepHeader.matcher(src);
+        java.util.regex.Matcher mh = stepHeader.matcher(parseSrc);
         java.util.List<Integer> stepStarts = new java.util.ArrayList<>();
         java.util.List<Integer> stepNums = new java.util.ArrayList<>();
         java.util.List<String> inlineDescs = new java.util.ArrayList<>();
@@ -563,12 +569,12 @@ class PlanRoutingSupport {
             res.confirmed = false;
             return res;
         }
-        stepStarts.add(src.length());
+        stepStarts.add(parseSrc.length());
 
         for (int i = 0; i < stepNums.size(); i++) {
             int start = stepStarts.get(i);
             int end = stepStarts.get(i + 1);
-            String block = src.substring(start, Math.min(end, src.length()));
+            String block = parseSrc.substring(start, Math.min(end, parseSrc.length()));
 
             AutoWebAgent.PlanStep step = new AutoWebAgent.PlanStep();
             step.index = stepNums.get(i);
