@@ -394,41 +394,41 @@ class GroovySupport {
         long t0 = System.currentTimeMillis();
         String code = "";
 
-        switch (modelKey) {
-            case "MINIMAX":
-                code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithMinimax(prompt), 180000L, uiLogger, "Minimax");
-                if (code == null || code.trim().isEmpty()) {
-                    if (uiLogger != null) uiLogger.accept("Minimax 调用未返回结果或发生错误。");
-                }
-                break;
-            case "QWEN_MAX":
-                code = LLMUtil.chatWithAliyun(prompt);
-                break;
-            case "MOONSHOT":
-                code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithMoonshot(prompt), 180000L, uiLogger, "Moonshot");
-                if (code == null || code.trim().isEmpty()) {
-                    if (uiLogger != null) uiLogger.accept("Moonshot 调用未返回结果或发生错误。");
-                }
-                break;
-            case "GLM":
-                code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithGLM(prompt), 180000L, uiLogger, "GLM");
-                if (code == null || code.trim().isEmpty()) {
-                    if (uiLogger != null) uiLogger.accept("GLM 调用未返回结果或发生错误。");
-                }
-                break;
-            case "GEMINI":
-                code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithGemini(prompt), 180000L, uiLogger, "Gemini");
-                if (code == null || code.trim().isEmpty()) {
-                    if (uiLogger != null) uiLogger.accept("Gemini 调用未返回结果或发生错误。");
-                }
-                break;
-            case "OLLAMA_QWEN3_8B":
-                code = LLMUtil.chatWithOllama(prompt, LLMUtil.OLLAMA_MODEL_QWEN3_8B, null, false);
-                break;
-            case "DEEPSEEK":
-            default:
-                code = LLMUtil.chatWithDeepSeek(prompt);
-                break;
+        try {
+            switch (modelKey) {
+                case "MINIMAX":
+                    code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithMinimax(prompt), 180000L, uiLogger, "Minimax");
+                    break;
+                case "QWEN_MAX":
+                    code = LLMUtil.chatWithAliyun(prompt);
+                    break;
+                case "MOONSHOT":
+                    code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithMoonshot(prompt), 180000L, uiLogger, "Moonshot");
+                    break;
+                case "GLM":
+                    code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithGLM(prompt), 180000L, uiLogger, "GLM");
+                    break;
+                case "GEMINI":
+                    code = AutoWebAgentUtils.callLLMWithTimeout(() -> LLMUtil.chatWithGemini(prompt), 180000L, uiLogger, "Gemini");
+                    break;
+                case "OLLAMA_QWEN3_8B":
+                    code = LLMUtil.chatWithOllama(prompt, LLMUtil.OLLAMA_MODEL_QWEN3_8B, null, false);
+                    break;
+                case "DEEPSEEK":
+                default:
+                    code = LLMUtil.chatWithDeepSeek(prompt);
+                    break;
+            }
+        } catch (Exception ex) {
+            long elapsed = System.currentTimeMillis() - t0;
+            if (uiLogger != null) {
+                uiLogger.accept("========== LLM_REQUEST_ERROR ==========");
+                uiLogger.accept("model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey);
+                uiLogger.accept("error=" + ex.getClass().getSimpleName() + ": " + (ex.getMessage() == null ? "" : ex.getMessage()));
+                uiLogger.accept("elapsedMs=" + elapsed);
+                uiLogger.accept("======================================");
+            }
+            return "";
         }
 
         if (code != null) {
@@ -437,6 +437,14 @@ class GroovySupport {
         long elapsed = System.currentTimeMillis() - t0;
         if (uiLogger != null) {
             uiLogger.accept(String.format("模型 %s 生成耗时: %.2f秒", modelName, elapsed / 1000.0));
+        }
+        if (code == null || code.trim().isEmpty()) {
+            if (uiLogger != null) {
+                uiLogger.accept("========== LLM_EMPTY_RESPONSE ==========");
+                uiLogger.accept("model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey);
+                uiLogger.accept("elapsedMs=" + elapsed);
+                uiLogger.accept("=======================================");
+            }
         }
         return code;
     }

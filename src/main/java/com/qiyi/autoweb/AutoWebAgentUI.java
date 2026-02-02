@@ -100,14 +100,15 @@ class AutoWebAgentUI {
         java.util.concurrent.ConcurrentHashMap<String, String> latestCodeByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, java.util.Set<Integer>> checkedPlanStepsByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, java.util.Map<Integer, Boolean>> stepStatusByModel = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.ConcurrentHashMap<String, java.util.Map<Integer, Boolean>> stepRunningByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, java.util.Map<Integer, String>> stepErrorByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, String> executionSummaryByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, Integer> stepCursorByModel = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.ConcurrentHashMap<String, Boolean> lastStepExecSingleByModel = new java.util.concurrent.ConcurrentHashMap<>();
-        java.util.concurrent.ConcurrentHashMap<String, Integer> lastPlanCodeDebugHash = new java.util.concurrent.ConcurrentHashMap<>();
-        java.util.concurrent.ConcurrentHashMap<String, Integer> lastPlanCodeRenderDebugHash = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.atomic.AtomicBoolean tableRefreshing = new java.util.concurrent.atomic.AtomicBoolean(false);
-        java.util.concurrent.atomic.AtomicBoolean dividerSnapping = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicBoolean tabLocked = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicInteger lockedTabIndex = new java.util.concurrent.atomic.AtomicInteger(-1);
+        java.util.concurrent.atomic.AtomicBoolean tabReverting = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         JFrame frame = new JFrame("AutoWeb 网页自动化控制台");
         AGENT_FRAME = frame;
@@ -184,10 +185,13 @@ class AutoWebAgentUI {
 
         JPanel refineExecutePanel = new JPanel();
         refineExecutePanel.setLayout(new BoxLayout(refineExecutePanel, BoxLayout.Y_AXIS));
-        btnRefinePlan.setAlignmentX(Component.LEFT_ALIGNMENT);
         btnRefine.setAlignmentX(Component.LEFT_ALIGNMENT);
         btnStepExecute.setAlignmentX(Component.LEFT_ALIGNMENT);
-        refineExecutePanel.add(btnRefinePlan);
+        JButton btnClearAll = new JButton("清空");
+        btnClearAll.setAlignmentX(Component.LEFT_ALIGNMENT);
+        btnClearAll.setPreferredSize(actionButtonSize);
+        btnClearAll.setMaximumSize(actionButtonSize);
+        refineExecutePanel.add(btnClearAll);
         refineExecutePanel.add(Box.createVerticalStrut(8));
         refineExecutePanel.add(btnRefine);
         refineExecutePanel.add(Box.createVerticalStrut(8));
@@ -200,11 +204,7 @@ class AutoWebAgentUI {
         
         JPanel reloadContainer = new JPanel();
         reloadContainer.setLayout(new BoxLayout(reloadContainer, BoxLayout.Y_AXIS));
-        JButton btnClearAll = new JButton("清空");
-        btnClearAll.setAlignmentX(Component.LEFT_ALIGNMENT);
         reloadContainer.add(btnReloadPrompts);
-        reloadContainer.add(Box.createVerticalStrut(6));
-        reloadContainer.add(btnClearAll);
         reloadContainer.add(Box.createVerticalStrut(6));
         reloadContainer.add(btnUsageHelp);
 
@@ -218,7 +218,7 @@ class AutoWebAgentUI {
         
         settingsArea.add(selectionPanel);
 
-        JCheckBox chkUseA11yTree = new JCheckBox("采集 HTML 使用 Accessibility Tree");
+        JCheckBox chkUseA11yTree = new JCheckBox("使用简化Html采集模式（Accessibility tree ）");
         chkUseA11yTree.setAlignmentX(Component.LEFT_ALIGNMENT);
         chkUseA11yTree.setSelected(true);
         JCheckBox chkA11yInterestingOnly = new JCheckBox("Accessibility Tree 仅保留语义节点(interestingOnly)");
@@ -258,10 +258,9 @@ class AutoWebAgentUI {
         
         topContainer.add(promptContainer, BorderLayout.CENTER);
 
-        JPanel codePanel = new JPanel(new BorderLayout());
-        codePanel.setBorder(BorderFactory.createTitledBorder("模型回复内容"));
         JTabbedPane codeTabs = new JTabbedPane();
-        codePanel.add(codeTabs, BorderLayout.CENTER);
+        codeTabs.setPreferredSize(new Dimension(0, 34));
+        codeTabs.setMinimumSize(new Dimension(0, 34));
 
         javax.swing.table.DefaultTableModel planCodeTableModel = new javax.swing.table.DefaultTableModel(new Object[]{"选择/状态", "Plan", "Code"}, 0) {
             public boolean isCellEditable(int row, int column) {
@@ -290,12 +289,14 @@ class AutoWebAgentUI {
         planCodeTable.getColumnModel().getColumn(2).setCellRenderer(new CodeStepCellRenderer());
         applyTableHeaderStyle(planCodeTable);
         JScrollPane planCodeScroll = new JScrollPane(planCodeTable);
+        applyGentleScrollSpeed(planCodeScroll);
 
-        JTextArea execSummaryArea = new JTextArea(8, 10);
+        JTextArea execSummaryArea = new JTextArea(5, 10);
         execSummaryArea.setEditable(false);
         execSummaryArea.setLineWrap(true);
         execSummaryArea.setWrapStyleWord(true);
         JScrollPane execSummaryScroll = new JScrollPane(execSummaryArea);
+        applyGentleScrollSpeed(execSummaryScroll);
         JPanel execSummaryPanel = new JPanel(new BorderLayout());
         execSummaryPanel.setBorder(BorderFactory.createTitledBorder("结果执行展示区"));
         execSummaryPanel.add(execSummaryScroll, BorderLayout.CENTER);
@@ -303,7 +304,70 @@ class AutoWebAgentUI {
         JPanel planCodeDisplayPanel = new JPanel(new BorderLayout());
         planCodeDisplayPanel.setBorder(BorderFactory.createTitledBorder("Plan&Code 展示区"));
         planCodeDisplayPanel.add(planCodeScroll, BorderLayout.CENTER);
-        planCodeDisplayPanel.add(execSummaryPanel, BorderLayout.SOUTH);
+
+        JPanel planCodeTabsPanel = new JPanel(new BorderLayout());
+        planCodeTabsPanel.add(codeTabs, BorderLayout.NORTH);
+        planCodeTabsPanel.add(planCodeDisplayPanel, BorderLayout.CENTER);
+
+        Runnable applyTabLockState = () -> {
+            try {
+                int count = codeTabs.getTabCount();
+                if (count <= 0) return;
+                boolean locked = tabLocked.get();
+                int lockedIdx = lockedTabIndex.get();
+                if (locked && (lockedIdx < 0 || lockedIdx >= count)) {
+                    lockedIdx = codeTabs.getSelectedIndex();
+                    lockedTabIndex.set(lockedIdx);
+                }
+                for (int i = 0; i < count; i++) {
+                    if (locked) {
+                        codeTabs.setEnabledAt(i, i == lockedIdx);
+                    } else {
+                        codeTabs.setEnabledAt(i, true);
+                    }
+                }
+            } catch (Exception ignored) {}
+        };
+
+        Runnable lockCodeTabs = () -> {
+            try {
+                lockedTabIndex.set(codeTabs.getSelectedIndex());
+                tabLocked.set(true);
+                applyTabLockState.run();
+            } catch (Exception ignored) {}
+        };
+        Runnable unlockCodeTabs = () -> {
+            try {
+                tabLocked.set(false);
+                lockedTabIndex.set(-1);
+                applyTabLockState.run();
+            } catch (Exception ignored) {}
+        };
+
+        codeTabs.addContainerListener(new java.awt.event.ContainerAdapter() {
+            public void componentAdded(java.awt.event.ContainerEvent e) {
+                if (tabLocked.get()) SwingUtilities.invokeLater(applyTabLockState);
+            }
+            public void componentRemoved(java.awt.event.ContainerEvent e) {
+                if (tabLocked.get()) SwingUtilities.invokeLater(applyTabLockState);
+            }
+        });
+
+        JButton btnToggleLeftPanel = new JButton(toVerticalHtml("收起左侧"));
+        btnToggleLeftPanel.setFont(btnToggleLeftPanel.getFont().deriveFont(Font.BOLD, 12f));
+        btnToggleLeftPanel.setBackground(new Color(255, 232, 176));
+        btnToggleLeftPanel.setForeground(new Color(60, 40, 0));
+        btnToggleLeftPanel.setOpaque(true);
+        btnToggleLeftPanel.setFocusPainted(false);
+        btnToggleLeftPanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(200, 150, 60), 1),
+                BorderFactory.createEmptyBorder(8, 2, 8, 2)
+        ));
+        btnToggleLeftPanel.setPreferredSize(new Dimension(22, 140));
+        JPanel rightContainer = new JPanel(new BorderLayout());
+        JSplitPane rightSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, planCodeTabsPanel, execSummaryPanel);
+        rightSplit.setResizeWeight(0.83);
+        rightContainer.add(rightSplit, BorderLayout.CENTER);
 
         Runnable refreshPlanCodePanel = () -> {
             int idx = codeTabs.getSelectedIndex();
@@ -316,21 +380,27 @@ class AutoWebAgentUI {
                             java.util.Collections.emptyList(),
                             java.util.Collections.emptyList(),
                             java.util.Collections.emptySet(),
+                            java.util.Collections.emptyMap(),
                             java.util.Collections.emptyMap()
                     );
                     execSummaryArea.setText("");
                     return;
                 }
                 String modelName = codeTabs.getTitleAt(idx);
-                JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                JTextArea ta = (JTextArea) sp.getViewport().getView();
-                String codeText = ta.getText();
-                if (modelName != null && codeText != null) {
-                    latestCodeByModel.put(modelName, codeText);
+                String codeText = modelName == null ? "" : latestCodeByModel.getOrDefault(modelName, "");
+                if (codeText == null || codeText.trim().isEmpty()) {
+                    String loaded = loadLatestDebugCodeVariant(modelName);
+                    if (loaded != null && !loaded.trim().isEmpty()) {
+                        codeText = loaded;
+                        if (modelName != null) latestCodeByModel.put(modelName, loaded);
+                    } else {
+                        codeText = codeText == null ? "" : codeText;
+                    }
                 }
                 ModelSession s = sessionsByModel.get(modelName);
                 java.util.Set<Integer> checked = checkedPlanStepsByModel.getOrDefault(modelName, java.util.Collections.emptySet());
                 java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.getOrDefault(modelName, java.util.Collections.emptyMap());
+                java.util.Map<Integer, Boolean> runningMap = stepRunningByModel.getOrDefault(modelName, java.util.Collections.emptyMap());
                 java.util.List<String> planRows = buildPlanStepRows(s, codeText);
                 java.util.List<String> codeRows = buildCodeStepRows(codeText, s);
                 updatePlanCodeTableRows(
@@ -339,7 +409,8 @@ class AutoWebAgentUI {
                         planRows,
                         codeRows,
                         checked,
-                        statusMap
+                        statusMap,
+                        runningMap
                 );
                 adjustPlanCodeColumnWidths(planCodeTable);
                 adjustPlanCodeRowHeights(planCodeTable, 1, 2);
@@ -387,12 +458,36 @@ class AutoWebAgentUI {
         planCodeScroll.getViewport().addChangeListener(e -> SwingUtilities.invokeLater(refreshPlanCodePanel));
 
         codeTabs.addChangeListener(e -> {
+            if (tabLocked.get() && !tabReverting.get()) {
+                int target = lockedTabIndex.get();
+                if (target >= 0 && target < codeTabs.getTabCount() && codeTabs.getSelectedIndex() != target) {
+                    SwingUtilities.invokeLater(() -> {
+                        if (tabLocked.get() && !tabReverting.get()) {
+                            try {
+                                tabReverting.set(true);
+                                if (target >= 0 && target < codeTabs.getTabCount()) {
+                                    codeTabs.setSelectedIndex(target);
+                                }
+                            } catch (Exception ignored) {
+                            } finally {
+                                tabReverting.set(false);
+                            }
+                        }
+                    });
+                    return;
+                }
+            }
             int idx = codeTabs.getSelectedIndex();
             if (idx >= 0) {
                 String modelName = codeTabs.getTitleAt(idx);
                 if (modelName != null) {
-                    stepCursorByModel.put(modelName, 0);
-                    stepStatusByModel.remove(modelName);
+                    String codeText = latestCodeByModel.getOrDefault(modelName, "");
+                    if (codeText == null || codeText.trim().isEmpty()) {
+                        String loaded = loadLatestDebugCodeVariant(modelName);
+                        if (loaded != null && !loaded.trim().isEmpty()) {
+                            latestCodeByModel.put(modelName, loaded);
+                        }
+                    }
                 }
             }
             SwingUtilities.invokeLater(refreshPlanCodePanel);
@@ -426,15 +521,82 @@ class AutoWebAgentUI {
         outputArea.setEditable(false);
         JScrollPane outputScroll = new JScrollPane(outputArea);
         outputPanel.add(outputScroll, BorderLayout.CENTER);
+        
+        JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topContainer, outputPanel);
+        mainSplit.setResizeWeight(0.2);
 
-        JSplitPane bottomSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, codePanel, outputPanel);
-        bottomSplit.setResizeWeight(0.5);
-
-        JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topContainer, bottomSplit);
-        mainSplit.setResizeWeight(0.15);
-
-        JSplitPane mainHorizontalSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, mainSplit, planCodeDisplayPanel);
+        JSplitPane mainHorizontalSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, mainSplit, rightContainer);
         mainHorizontalSplit.setResizeWeight(0.5);
+        mainSplit.setMinimumSize(new Dimension(0, 0));
+        int mainHorizontalDefaultDividerSize = mainHorizontalSplit.getDividerSize();
+        int mainHorizontalToggleDividerSize = Math.max(mainHorizontalDefaultDividerSize, 26);
+        mainHorizontalSplit.setDividerSize(mainHorizontalToggleDividerSize);
+        java.util.concurrent.atomic.AtomicInteger mainHorizontalLastDividerLocation = new java.util.concurrent.atomic.AtomicInteger(-1);
+        java.util.concurrent.atomic.AtomicBoolean mainHorizontalCollapsed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<Rectangle> mainHorizontalExpandedBounds = new java.util.concurrent.atomic.AtomicReference<>(null);
+        if (mainHorizontalSplit.getUI() instanceof javax.swing.plaf.basic.BasicSplitPaneUI) {
+            javax.swing.plaf.basic.BasicSplitPaneDivider divider =
+                    ((javax.swing.plaf.basic.BasicSplitPaneUI) mainHorizontalSplit.getUI()).getDivider();
+            divider.setLayout(new BorderLayout());
+            divider.removeAll();
+            divider.add(btnToggleLeftPanel, BorderLayout.CENTER);
+            divider.revalidate();
+            divider.repaint();
+        }
+        Runnable collapseLeftPanel = () -> {
+            if (mainHorizontalCollapsed.get()) return;
+            Rectangle expandedBounds = null;
+            try {
+                expandedBounds = new Rectangle(frame.getBounds());
+                mainHorizontalExpandedBounds.set(expandedBounds);
+            } catch (Exception ignored) {}
+            int dividerSize = mainHorizontalSplit.getDividerSize();
+            int loc = mainHorizontalSplit.getDividerLocation();
+            if (loc > 0) mainHorizontalLastDividerLocation.set(loc);
+            int total = mainHorizontalSplit.getWidth();
+            int rightWidth = Math.max(360, total - loc - dividerSize);
+            Insets ins = frame.getInsets();
+            int insetLeft = (ins == null) ? 0 : ins.left;
+            int insetRight = (ins == null) ? 0 : ins.right;
+            int insetW = insetLeft + insetRight;
+            int rightStartOnScreen = -1;
+            if (expandedBounds != null) {
+                rightStartOnScreen = expandedBounds.x + insetLeft + loc + dividerSize;
+            }
+            mainHorizontalSplit.setDividerLocation(0);
+            mainHorizontalCollapsed.set(true);
+            btnToggleLeftPanel.setText(toVerticalHtml("展开左侧"));
+            int targetW = rightWidth + mainHorizontalToggleDividerSize + insetW;
+            if (expandedBounds != null && rightStartOnScreen >= 0) {
+                Dimension screen = Toolkit.getDefaultToolkit().getScreenSize();
+                int maxX = Math.max(0, screen.width - targetW);
+                int desiredX = rightStartOnScreen - insetLeft - mainHorizontalToggleDividerSize;
+                int targetX = Math.min(Math.max(0, desiredX), maxX);
+                frame.setBounds(targetX, expandedBounds.y, targetW, expandedBounds.height);
+            } else {
+                frame.setSize(targetW, frame.getHeight());
+            }
+        };
+        Runnable expandLeftPanel = () -> {
+            if (!mainHorizontalCollapsed.get()) return;
+            mainHorizontalSplit.setDividerSize(mainHorizontalToggleDividerSize);
+            Rectangle restoreBounds = mainHorizontalExpandedBounds.get();
+            if (restoreBounds != null) {
+                frame.setBounds(restoreBounds);
+            }
+            int restore = mainHorizontalLastDividerLocation.get();
+            if (restore <= 0) {
+                int total = mainHorizontalSplit.getWidth();
+                restore = Math.max(240, (int) (total * 0.5));
+            }
+            mainHorizontalSplit.setDividerLocation(restore);
+            mainHorizontalCollapsed.set(false);
+            btnToggleLeftPanel.setText(toVerticalHtml("收起左侧"));
+        };
+        btnToggleLeftPanel.addActionListener(ev -> {
+            if (mainHorizontalCollapsed.get()) expandLeftPanel.run();
+            else collapseLeftPanel.run();
+        });
         
         frame.add(mainHorizontalSplit, BorderLayout.CENTER);
 
@@ -458,7 +620,13 @@ class AutoWebAgentUI {
                     "2) 点“生成计划”：大模型会将用户任务分解为多个步骤的计划；每个步骤都需要知道访问哪个页面操作，因此若缺操作入口地址，会弹窗让你补充（支持多行、例如  订单管理页面: `http://xxxxxxx`）。\n" +
                     "3) 当计划生成完毕，点“生成代码”，我们将会获取大模型需要操作的页面数据，采集并压缩，然后发给大模型去生成可以执行任务的代码。\n" +
                     "4) 当代码生成完毕，点“执行代码”，执行脚本并在“执行日志”里输出过程，开始执行用户的任务。\n" +
-                    "5) “修正代码”用于重新生成代码，主要是当代码执行出错，或者不达预期的时候，用户可以补充一些说明，让大模型去修改代码，然后后续执行修改后的代码，看是否符合预期（支持多次交互修正）。";
+                    "\n" +
+                    "分步执行：\n" +
+                    "- 选中 1 条或多条 Step：按选中的 Step 顺序依次执行（一次执行多条），结束后会自动清空选中状态。\n" +
+                    "\n" +
+                    "修正代码：\n" +
+                    "- 若右侧 Plan&Code 展示区未选中任何行：则会根据补充任务说明内的提示，结合上次执行结果，提交给大模型修正任务的代码。\n" +
+                    "- 若右侧选中 1 行或多行：会定向提示大模型优先修正这些行对应的步骤的任务代码，其它部分尽量不改。\n";
             JTextArea ta = new JTextArea(text, 12, 60);
             ta.setEditable(false);
             ta.setLineWrap(true);
@@ -495,6 +663,7 @@ class AutoWebAgentUI {
             try { latestCodeByModel.clear(); } catch (Exception ignored) {}
             try { checkedPlanStepsByModel.clear(); } catch (Exception ignored) {}
             try { stepStatusByModel.clear(); } catch (Exception ignored) {}
+            try { stepRunningByModel.clear(); } catch (Exception ignored) {}
             try { stepErrorByModel.clear(); } catch (Exception ignored) {}
             try { executionSummaryByModel.clear(); } catch (Exception ignored) {}
             try { stepCursorByModel.clear(); } catch (Exception ignored) {}
@@ -505,7 +674,39 @@ class AutoWebAgentUI {
                 sessionsByModel.clear();
             } catch (Exception ignored) {}
             try { hasExecuted.set(false); } catch (Exception ignored) {}
-            try { forceNewPageOnExecute.set(true); } catch (Exception ignored) {}
+            try { forceNewPageOnExecute.set(false); } catch (Exception ignored) {}
+            try {
+                PlayWrightUtil.Connection conn = connectionRef.get();
+                if (conn != null && conn.browser != null) {
+                    Page keep = null;
+                    try {
+                        if (conn.browser.contexts().isEmpty()) {
+                            keep = conn.browser.newPage();
+                        } else {
+                            com.microsoft.playwright.BrowserContext ctx = conn.browser.contexts().get(0);
+                            keep = ctx.newPage();
+                        }
+                    } catch (Exception ignored) {}
+                    if (keep != null) {
+                        try { keep.navigate("about:blank"); } catch (Exception ignored) {}
+                        try { keep.bringToFront(); } catch (Exception ignored) {}
+                        try { rootPageRef.set(keep); } catch (Exception ignored) {}
+                        try {
+                            for (com.microsoft.playwright.BrowserContext ctx : conn.browser.contexts()) {
+                                if (ctx == null) continue;
+                                for (Page p : ctx.pages()) {
+                                    if (p == null) continue;
+                                    if (p == keep) continue;
+                                    boolean closed;
+                                    try { closed = p.isClosed(); } catch (Exception e2) { closed = true; }
+                                    if (closed) continue;
+                                    try { p.close(); } catch (Exception ignored2) {}
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            } catch (Exception ignored) {}
             
             setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
             setStage.accept("NONE");
@@ -558,10 +759,10 @@ class AutoWebAgentUI {
                 if (choice == 0) {
                     for (String model : pendingEntryModels) {
                         if (codeTabs.indexOfTab(model) >= 0) continue;
-                        ModelSession s = sessionsByModel.get(model);
-                        JTextArea ta = new JTextArea(s == null || s.planText == null ? "" : s.planText);
-                        ta.setFont(new Font("Monospaced", Font.PLAIN, 12));
-                        codeTabs.addTab(model, new JScrollPane(ta));
+                        codeTabs.addTab(model, new JPanel(new BorderLayout()));
+                    }
+                    if (codeTabs.getTabCount() > 0 && codeTabs.getSelectedIndex() < 0) {
+                        codeTabs.setSelectedIndex(0);
                     }
 
                     String entryInput = promptForMultilineInputBlocking(
@@ -605,6 +806,7 @@ class AutoWebAgentUI {
                                         if (!parsed.confirmed) {
                                             uiLogger.accept("PLAN_REFINE 未通过: model=" + modelName + " | Confirmed=false. LLM Output:\n" + finalText);
                                         }
+                                        session.userPrompt = currentPrompt;
                                         session.planText = parsed.planText;
                                         session.steps = parsed.steps;
                                         session.planConfirmed = parsed.confirmed;
@@ -613,17 +815,18 @@ class AutoWebAgentUI {
                                         session.stepSnapshots.clear();
                                         SwingUtilities.invokeLater(() -> {
                                             int idx = codeTabs.indexOfTab(modelName);
-                                            if (idx >= 0) {
-                                                JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                                JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                            ta.setText(finalText);
+                                            if (idx < 0) {
+                                                codeTabs.addTab(modelName, new JPanel(new BorderLayout()));
+                                                idx = codeTabs.indexOfTab(modelName);
+                                            }
+                                            if (idx >= 0) codeTabs.setSelectedIndex(idx);
                                             stepStatusByModel.remove(modelName);
+                                            stepRunningByModel.remove(modelName);
                                             stepErrorByModel.remove(modelName);
                                             executionSummaryByModel.remove(modelName);
                                             stepCursorByModel.remove(modelName);
                                             checkedPlanStepsByModel.remove(modelName);
                                             refreshPlanCodePanel.run();
-                                            }
                                         });
                                         uiLogger.accept("阶段结束: model=" + modelName + ", action=PLAN_REFINE, confirmed=" + parsed.confirmed + ", steps=" + (parsed.steps == null ? 0 : parsed.steps.size()));
                                     } catch (Exception e2) {
@@ -664,10 +867,9 @@ class AutoWebAgentUI {
             uiLogger.accept("=== UI: 点击生成计划 | models=" + selectedModels.size() + " ===");
 
             for (String model : selectedModels) {
-                JTextArea ta = new JTextArea("// 正在等待 " + model + " 生成计划...\n// 请稍候...");
-                ta.setFont(new Font("Monospaced", Font.PLAIN, 12));
-                codeTabs.addTab(model, new JScrollPane(ta));
+                codeTabs.addTab(model, new JPanel(new BorderLayout()));
             }
+            if (codeTabs.getTabCount() > 0) codeTabs.setSelectedIndex(0);
 
             new Thread(() -> {
                 try {
@@ -708,17 +910,17 @@ class AutoWebAgentUI {
 
                                 SwingUtilities.invokeLater(() -> {
                                     int idx = codeTabs.indexOfTab(modelName);
-                                    if (idx >= 0) {
-                                        JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                        JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                        ta.setText(finalPlanResult);
-                                        stepStatusByModel.remove(modelName);
-                                        stepErrorByModel.remove(modelName);
-                                        executionSummaryByModel.remove(modelName);
-                                        stepCursorByModel.remove(modelName);
-                                        checkedPlanStepsByModel.remove(modelName);
-                                        refreshPlanCodePanel.run();
+                                    if (idx < 0) {
+                                        codeTabs.addTab(modelName, new JPanel(new BorderLayout()));
+                                        idx = codeTabs.indexOfTab(modelName);
                                     }
+                                    stepStatusByModel.remove(modelName);
+                                    stepRunningByModel.remove(modelName);
+                                    stepErrorByModel.remove(modelName);
+                                    executionSummaryByModel.remove(modelName);
+                                    stepCursorByModel.remove(modelName);
+                                    checkedPlanStepsByModel.remove(modelName);
+                                    refreshPlanCodePanel.run();
                                 });
                                 if (parsed.steps == null || parsed.steps.isEmpty()) {
                                     uiLogger.accept("规划输出格式异常: " + modelName + " 未生成 Step 块，无法采集 HTML。请重新点“生成计划”或用“修正代码”让模型按要求输出 PLAN_START/Step/PLAN_END。");
@@ -737,12 +939,7 @@ class AutoWebAgentUI {
                                 } catch (Exception ignored) {}
                                 if (uiEpoch.get() == planEpoch) {
                                     SwingUtilities.invokeLater(() -> {
-                                        int idx = codeTabs.indexOfTab(modelName);
-                                        if (idx >= 0) {
-                                            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                            JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                            ta.setText("// 生成失败: " + genEx.getMessage());
-                                        }
+                                        refreshPlanCodePanel.run();
                                     });
                                 }
                             }
@@ -816,6 +1013,7 @@ class AutoWebAgentUI {
                                         if (!parsed.confirmed) {
                                             uiLogger.accept("PLAN_REFINE 未通过: model=" + modelName + " | Confirmed=false. LLM Output:\n" + finalText);
                                         }
+                                        session.userPrompt = currentPrompt;
                                         session.planText = parsed.planText;
                                         session.steps = parsed.steps;
                                         session.planConfirmed = parsed.confirmed;
@@ -824,11 +1022,10 @@ class AutoWebAgentUI {
                                         session.stepSnapshots.clear();
                                         SwingUtilities.invokeLater(() -> {
                                             int idx = codeTabs.indexOfTab(modelName);
-                                            if (idx >= 0) {
-                                                JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                                JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                                ta.setText(finalText);
+                                            if (idx < 0) {
+                                                codeTabs.addTab(modelName, new JPanel(new BorderLayout()));
                                             }
+                                            refreshPlanCodePanel.run();
                                         });
                                         uiLogger.accept("阶段结束: model=" + modelName + ", action=PLAN_REFINE, confirmed=" + parsed.confirmed + ", steps=" + (parsed.steps == null ? 0 : parsed.steps.size()));
                                     } catch (Exception e2) {
@@ -843,7 +1040,15 @@ class AutoWebAgentUI {
                         } finally {
                             if (uiEpoch.get() == planEpoch) {
                                 setStage.accept("NONE");
-                                SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
+                                SwingUtilities.invokeLater(() -> {
+                                    setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                                    uiLogger.accept("所有模型生成完成。");
+                                    if (isPlanReadyForModels(selectedModels, sessionsByModel, currentPrompt)) {
+                                        showPlanReadyDialog(frame, () -> {
+                                            if (btnGetCode != null) btnGetCode.doClick();
+                                        });
+                                    }
+                                });
                             }
                         }
                     }).start();
@@ -925,7 +1130,20 @@ class AutoWebAgentUI {
             if (!notReadyModels.isEmpty()) {
                 tip.append("不可生成代码: ").append(String.join("，", notReadyModels)).append("\n");
             }
-            JOptionPane.showMessageDialog(frame, tip.toString(), "生成代码检查", JOptionPane.INFORMATION_MESSAGE);
+            Object[] options = new Object[]{"继续生成", "取消"};
+            int choice = JOptionPane.showOptionDialog(
+                    frame,
+                    tip.toString(),
+                    "生成代码检查",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.INFORMATION_MESSAGE,
+                    null,
+                    options,
+                    options[0]
+            );
+            if (choice != 0) {
+                return;
+            }
 
             if (readyModels.isEmpty()) {
                 return;
@@ -941,10 +1159,9 @@ class AutoWebAgentUI {
             uiLogger.accept("=== UI: 点击生成代码 | selectedModels=" + selectedModels.size() + ", readyModels=" + readyModels.size() + " ===");
 
             for (String model : selectedModels) {
-                JTextArea ta = new JTextArea("// 正在等待 " + model + " 生成代码...\n// 请稍候...");
-                ta.setFont(new Font("Monospaced", Font.PLAIN, 12));
-                codeTabs.addTab(model, new JScrollPane(ta));
+                codeTabs.addTab(model, new JPanel(new BorderLayout()));
             }
+            if (codeTabs.getTabCount() > 0) codeTabs.setSelectedIndex(0);
 
             new Thread(() -> {
                 try {
@@ -961,15 +1178,6 @@ class AutoWebAgentUI {
                             int order = i + 1;
 
                             futures.add(llmExecutor.submit(() -> {
-                                SwingUtilities.invokeLater(() -> {
-                                    int idx = codeTabs.indexOfTab(modelName);
-                                    if (idx >= 0) {
-                                        JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                        JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                        ta.setText("// 排队号: " + order + "/" + total + "\n// 状态: 等待开始\n");
-                                    }
-                                });
-
                                 ModelSession session = sessionsByModel.get(modelName);
                                 if (!readyModels.contains(modelName)) {
                                     return;
@@ -982,15 +1190,6 @@ class AutoWebAgentUI {
                                     }
 
                                     if (!session.htmlPrepared) {
-                                        SwingUtilities.invokeLater(() -> {
-                                            int idx = codeTabs.indexOfTab(modelName);
-                                            if (idx >= 0) {
-                                                JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                                JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                                ta.setText("// 排队号: " + order + "/" + total + "\n// 状态: 等待采集 HTML（单线程队列）\n");
-                                            }
-                                        });
-                                        
                                         java.util.concurrent.Future<?> htmlFuture = htmlExecutor.submit(() -> {
                                             if (session.htmlPrepared) return null;
                                             uiLogger.accept(modelName + ": 开始按计划采集 HTML（Step 数: " + session.steps.size() + "）...");
@@ -1007,15 +1206,6 @@ class AutoWebAgentUI {
                                         });
                                         try { htmlFuture.get(); } catch (Exception ignored) {}
                                     }
-
-                                    SwingUtilities.invokeLater(() -> {
-                                        int idx = codeTabs.indexOfTab(modelName);
-                                        if (idx >= 0) {
-                                            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                            JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                            ta.setText("// 排队号: " + order + "/" + total + "\n// 状态: 正在调用模型生成代码...\n");
-                                        }
-                                    });
 
                                     java.util.List<HtmlSnapshot> snaps = new java.util.ArrayList<>(session.stepSnapshots.values());
                                     snaps.sort(java.util.Comparator.comparingInt(a -> a.stepIndex));
@@ -1052,17 +1242,10 @@ class AutoWebAgentUI {
                                     SwingUtilities.invokeLater(() -> {
                                         int idx = codeTabs.indexOfTab(modelName);
                                         if (idx < 0) {
-                                            JTextArea ta = new JTextArea(finalCode);
-                                            ta.setFont(new Font("Monospaced", Font.PLAIN, 12));
-                                            codeTabs.addTab(modelName, new JScrollPane(ta));
+                                            codeTabs.addTab(modelName, new JPanel(new BorderLayout()));
                                             idx = codeTabs.indexOfTab(modelName);
                                         }
-                                        if (idx >= 0) {
-                                            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                            JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                            ta.setText(finalCode);
-                                            codeTabs.setSelectedIndex(idx);
-                                        }
+                                        if (idx >= 0) codeTabs.setSelectedIndex(idx);
                                         latestCodeByModel.put(modelName, finalCode);
                                         stepStatusByModel.remove(modelName);
                                         stepCursorByModel.remove(modelName);
@@ -1074,12 +1257,7 @@ class AutoWebAgentUI {
                                         saveDebugArtifact(newDebugTimestamp(), modelName, "CODEGEN", "exception", stackTraceToString(ex), uiLogger);
                                     } catch (Exception ignored) {}
                                     SwingUtilities.invokeLater(() -> {
-                                        int idx = codeTabs.indexOfTab(modelName);
-                                        if (idx >= 0) {
-                                            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(idx);
-                                            JTextArea ta = (JTextArea) sp.getViewport().getView();
-                                            ta.setText("// 生成失败: " + ex.getMessage());
-                                        }
+                                        refreshPlanCodePanel.run();
                                     });
                                 }
                             }));
@@ -1115,19 +1293,26 @@ class AutoWebAgentUI {
                 return;
             }
             String modelName = codeTabs.getTitleAt(selectedIndex);
-            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(selectedIndex);
-            JTextArea codeArea = (JTextArea) sp.getViewport().getView();
-            String previousCode = codeArea.getText();
+            String previousCode = latestCodeByModel.getOrDefault(modelName, "");
 
             String currentPrompt = promptArea.getText();
             String refineHint = refineArea.getText();
+            String focusHint = buildRefineFocusHintFromSelection(planCodeTable, planCodeTableModel);
+            String refineHintForModel;
+            if (focusHint == null || focusHint.trim().isEmpty()) {
+                refineHintForModel = refineHint;
+            } else if (refineHint == null || refineHint.trim().isEmpty()) {
+                refineHintForModel = focusHint;
+            } else {
+                refineHintForModel = refineHint + "\n\n" + focusHint;
+            }
             String execOutput = outputArea.getText();
 
             if (previousCode == null || previousCode.trim().isEmpty()) {
                 JOptionPane.showMessageDialog(frame, "当前没有可用于修正的代码。", "提示", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
-            if (refineHint == null || refineHint.trim().isEmpty()) {
+            if (refineHintForModel == null || refineHintForModel.trim().isEmpty()) {
                 int choice = JOptionPane.showConfirmDialog(
                         frame,
                         "未填写修正说明。是否直接提交修正？",
@@ -1197,7 +1382,7 @@ class AutoWebAgentUI {
 
                     java.util.List<HtmlSnapshot> stepSnaps = new java.util.ArrayList<>(session.stepSnapshots.values());
                     stepSnaps.sort(java.util.Comparator.comparingInt(a -> a.stepIndex));
-                    String payload = buildRefinePayload(rootPageRef.get(), session.planText, stepSnaps, freshCleanedHtml, currentPrompt, refineHint);
+                    String payload = buildRefinePayload(rootPageRef.get(), session.planText, stepSnaps, freshCleanedHtml, currentPrompt, refineHintForModel);
                     uiLogger.accept("阶段中: model=" + modelName + ", action=REFINE_CODE, payloadMode=" + extractModeFromPayload(payload) + ", snapshots=" + stepSnaps.size());
                     String promptForRefine = currentPrompt;
                     try {
@@ -1206,7 +1391,7 @@ class AutoWebAgentUI {
                         }
                     } catch (Exception ignored) {}
                     String refinedCode = generateRefinedGroovyScript(
-                            promptForRefine, payload, previousCode, execOutput, refineHint, uiLogger, modelName
+                            promptForRefine, payload, previousCode, execOutput, refineHintForModel, uiLogger, modelName
                     );
 
                     String normalizedRefined = normalizeGeneratedGroovy(refinedCode);
@@ -1221,7 +1406,6 @@ class AutoWebAgentUI {
                     session.lastArtifactType = "CODE";
 
                     SwingUtilities.invokeLater(() -> {
-                        codeArea.setText(finalRefinedCode);
                         latestCodeByModel.put(modelName, finalRefinedCode);
                                         stepStatusByModel.remove(modelName);
                                         stepErrorByModel.remove(modelName);
@@ -1250,9 +1434,7 @@ class AutoWebAgentUI {
                 return;
             }
             String modelName = codeTabs.getTitleAt(selectedIndex);
-            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(selectedIndex);
-            JTextArea codeArea = (JTextArea) sp.getViewport().getView();
-            String code = codeArea.getText();
+            String code = latestCodeByModel.getOrDefault(modelName, "");
             if (code == null || code.trim().isEmpty()) {
                 JOptionPane.showMessageDialog(frame, "当前没有可执行的代码。", "提示", JOptionPane.INFORMATION_MESSAGE);
                 return;
@@ -1264,160 +1446,113 @@ class AutoWebAgentUI {
                 return;
             }
             java.util.Set<Integer> checkedSteps = checkedPlanStepsByModel.getOrDefault(modelName, java.util.Collections.emptySet());
-            if (!checkedSteps.isEmpty()) {
-                java.util.List<PlanStep> selectedSteps = new java.util.ArrayList<>();
-                for (PlanStep step : steps) {
-                    if (step != null && checkedSteps.contains(step.index)) {
-                        selectedSteps.add(step);
-                    }
-                }
-                if (selectedSteps.isEmpty()) {
-                    JOptionPane.showMessageDialog(frame, "选中的步骤在当前代码中未找到。", "提示", JOptionPane.INFORMATION_MESSAGE);
-                    return;
-                }
-                boolean singleSelected = selectedSteps.size() == 1;
-                lastStepExecSingleByModel.put(modelName, singleSelected);
-                if (singleSelected) {
-                    stepStatusByModel.remove(modelName);
-                    stepErrorByModel.remove(modelName);
-                    executionSummaryByModel.remove(modelName);
-                }
-                java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
-                java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
-                stepCursorByModel.put(modelName, 0);
-                SwingUtilities.invokeLater(refreshPlanCodePanel);
-                setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
-                outputArea.setText("");
-                uiLogger.accept("=== 分步执行开始: 已选步骤 " + selectedSteps.size() + " ===");
-                setStage.accept("EXECUTING");
-                new Thread(() -> {
-                    try {
-                        String currentPrompt = promptArea.getText();
-                        String entryUrl = chooseExecutionEntryUrl(session, currentPrompt);
-                        Page liveRootPage = ensureLiveRootPage(rootPageRef, connectionRef, forceNewPageOnExecute, hasExecuted, uiLogger);
-                        String beforeUrl = safePageUrl(liveRootPage);
-                        boolean hasLivePage = !beforeUrl.isEmpty() && !"about:blank".equalsIgnoreCase(beforeUrl);
-                        if (entryUrl == null || entryUrl.trim().isEmpty()) {
-                            if (!hasLivePage) {
-                                throw new RuntimeException("未找到入口URL，且当前浏览器没有可用页面。请在“用户任务”里包含入口链接（https://...），或先生成计划并补充入口地址。");
-                            } else {
-                                uiLogger.accept("执行前导航: 未提供入口URL，将使用当前页面 | current=" + beforeUrl);
-                            }
-                        }
-                        ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
-                        for (int i = 0; i < selectedSteps.size(); i++) {
-                            PlanStep step = selectedSteps.get(i);
-                            if (step == null) continue;
-                            int stepIndex = step.index;
-                            String stepCode = buildStepExecutionCode(code, stepIndex);
-                            if (stepCode == null || stepCode.trim().isEmpty()) {
-                                statusMap.put(stepIndex, false);
-                                errorMap.put(stepIndex, "未找到步骤代码");
-                                executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
-                                SwingUtilities.invokeLater(refreshPlanCodePanel);
-                                uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | 未找到步骤代码 ===");
-                                continue;
-                            }
-                            uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
-                            try {
-                                ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
-                                Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
-                                executeWithGroovy(stepCode, executionTarget, uiLogger);
-                                hasExecuted.set(true);
-                                statusMap.put(stepIndex, true);
-                                errorMap.remove(stepIndex);
-                                stepCursorByModel.put(modelName, i + 1);
-                                uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
-                            } catch (Exception stepEx) {
-                                statusMap.put(stepIndex, false);
-                                String reason = stepEx.getMessage();
-                                if (reason == null || reason.trim().isEmpty()) reason = stepEx.toString();
-                                errorMap.put(stepIndex, reason);
-                                uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + reason + " ===");
-                            }
-                            executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
-                            SwingUtilities.invokeLater(refreshPlanCodePanel);
-                        }
-                        SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
-                        setStage.accept("READY_EXECUTE");
-                    } catch (Exception ex) {
-                        SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
-                        setStage.accept("READY_EXECUTE");
-                        uiLogger.accept("=== 执行失败: " + ex.getMessage() + " ===");
-                    } finally {
-                        checkedPlanStepsByModel.remove(modelName);
-                        SwingUtilities.invokeLater(refreshPlanCodePanel);
-                    }
-                }).start();
+            if (checkedSteps == null || checkedSteps.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "请在右边选择一个或者多个步骤，然后点击执行", "提示", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
-            int cursor = stepCursorByModel.getOrDefault(modelName, 0);
-            if (cursor >= steps.size()) {
-                stepCursorByModel.put(modelName, 0);
-                SwingUtilities.invokeLater(refreshPlanCodePanel);
-                cursor = 0;
-            }
-            final int cursorForExec = cursor;
-            int stepIndex = steps.get(cursorForExec).index;
-            String stepCode = buildStepExecutionCode(code, stepIndex);
-            if (stepCode == null || stepCode.trim().isEmpty()) {
-                JOptionPane.showMessageDialog(frame, "未找到步骤代码，请确保代码中包含 Step 注释。", "提示", JOptionPane.INFORMATION_MESSAGE);
-                return;
-            }
-            setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
+            stepStatusByModel.remove(modelName);
+            stepRunningByModel.remove(modelName);
+            stepErrorByModel.remove(modelName);
+            executionSummaryByModel.remove(modelName);
+            stepCursorByModel.put(modelName, 0);
             outputArea.setText("");
-            uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
+            java.util.List<PlanStep> selectedSteps = new java.util.ArrayList<>();
+            for (PlanStep step : steps) {
+                if (step != null && checkedSteps.contains(step.index)) {
+                    selectedSteps.add(step);
+                }
+            }
+            if (selectedSteps.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "选中的步骤在当前代码中未找到。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            boolean singleSelected = selectedSteps.size() == 1;
+            lastStepExecSingleByModel.put(modelName, singleSelected);
+            java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            java.util.Map<Integer, Boolean> runningMap = stepRunningByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            stepCursorByModel.put(modelName, 0);
+            SwingUtilities.invokeLater(refreshPlanCodePanel);
+            setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
+            lockCodeTabs.run();
+            collapseLeftPanel.run();
+            uiLogger.accept("=== 分步执行开始: 已选步骤 " + selectedSteps.size() + " ===");
             setStage.accept("EXECUTING");
             new Thread(() -> {
-                boolean ok = false;
-                String errorReason = null;
                 try {
                     String currentPrompt = promptArea.getText();
                     String entryUrl = chooseExecutionEntryUrl(session, currentPrompt);
                     Page liveRootPage = ensureLiveRootPage(rootPageRef, connectionRef, forceNewPageOnExecute, hasExecuted, uiLogger);
                     String beforeUrl = safePageUrl(liveRootPage);
                     boolean hasLivePage = !beforeUrl.isEmpty() && !"about:blank".equalsIgnoreCase(beforeUrl);
-                    if (cursorForExec == 0) {
-                        if (entryUrl == null || entryUrl.trim().isEmpty()) {
-                            if (!hasLivePage) {
-                                throw new RuntimeException("未找到入口URL，且当前浏览器没有可用页面。请在“用户任务”里包含入口链接（https://...），或先生成计划并补充入口地址。");
-                            } else {
-                                uiLogger.accept("执行前导航: 未提供入口URL，将使用当前页面 | current=" + beforeUrl);
-                            }
+                    if (entryUrl == null || entryUrl.trim().isEmpty()) {
+                        if (!hasLivePage) {
+                            throw new RuntimeException("未找到入口URL，且当前浏览器没有可用页面。请在“用户任务”里包含入口链接（https://...），或先生成计划并补充入口地址。");
+                        } else {
+                            uiLogger.accept("执行前导航: 未提供入口URL，将使用当前页面 | current=" + beforeUrl);
                         }
-                        ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
                     }
-                    ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
-                    Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
-                    executeWithGroovy(stepCode, executionTarget, uiLogger);
-                    hasExecuted.set(true);
-                    ok = true;
-                    stepCursorByModel.put(modelName, cursorForExec + 1);
-                    uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
-                } catch (Exception ex) {
-                    errorReason = ex.getMessage();
-                    if (errorReason == null || errorReason.trim().isEmpty()) errorReason = ex.toString();
-                    uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + errorReason + " ===");
-                } finally {
-                    boolean status = ok;
-                    java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
-                    java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
-                    statusMap.put(stepIndex, status);
-                    if (status) {
-                        errorMap.remove(stepIndex);
-                    } else {
-                        errorMap.put(stepIndex, errorReason == null ? "未知原因" : errorReason);
+                    ensureRootPageAtUrl(liveRootPage, entryUrl, uiLogger);
+                    for (int i = 0; i < selectedSteps.size(); i++) {
+                        PlanStep step = selectedSteps.get(i);
+                        if (step == null) continue;
+                        int stepIndex = step.index;
+                        String stepCode = buildStepExecutionCode(code, stepIndex);
+                        if (stepCode == null || stepCode.trim().isEmpty()) {
+                            statusMap.put(stepIndex, false);
+                            errorMap.put(stepIndex, "未找到步骤代码");
+                            executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                            SwingUtilities.invokeLater(refreshPlanCodePanel);
+                            uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | 未找到步骤代码 ===");
+                            continue;
+                        }
+                        uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
+                        runningMap.put(stepIndex, true);
+                        SwingUtilities.invokeLater(refreshPlanCodePanel);
+                        try {
+                            ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
+                            Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
+                            executeWithGroovy(stepCode, executionTarget, uiLogger);
+                            hasExecuted.set(true);
+                            statusMap.put(stepIndex, true);
+                            errorMap.remove(stepIndex);
+                            stepCursorByModel.put(modelName, i + 1);
+                            uiLogger.accept("=== 分步执行完成: Step " + stepIndex + " ===");
+                        } catch (Exception stepEx) {
+                            statusMap.put(stepIndex, false);
+                            String reason = stepEx.getMessage();
+                            if (reason == null || reason.trim().isEmpty()) reason = stepEx.toString();
+                            errorMap.put(stepIndex, reason);
+                            uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + reason + " ===");
+                        } finally {
+                            runningMap.remove(stepIndex);
+                        }
+                        executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
+                        SwingUtilities.invokeLater(refreshPlanCodePanel);
                     }
-                    executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
                     SwingUtilities.invokeLater(() -> {
-                        refreshPlanCodePanel.run();
+                        unlockCodeTabs.run();
                         setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                        if (mainHorizontalCollapsed.get()) expandLeftPanel.run();
+                        btnToggleLeftPanel.setEnabled(true);
                     });
                     setStage.accept("READY_EXECUTE");
+                } catch (Exception ex) {
+                    SwingUtilities.invokeLater(() -> {
+                        unlockCodeTabs.run();
+                        setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                        if (mainHorizontalCollapsed.get()) expandLeftPanel.run();
+                        btnToggleLeftPanel.setEnabled(true);
+                    });
+                    setStage.accept("READY_EXECUTE");
+                    uiLogger.accept("=== 执行失败: " + ex.getMessage() + " ===");
+                } finally {
                     checkedPlanStepsByModel.remove(modelName);
                     SwingUtilities.invokeLater(refreshPlanCodePanel);
                 }
             }).start();
+            return;
         });
 
         btnExecute.addActionListener(e -> {
@@ -1427,9 +1562,7 @@ class AutoWebAgentUI {
                 return;
             }
             String modelName = codeTabs.getTitleAt(selectedIndex);
-            JScrollPane sp = (JScrollPane) codeTabs.getComponentAt(selectedIndex);
-            JTextArea codeArea = (JTextArea) sp.getViewport().getView();
-            String code = codeArea.getText();
+            String code = latestCodeByModel.getOrDefault(modelName, "");
 
             if (code == null || code.trim().isEmpty()) {
                 JOptionPane.showMessageDialog(frame, "当前没有可执行的代码。", "提示", JOptionPane.INFORMATION_MESSAGE);
@@ -1453,12 +1586,20 @@ class AutoWebAgentUI {
                 JOptionPane.showMessageDialog(frame, "未找到可分步执行的步骤。", "提示", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
+            stepStatusByModel.remove(modelName);
+            stepRunningByModel.remove(modelName);
+            stepErrorByModel.remove(modelName);
+            executionSummaryByModel.remove(modelName);
             java.util.Map<Integer, Boolean> statusMap = stepStatusByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
+            java.util.Map<Integer, Boolean> runningMap = stepRunningByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
             java.util.Map<Integer, String> errorMap = stepErrorByModel.computeIfAbsent(modelName, k -> new java.util.HashMap<>());
             stepCursorByModel.put(modelName, 0);
+            executionSummaryByModel.put(modelName, "执行中：准备中（0/" + steps.size() + "）");
             SwingUtilities.invokeLater(refreshPlanCodePanel);
 
             setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, false);
+            lockCodeTabs.run();
+            collapseLeftPanel.run();
             outputArea.setText(""); 
             uiLogger.accept("=== 开始执行代码 ===");
             setStage.accept("EXECUTING");
@@ -1495,6 +1636,14 @@ class AutoWebAgentUI {
                         }
                         uiLogger.accept("=== 分步执行开始: Step " + stepIndex + " ===");
                         try {
+                            runningMap.put(stepIndex, true);
+                            String partialSummary = buildExecutionSummary(statusMap, errorMap);
+                            String progressText = "执行中：步骤" + stepIndex + "（" + (i + 1) + "/" + steps.size() + "）";
+                            if (partialSummary != null && !partialSummary.trim().isEmpty()) {
+                                progressText = progressText + "\n\n" + partialSummary;
+                            }
+                            executionSummaryByModel.put(modelName, progressText);
+                            SwingUtilities.invokeLater(refreshPlanCodePanel);
                             ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
                             Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
                             executeWithGroovy(stepCode, executionTarget, uiLogger);
@@ -1511,17 +1660,31 @@ class AutoWebAgentUI {
                             uiLogger.accept("=== 分步执行失败: Step " + stepIndex + " | " + reason + " ===");
                             SwingUtilities.invokeLater(refreshPlanCodePanel);
                             continue;
+                        } finally {
+                            runningMap.remove(stepIndex);
                         }
                         executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
                         SwingUtilities.invokeLater(refreshPlanCodePanel);
                     }
                     executionSummaryByModel.put(modelName, buildExecutionSummary(statusMap, errorMap));
                     
-                    SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
+                    SwingUtilities.invokeLater(() -> {
+                        unlockCodeTabs.run();
+                        setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                        if (mainHorizontalCollapsed.get()) expandLeftPanel.run();
+                        btnToggleLeftPanel.setEnabled(true);
+                    });
                     setStage.accept("READY_EXECUTE");
                     uiLogger.accept("=== 执行完成 ===");
                 } catch (Exception ex) {
-                    SwingUtilities.invokeLater(() -> setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true));
+                    executionSummaryByModel.put(modelName, "执行失败：" + (ex.getMessage() == null ? "未知原因" : ex.getMessage()));
+                    SwingUtilities.invokeLater(refreshPlanCodePanel);
+                    SwingUtilities.invokeLater(() -> {
+                        unlockCodeTabs.run();
+                        setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
+                        if (mainHorizontalCollapsed.get()) expandLeftPanel.run();
+                        btnToggleLeftPanel.setEnabled(true);
+                    });
                     setStage.accept("READY_EXECUTE");
                     uiLogger.accept("=== 执行失败: " + ex.getMessage() + " ===");
                 }
@@ -1536,12 +1699,25 @@ class AutoWebAgentUI {
         frame.setVisible(true);
         frame.addComponentListener(new ComponentAdapter() {
             public void componentResized(ComponentEvent e) {
+                if (!mainHorizontalCollapsed.get()) {
+                    mainHorizontalSplit.setDividerLocation(0.5);
+                }
+            }
+        });
+        SwingUtilities.invokeLater(() -> {
+            if (!mainHorizontalCollapsed.get()) {
                 mainHorizontalSplit.setDividerLocation(0.5);
             }
         });
-        SwingUtilities.invokeLater(() -> mainHorizontalSplit.setDividerLocation(0.5));
     }
 
+    /**
+     * 获取用于分步执行的步骤列表（优先使用会话缓存，必要时从计划文本解析）
+     *
+     * @param session 模型会话
+     * @param code 当前代码/计划文本
+     * @return 排序后的步骤列表
+     */
     private static java.util.List<PlanStep> getStepsForStepExecution(ModelSession session, String code) {
         java.util.List<PlanStep> steps = session == null ? null : session.steps;
         if (steps == null || steps.isEmpty()) {
@@ -1746,6 +1922,95 @@ class AutoWebAgentUI {
         return code;
     }
 
+    private static String loadLatestDebugCodeVariant(String modelName) {
+        if (modelName == null || modelName.trim().isEmpty()) return "";
+        try {
+            java.nio.file.Path debugDir = java.nio.file.Paths.get(System.getProperty("user.dir"), "autoweb", "debug");
+            if (!java.nio.file.Files.exists(debugDir) || !java.nio.file.Files.isDirectory(debugDir)) return "";
+            String safeModel = modelName.trim().replaceAll("[^A-Za-z0-9_\\-]", "_");
+            if (safeModel.isEmpty()) safeModel = "UNKNOWN";
+
+            String prefix = "debug_code_" + safeModel + "_";
+            String suffix = ".groovy";
+            String bestTs = null;
+            String bestTag = null;
+            java.nio.file.Path bestPath = null;
+            java.util.List<String> preferredTags = java.util.Arrays.asList("refine", "gen");
+
+            try (java.util.stream.Stream<java.nio.file.Path> s = java.nio.file.Files.list(debugDir)) {
+                java.util.List<java.nio.file.Path> files = s
+                        .filter(p -> p != null && java.nio.file.Files.isRegularFile(p))
+                        .filter(p -> {
+                            String name = p.getFileName() == null ? "" : p.getFileName().toString();
+                            return name.startsWith(prefix) && name.endsWith(suffix);
+                        })
+                        .toList();
+
+                for (java.nio.file.Path p : files) {
+                    String name = p.getFileName() == null ? "" : p.getFileName().toString();
+                    String core = name.substring(prefix.length(), name.length() - suffix.length());
+                    if (core.length() <= 20) continue;
+                    int tsSplit = core.length() - 20;
+                    if (tsSplit < 0 || core.charAt(tsSplit) != '_') continue;
+                    String tag = core.substring(0, tsSplit);
+                    String ts = core.substring(tsSplit + 1);
+                    if (ts.length() != 19) continue;
+                    boolean tsOk = ts.matches("\\d{8}_\\d{6}_\\d{3}");
+                    if (!tsOk) continue;
+
+                    boolean tagOk = preferredTags.contains(tag);
+                    if (!tagOk) continue;
+
+                    if (bestTs == null || ts.compareTo(bestTs) > 0) {
+                        bestTs = ts;
+                        bestTag = tag;
+                        bestPath = p;
+                    } else if (bestTs != null && ts.equals(bestTs) && bestTag != null && bestPath != null) {
+                        int curRank = preferredTags.indexOf(tag);
+                        int bestRank = preferredTags.indexOf(bestTag);
+                        if (curRank >= 0 && bestRank >= 0 && curRank < bestRank) {
+                            bestTag = tag;
+                            bestPath = p;
+                        }
+                    }
+                }
+            }
+
+            if (bestPath == null) {
+                try (java.util.stream.Stream<java.nio.file.Path> s = java.nio.file.Files.list(debugDir)) {
+                    java.util.List<java.nio.file.Path> files = s
+                            .filter(p -> p != null && java.nio.file.Files.isRegularFile(p))
+                            .filter(p -> {
+                                String name = p.getFileName() == null ? "" : p.getFileName().toString();
+                                return name.startsWith(prefix) && name.endsWith(suffix);
+                            })
+                            .toList();
+                    for (java.nio.file.Path p : files) {
+                        String name = p.getFileName() == null ? "" : p.getFileName().toString();
+                        String core = name.substring(prefix.length(), name.length() - suffix.length());
+                        if (core.length() <= 20) continue;
+                        int tsSplit = core.length() - 20;
+                        if (tsSplit < 0 || core.charAt(tsSplit) != '_') continue;
+                        String ts = core.substring(tsSplit + 1);
+                        if (ts.length() != 19) continue;
+                        boolean tsOk = ts.matches("\\d{8}_\\d{6}_\\d{3}");
+                        if (!tsOk) continue;
+                        if (bestTs == null || ts.compareTo(bestTs) > 0) {
+                            bestTs = ts;
+                            bestPath = p;
+                        }
+                    }
+                }
+            }
+
+            if (bestPath == null) return "";
+            String out = java.nio.file.Files.readString(bestPath, java.nio.charset.StandardCharsets.UTF_8);
+            return out == null ? "" : out;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
     /**
      * 清理代码注释，便于在 Code 列简要展示
      */
@@ -1757,18 +2022,79 @@ class AutoWebAgentUI {
         return cleaned;
     }
 
+    /**
+     * 折叠连续空行，避免展示区域过度拉长
+     *
+     * @param text 原始文本
+     * @return 折叠后的文本
+     */
     private static String collapseBlankLines(String text) {
         if (text == null || text.isEmpty()) return "";
         return text.replaceAll("(?m)(\\n\\s*\\n)+", "\n\n");
     }
 
+    private static String buildRefineFocusHintFromSelection(JTable table, javax.swing.table.DefaultTableModel model) {
+        if (table == null || model == null) return "";
+        int[] selected = table.getSelectedRows();
+        if (selected == null || selected.length == 0) return "";
+        Object orderObj = table.getClientProperty("stepOrder");
+        java.util.List<Integer> order = orderObj instanceof java.util.List ? (java.util.List<Integer>) orderObj : null;
+
+        java.util.List<Integer> rowIdx = new java.util.ArrayList<>();
+        for (int r : selected) {
+            try {
+                rowIdx.add(table.convertRowIndexToModel(r));
+            } catch (Exception ignored) {}
+        }
+        rowIdx.sort(Integer::compareTo);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("【重点修正范围】\n");
+        sb.append("仅修正以下 Step 的 Plan/Code，其他 Step 不要改动，除非为保持整体一致性必须做最小调整。\n");
+        for (Integer r : rowIdx) {
+            if (r == null || r < 0 || r >= model.getRowCount()) continue;
+            Integer stepIndex = null;
+            if (order != null && r < order.size()) {
+                try { stepIndex = order.get(r); } catch (Exception ignored) {}
+            }
+            String plan = "";
+            String code = "";
+            try { plan = String.valueOf(model.getValueAt(r, 1)); } catch (Exception ignored) {}
+            try { code = String.valueOf(model.getValueAt(r, 2)); } catch (Exception ignored) {}
+            if (stepIndex == null) {
+                Integer p = parseStepIndex(plan);
+                if (p != null) stepIndex = p;
+            }
+            if (stepIndex == null) {
+                Integer c = parseStepIndex(code);
+                if (c != null) stepIndex = c;
+            }
+            sb.append("\n");
+            sb.append("Step ").append(stepIndex == null ? "?" : stepIndex).append(":\n");
+            if (plan != null) sb.append("PLAN: ").append(plan.trim()).append("\n");
+            if (code != null) sb.append("CODE: ").append(code.trim()).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /**
+     * 根据 Plan/Code 行与勾选状态刷新表格数据
+     *
+     * @param table 表格组件
+     * @param model 表格模型
+     * @param planRows 计划行
+     * @param codeRows 代码行
+     * @param checkedSteps 已勾选的步骤集合
+     * @param statusMap 步骤执行状态
+     */
     private static void updatePlanCodeTableRows(
             JTable table,
             javax.swing.table.DefaultTableModel model,
             java.util.List<String> planRows,
             java.util.List<String> codeRows,
             java.util.Set<Integer> checkedSteps,
-            java.util.Map<Integer, Boolean> statusMap
+            java.util.Map<Integer, Boolean> statusMap,
+            java.util.Map<Integer, Boolean> runningMap
     ) {
         if (model == null) return;
         model.setRowCount(0);
@@ -1799,7 +2125,8 @@ class AutoWebAgentUI {
             String code = codeByStep.getOrDefault(stepIndex, "");
             boolean checked = stepIndex != null && checkedSteps != null && checkedSteps.contains(stepIndex);
             Boolean status = stepIndex == null || statusMap == null ? null : statusMap.get(stepIndex);
-            model.addRow(new Object[]{new StepCellData(checked, status), plan, code});
+            boolean running = stepIndex != null && runningMap != null && Boolean.TRUE.equals(runningMap.get(stepIndex));
+            model.addRow(new Object[]{new StepCellData(checked, status, running), plan, code});
             order.add(stepIndex);
         }
         if (table != null) {
@@ -1872,6 +2199,12 @@ class AutoWebAgentUI {
         table.revalidate();
     }
 
+    /**
+     * 从行文本中解析 Step 编号
+     *
+     * @param row 行文本
+     * @return 步骤编号或 null
+     */
     private static Integer parseStepIndex(String row) {
         if (row == null) return null;
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:Step|步骤)\\s*(\\d+)").matcher(row);
@@ -1883,13 +2216,44 @@ class AutoWebAgentUI {
         }
     }
 
-    private static String truncate(String text, int max) {
+    private static String toVerticalHtml(String text) {
         if (text == null) return "";
-        if (max <= 0) return "";
-        if (text.length() <= max) return text;
-        return text.substring(0, max);
+        String t = text.trim();
+        if (t.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("<html>");
+        int added = 0;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == '\n' || c == '\r') continue;
+            if (added > 0) sb.append("<br>");
+            if (c == ' ') sb.append("&nbsp;");
+            else sb.append(c);
+            added++;
+        }
+        sb.append("</html>");
+        return sb.toString();
     }
 
+    private static void applyGentleScrollSpeed(JScrollPane scrollPane) {
+        if (scrollPane == null) return;
+        JScrollBar v = scrollPane.getVerticalScrollBar();
+        if (v != null) {
+            v.setUnitIncrement(12);
+            v.setBlockIncrement(96);
+        }
+        JScrollBar h = scrollPane.getHorizontalScrollBar();
+        if (h != null) {
+            h.setUnitIncrement(12);
+            h.setBlockIncrement(96);
+        }
+    }
+
+
+    /**
+     * 应用 Plan&Code 表头样式
+     *
+     * @param table 表格组件
+     */
     private static void applyTableHeaderStyle(JTable table) {
         if (table == null) return;
         javax.swing.table.JTableHeader header = table.getTableHeader();
@@ -1915,10 +2279,12 @@ class AutoWebAgentUI {
     private static class StepCellData {
         boolean checked;
         Boolean status;
+        boolean running;
 
-        StepCellData(boolean checked, Boolean status) {
+        StepCellData(boolean checked, Boolean status, boolean running) {
             this.checked = checked;
             this.status = status;
+            this.running = running;
         }
     }
 
@@ -1999,12 +2365,19 @@ class AutoWebAgentUI {
             boolean checked = data != null && data.checked;
             checkBox.setSelected(checked);
             Boolean status = data == null ? null : data.status;
-            if (status == null) {
+            boolean running = data != null && data.running;
+            if (running) {
                 statusLabel.setIcon(null);
+                statusLabel.setText("执行中");
+            } else if (status == null) {
+                statusLabel.setIcon(null);
+                statusLabel.setText("");
             } else if (status) {
                 statusLabel.setIcon(OK_ICON);
+                statusLabel.setText("成功");
             } else {
                 statusLabel.setIcon(FAIL_ICON);
+                statusLabel.setText("失败");
             }
             return this;
         }
@@ -2031,15 +2404,22 @@ class AutoWebAgentUI {
         }
 
         public java.awt.Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column) {
-            data = value instanceof StepCellData ? (StepCellData) value : new StepCellData(false, null);
+            data = value instanceof StepCellData ? (StepCellData) value : new StepCellData(false, null, false);
             checkBox.setSelected(data.checked);
             Boolean status = data.status;
-            if (status == null) {
+            boolean running = data.running;
+            if (running) {
                 statusLabel.setIcon(null);
+                statusLabel.setText("执行中");
+            } else if (status == null) {
+                statusLabel.setIcon(null);
+                statusLabel.setText("");
             } else if (status) {
                 statusLabel.setIcon(OK_ICON);
+                statusLabel.setText("成功");
             } else {
                 statusLabel.setIcon(FAIL_ICON);
+                statusLabel.setText("失败");
             }
             panel.setBackground(isSelected ? table.getSelectionBackground() : table.getBackground());
             panel.setForeground(isSelected ? table.getSelectionForeground() : table.getForeground());
@@ -2047,44 +2427,12 @@ class AutoWebAgentUI {
         }
 
         public Object getCellEditorValue() {
-            if (data == null) data = new StepCellData(false, null);
+            if (data == null) data = new StepCellData(false, null, false);
             data.checked = checkBox.isSelected();
             return data;
         }
     }
 
-    private static class StatusIconRenderer extends JLabel implements javax.swing.table.TableCellRenderer {
-        private static final Icon OK_ICON = new StatusMarkIcon(true);
-        private static final Icon FAIL_ICON = new StatusMarkIcon(false);
-
-        StatusIconRenderer() {
-            setHorizontalAlignment(SwingConstants.CENTER);
-            setVerticalAlignment(SwingConstants.CENTER);
-            setOpaque(true);
-        }
-
-        public java.awt.Component getTableCellRendererComponent(
-                JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column
-        ) {
-            if (isSelected) {
-                setBackground(table.getSelectionBackground());
-                setForeground(table.getSelectionForeground());
-            } else {
-                setBackground(table.getBackground());
-                setForeground(table.getForeground());
-            }
-            Boolean status = value instanceof Boolean ? (Boolean) value : null;
-            if (status == null) {
-                setIcon(null);
-            } else if (status) {
-                setIcon(OK_ICON);
-            } else {
-                setIcon(FAIL_ICON);
-            }
-            setText("");
-            return this;
-        }
-    }
 
     private static class StatusMarkIcon implements Icon {
         private final boolean ok;
@@ -2133,6 +2481,18 @@ class AutoWebAgentUI {
         }
     }
 
+    /**
+     * 统一控制按钮可用性，避免并发操作
+     *
+     * @param btnPlan 生成计划按钮
+     * @param btnGetCode 生成代码按钮
+     * @param btnRefinePlan 修正计划按钮
+     * @param btnRefine 修正代码按钮
+     * @param btnStepExecute 分步执行按钮
+     * @param btnExecute 执行按钮
+     * @param btnClearAll 清空按钮
+     * @param enabled 是否启用
+     */
     private static void setActionButtonsEnabled(
             JButton btnPlan,
             JButton btnGetCode,
@@ -2152,6 +2512,12 @@ class AutoWebAgentUI {
         if (btnClearAll != null) btnClearAll.setEnabled(enabled);
     }
 
+    /**
+     * 从连接中选取最近可用的页面
+     *
+     * @param connection Playwright 连接
+     * @return 最近的非空页面或最后一个可用页面
+     */
     private static Page pickMostRecentLivePage(PlayWrightUtil.Connection connection) {
         if (connection == null) return null;
         try {
@@ -2184,6 +2550,15 @@ class AutoWebAgentUI {
         }
     }
 
+    /**
+     * 检测 rootPageRef 是否需要切换到最新活跃页面
+     *
+     * @param rootPageRef 页面引用
+     * @param connectionRef 连接引用
+     * @param uiLogger 可选日志输出
+     * @param stage 日志阶段标识
+     * @return 刷新后的页面引用
+     */
     private static Page refreshRootPageRefIfNeeded(
             java.util.concurrent.atomic.AtomicReference<Page> rootPageRef,
             java.util.concurrent.atomic.AtomicReference<PlayWrightUtil.Connection> connectionRef,
@@ -2206,6 +2581,16 @@ class AutoWebAgentUI {
         }
     }
 
+    /**
+     * 确保执行前存在可用页面与连接，必要时重连并创建新页面
+     *
+     * @param rootPageRef 页面引用
+     * @param connectionRef 连接引用
+     * @param forceNewPageOnExecute 强制新建页面标记
+     * @param hasExecuted 是否已执行标记
+     * @param uiLogger 可选日志输出
+     * @return 可用页面
+     */
     private static Page ensureLiveRootPage(
             java.util.concurrent.atomic.AtomicReference<Page> rootPageRef,
             java.util.concurrent.atomic.AtomicReference<PlayWrightUtil.Connection> connectionRef,
@@ -2262,6 +2647,14 @@ class AutoWebAgentUI {
         return newPage;
     }
 
+    /**
+     * 弹出多行输入对话框
+     *
+     * @param parent 父组件
+     * @param title 弹窗标题
+     * @param message 提示文本
+     * @return 用户输入或 null
+     */
     private static String promptForMultilineInput(Component parent, String title, String message) {
         JPanel panel = new JPanel(new BorderLayout(8, 8));
         JTextArea ta = new JTextArea(6, 60);
@@ -2275,6 +2668,14 @@ class AutoWebAgentUI {
         return v == null ? null : v.trim();
     }
     
+    /**
+     * 在非 EDT 线程中阻塞获取多行输入
+     *
+     * @param parent 父组件
+     * @param title 弹窗标题
+     * @param message 提示文本
+     * @return 用户输入或 null
+     */
     private static String promptForMultilineInputBlocking(Component parent, String title, String message) {
         if (SwingUtilities.isEventDispatchThread()) {
             return promptForMultilineInput(parent, title, message);
@@ -2286,6 +2687,14 @@ class AutoWebAgentUI {
         return ref.get();
     }
 
+    /**
+     * 判断指定模型列表的计划是否已满足生成代码条件
+     *
+     * @param models 模型列表
+     * @param sessionsByModel 模型会话状态
+     * @param currentPrompt 当前用户提示
+     * @return true 表示全部准备就绪
+     */
     private static boolean isPlanReadyForModels(java.util.List<String> models, java.util.Map<String, ModelSession> sessionsByModel, String currentPrompt) {
         if (models == null || models.isEmpty()) return false;
         for (String modelName : models) {
@@ -2301,6 +2710,12 @@ class AutoWebAgentUI {
         return true;
     }
 
+    /**
+     * 弹窗提示计划已就绪，并引导生成代码
+     *
+     * @param frame 父窗口
+     * @param onGenerateCode 确认后执行的回调
+     */
     private static void showPlanReadyDialog(JFrame frame, Runnable onGenerateCode) {
         if (frame == null) return;
         Runnable show = () -> {
