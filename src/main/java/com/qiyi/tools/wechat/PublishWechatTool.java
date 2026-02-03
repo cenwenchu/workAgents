@@ -218,7 +218,10 @@ public class PublishWechatTool implements Tool {
             checkPage.setViewportSize(1920, 1080);
             try {
                 checkPage.navigate(PodCastPostToWechat.WECHAT_LOGIN_URL);
-                checkPage.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+                checkPage.waitForLoadState(
+                        com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                        new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                );
                 if (!isWechatLoggedIn(checkPage)) {
                     context.sendText("检测到微信公众号未登录，请及时在服务器浏览器完成扫码登录，任务将继续执行等待。");
                     

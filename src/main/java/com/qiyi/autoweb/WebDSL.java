@@ -5,6 +5,7 @@ import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.AriaRole;
 import com.alibaba.fastjson2.JSON;
+import com.qiyi.config.AppConfig;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
@@ -23,7 +24,7 @@ public class WebDSL {
     private String savedFrameName;
     private String savedFrameUrl;
     private final Consumer<String> logger;
-    private int defaultTimeout = 30000;
+    private int defaultTimeout;
     private int maxRetries = 3;
     
     private static final Pattern ARIA_LABEL_ONLY_PATTERN = Pattern.compile("^\\s*\\[\\s*aria-label\\s*=\\s*(['\"])(.*?)\\1\\s*\\]\\s*$", Pattern.CASE_INSENSITIVE);
@@ -44,13 +45,14 @@ public class WebDSL {
             this.frame = null;
         }
         this.logger = logger;
+        this.defaultTimeout = AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs();
     }
 
     /**
      * 设置默认超时时间
      */
     public WebDSL withDefaultTimeout(int timeoutMs) {
-        this.defaultTimeout = timeoutMs;
+        this.defaultTimeout = timeoutMs > 0 ? timeoutMs : AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs();
         return this;
     }
     
@@ -328,14 +330,12 @@ public class WebDSL {
         
         String label = firstNonEmpty(attrs.get("label"));
         if (label != null) {
-            String escaped = escapeForSelectorValue(label);
             String roleSelector = buildRoleSelector(role, label, attrs);
             if (roleSelector != null) return roleSelector;
         }
         
         String name = firstNonEmpty(attrs.get("name"));
         if (name != null) {
-            String escaped = escapeForSelectorValue(name);
             String roleSelector = buildRoleSelector(role, name, attrs);
             if (roleSelector != null) return roleSelector;
         }
@@ -485,8 +485,7 @@ public class WebDSL {
         try {
             page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(defaultTimeout));
         } catch (Exception e) {
-            // Fallback to load
-            page.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD);
+            page.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(defaultTimeout));
         }
     }
 
@@ -500,7 +499,11 @@ public class WebDSL {
             Page newPage = page.context().waitForPage(() -> {
                 triggerAction.run();
             });
-            newPage.waitForLoadState();
+            try {
+                newPage.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(defaultTimeout));
+            } catch (Exception ignored) {
+                newPage.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(defaultTimeout));
+            }
             log("  -> New page opened: " + newPage.title() + " (" + newPage.url() + ")");
             return new WebDSL(newPage, this.logger);
         } catch (Exception e) {
@@ -528,13 +531,13 @@ public class WebDSL {
     public void reload() {
         log("Action: Reload page");
         page.reload();
-        page.waitForLoadState();
+        waitForLoadState();
     }
     
     public void goBack() {
         log("Action: Go back");
         page.goBack();
-        page.waitForLoadState();
+        waitForLoadState();
     }
 
     /**
@@ -710,6 +713,14 @@ public class WebDSL {
      * Closes a modal by clicking a specific button (e.g. "X" or "Close").
      * Handles waiting and verification.
      */
+    public void closeModal() {
+        closeModal(null, null);
+    }
+
+    public void closeModal(String modalSelector) {
+        closeModal(modalSelector, null);
+    }
+
     public void closeModal(String modalSelector, String closeButtonSelector) {
         log("Action: Closing modal '" + modalSelector + "' using button '" + closeButtonSelector + "'");
         try {
@@ -720,8 +731,57 @@ public class WebDSL {
             if (loc != null && loc.count() > 0 && loc.isVisible()) {
                 boolean closed = false;
                 try {
-                    click(closeButtonSelector);
-                    closed = true;
+                    String btn = closeButtonSelector == null ? "" : closeButtonSelector.trim();
+                    if (!btn.isEmpty()) {
+                        boolean treatAsSelector = isSelectorLike(btn) || btn.startsWith("role=") || btn.startsWith("text=") || btn.startsWith("xpath=") || btn.startsWith("css=");
+                        if (treatAsSelector) {
+                            Locator b = loc.locator(btn).first();
+                            waitForLocatorAttached(b, 250);
+                            if (b.count() > 0 && b.isVisible()) {
+                                highlight(b);
+                                try { b.click(); } catch (Exception e) { if (!tryDomClickFallback(b)) throw e; }
+                                closed = true;
+                            }
+                        } else if (looksLikeTextRegex(btn)) {
+                            String pattern = escapeForRegexLiteralInSelector(btn);
+                            String[] sels = new String[] {
+                                    "role=button[name=/" + pattern + "/]",
+                                    "role=link[name=/" + pattern + "/]",
+                                    "text=/" + pattern + "/"
+                            };
+                            for (String s : sels) {
+                                if (s == null || s.isEmpty()) continue;
+                                Locator b = loc.locator(s).first();
+                                waitForLocatorAttached(b, 250);
+                                if (b.count() == 0) continue;
+                                if (!b.isVisible()) continue;
+                                highlight(b);
+                                try { b.click(); } catch (Exception e) { if (!tryDomClickFallback(b)) throw e; }
+                                closed = true;
+                                break;
+                            }
+                        } else {
+                            String escaped = escapeForSelectorValue(btn);
+                            String[] sels = new String[] {
+                                    "role=button[name=\"" + escaped + "\"]",
+                                    "button:has-text(\"" + escaped + "\")",
+                                    "role=link[name=\"" + escaped + "\"]",
+                                    "a:has-text(\"" + escaped + "\")",
+                                    "text=\"" + escaped + "\""
+                            };
+                            for (String s : sels) {
+                                if (s == null || s.isEmpty()) continue;
+                                Locator b = loc.locator(s).first();
+                                waitForLocatorAttached(b, 250);
+                                if (b.count() == 0) continue;
+                                if (!b.isVisible()) continue;
+                                highlight(b);
+                                try { b.click(); } catch (Exception e) { if (!tryDomClickFallback(b)) throw e; }
+                                closed = true;
+                                break;
+                            }
+                        }
+                    }
                 } catch (Exception ignored) {}
                 
                 if (!closed) {
@@ -733,7 +793,9 @@ public class WebDSL {
                             "button:has-text('取消')",
                             "button[aria-label='Close']",
                             "role=button[name='关闭']",
-                            "role=button[name='确定']"
+                            "role=button[name='确定']",
+                            "role=button[name='×']",
+                            "text='×'"
                     };
                     for (String sel : fallbackButtons) {
                         try {
@@ -746,6 +808,12 @@ public class WebDSL {
                             break;
                         } catch (Exception ignored) {}
                     }
+                }
+                if (!closed) {
+                    try {
+                        page.keyboard().press("Escape");
+                        closed = true;
+                    } catch (Exception ignored) {}
                 }
                 // Wait for it to disappear (optional, short timeout)
                 try {
@@ -797,13 +865,50 @@ public class WebDSL {
      * Attempts to dismiss common nuisance popups if they exist.
      * @param selectors List of selectors to try clicking (e.g. ".close-ad", "button:has-text('Not Now')")
      */
+    public void dismissPopups() {
+        dismissPopups(
+                ".ant-modal-close",
+                ".ant-drawer-close",
+                ".ant-notification-notice-close",
+                ".ant-message-notice-close",
+                "button:has-text('关闭')",
+                "button:has-text('我知道了')",
+                "button:has-text('知道了')",
+                "button:has-text('取消')",
+                "button:has-text('确定')",
+                "button:has-text('以后再说')",
+                "button[aria-label='Close']",
+                "[aria-label='Close']",
+                "[role='dialog'] button:has-text('关闭')"
+        );
+        try { page.keyboard().press("Escape"); } catch (Exception ignored) {}
+    }
+
     public void dismissPopups(String... selectors) {
          for (String sel : selectors) {
              try {
-                 Locator loc = locator(sel).first();
-                 if (loc.isVisible()) {
-                     log("Action: Dismissing popup via '" + sel + "'");
-                     loc.click();
+                 String s = sel == null ? "" : sel.trim();
+                 if (s.isEmpty()) continue;
+                 boolean treatAsSelector = isSelectorLike(s) || s.startsWith("role=") || s.startsWith("text=") || s.startsWith("xpath=") || s.startsWith("css=");
+                 if (!treatAsSelector) {
+                     Locator byText = tryResolveClickTargetByText(s);
+                     if (byText != null) {
+                         waitForLocatorAttached(byText, 200);
+                         if (byText.count() > 0 && byText.isVisible()) {
+                             log("Action: Dismissing popup via text '" + s + "'");
+                             highlight(byText);
+                             try { byText.click(); } catch (Exception e) { if (!tryDomClickFallback(byText)) throw e; }
+                             wait(500);
+                             continue;
+                         }
+                     }
+                 }
+                 Locator loc = locator(s).first();
+                 waitForLocatorAttached(loc, 200);
+                 if (loc.count() > 0 && loc.isVisible()) {
+                     log("Action: Dismissing popup via '" + s + "'");
+                     highlight(loc);
+                     try { loc.click(); } catch (Exception e) { if (!tryDomClickFallback(loc)) throw e; }
                      wait(500);
                  }
              } catch (Exception ignored) {}
@@ -812,11 +917,7 @@ public class WebDSL {
 
     // --- Logging ---
     public void log(String message) {
-        if (logger != null) {
-            logger.accept(message);
-        } else {
-            System.out.println(message);
-        }
+        StorageSupport.log(logger, "DSL", message, null);
     }
 
     private void retry(Runnable action, String desc) {
@@ -857,10 +958,165 @@ public class WebDSL {
         return null;
     }
 
+    private boolean looksLikePlainText(String selector) {
+        if (selector == null) return false;
+        String s = selector.trim();
+        if (s.isEmpty()) return false;
+        if (s.startsWith("role=") || s.startsWith("text=") || s.startsWith("xpath=") || s.startsWith("css=")) return false;
+        if (isSelectorLike(s)) return false;
+        if (looksLikeTextRegex(s)) return true;
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) > 127) return true;
+        }
+        return false;
+    }
+    
+    private boolean looksLikeTextRegex(String text) {
+        if (text == null) return false;
+        String s = text.trim();
+        if (s.isEmpty()) return false;
+        if (s.contains("\\")) return true;
+        if (s.contains(".*")) return true;
+        if (s.contains(".+")) return true;
+        return false;
+    }
+    
+    private String escapeForRegexLiteralInSelector(String pattern) {
+        if (pattern == null) return "";
+        String s = pattern.trim();
+        if (s.isEmpty()) return "";
+        s = s.replace("\r", " ").replace("\n", " ");
+        s = s.replace("/", "\\/");
+        return s;
+    }
+
+    private Locator tryResolveClickTargetByText(String text) {
+        if (!looksLikePlainText(text)) return null;
+        String raw = text == null ? "" : text.trim();
+        Locator bestAttached = null;
+        
+        if (looksLikeTextRegex(raw)) {
+            String pattern = escapeForRegexLiteralInSelector(raw);
+            String[] regexSelectors = new String[] {
+                    "role=button[name=/" + pattern + "/]",
+                    "role=link[name=/" + pattern + "/]",
+                    "role=menuitem[name=/" + pattern + "/]",
+                    "role=tab[name=/" + pattern + "/]",
+                    "role=option[name=/" + pattern + "/]",
+                    "text=/" + pattern + "/"
+            };
+            for (String sel : regexSelectors) {
+                try {
+                    Locator loc = locator(sel).first();
+                    waitForLocatorAttached(loc, 250);
+                    if (loc.count() == 0) continue;
+                    bestAttached = loc;
+                    if (loc.isVisible()) return loc;
+                } catch (Exception ignored) {}
+            }
+        }
+        
+        String escaped = escapeForSelectorValue(raw);
+        String[] selectors = new String[] {
+                "role=button[name=\"" + escaped + "\"]",
+                "role=link[name=\"" + escaped + "\"]",
+                "role=menuitem[name=\"" + escaped + "\"]",
+                "role=tab[name=\"" + escaped + "\"]",
+                "role=option[name=\"" + escaped + "\"]",
+                "text=\"" + escaped + "\""
+        };
+        for (String sel : selectors) {
+            try {
+                Locator loc = locator(sel).first();
+                waitForLocatorAttached(loc, 250);
+                if (loc.count() == 0) continue;
+                bestAttached = loc;
+                if (loc.isVisible()) return loc;
+            } catch (Exception ignored) {}
+        }
+        return bestAttached;
+    }
+
+    private boolean tryDomClickFallback(Locator loc) {
+        if (loc == null) return false;
+        try {
+            if (loc.count() == 0) return false;
+        } catch (Exception ignored) {
+            return false;
+        }
+        try {
+            Object v = loc.evaluate("el => {\n" +
+                    "  const uniq = [];\n" +
+                    "  const add = (x) => { if (!x) return; if (uniq.indexOf(x) >= 0) return; uniq.push(x); };\n" +
+                    "  const isVisible = (x) => {\n" +
+                    "    try {\n" +
+                    "      const s = window.getComputedStyle(x);\n" +
+                    "      if (!s || s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;\n" +
+                    "      const r = x.getBoundingClientRect();\n" +
+                    "      return (r.width > 0 && r.height > 0);\n" +
+                    "    } catch (e) { return false; }\n" +
+                    "  };\n" +
+                    "  const isClickable = (x) => {\n" +
+                    "    try {\n" +
+                    "      const tag = (x.tagName || '').toLowerCase();\n" +
+                    "      const role = (x.getAttribute && x.getAttribute('role')) ? x.getAttribute('role') : '';\n" +
+                    "      if (tag === 'button' || tag === 'a' || tag === 'label' || tag === 'option') return true;\n" +
+                    "      if (tag === 'input' || tag === 'select' || tag === 'textarea') return true;\n" +
+                    "      if (role === 'button' || role === 'checkbox' || role === 'tab' || role === 'menuitem' || role === 'option' || role === 'combobox') return true;\n" +
+                    "      const cls = (x.className || '').toString();\n" +
+                    "      if (cls && /ant-btn|el-button|btn|clickable|ant-select|el-select/i.test(cls)) return true;\n" +
+                    "      if (typeof x.onclick === 'function') return true;\n" +
+                    "      return false;\n" +
+                    "    } catch (e) { return false; }\n" +
+                    "  };\n" +
+                    "  const tryClick = (x) => { try { x.click(); return true; } catch (e) { return false; } };\n" +
+                    "  const tryClickClosest = (from) => {\n" +
+                    "    try {\n" +
+                    "      if (!from || !from.closest) return false;\n" +
+                    "      const c = from.closest('.ant-select-item-option,[role=option],button,[role=button],a,[role=menuitem],[role=tab],[role=checkbox],label,.el-select-dropdown__item,.ant-select-selector,.ant-select-selection-overflow-item,.ant-select-selection-overflow-item-suffix,.ant-select,[role=combobox]');\n" +
+                    "      if (c && isVisible(c) && isClickable(c)) return tryClick(c);\n" +
+                    "    } catch (e) {}\n" +
+                    "    return false;\n" +
+                    "  };\n" +
+                    "  if (tryClickClosest(el)) return true;\n" +
+                    "  add(el);\n" +
+                    "  let p = el;\n" +
+                    "  for (let i = 0; i < 6 && p; i++) { add(p); p = p.parentElement; }\n" +
+                    "  const parent = el && el.parentElement;\n" +
+                    "  if (parent) {\n" +
+                    "    add(parent);\n" +
+                    "    try {\n" +
+                    "      const kids = parent.children;\n" +
+                    "      for (let i = 0; i < kids.length; i++) add(kids[i]);\n" +
+                    "    } catch (e) {}\n" +
+                    "  }\n" +
+                    "  for (let i = 0; i < uniq.length; i++) {\n" +
+                    "    const c = uniq[i];\n" +
+                    "    if (!c) continue;\n" +
+                    "    if (tryClickClosest(c)) return true;\n" +
+                    "    let t = null;\n" +
+                    "    try { t = c.querySelector && c.querySelector('button,[role=button],a,[role=menuitem],[role=tab],[role=option],[role=checkbox],label,input,select,textarea,[contenteditable=true]'); } catch (e) { t = null; }\n" +
+                    "    if (t && isVisible(t) && (isClickable(t) || t !== c)) { try { t.click(); return true; } catch (e) {} }\n" +
+                    "    if (isVisible(c) && isClickable(c)) { try { c.click(); return true; } catch (e) {} }\n" +
+                    "  }\n" +
+                    "  try { el.click(); return true; } catch (e) {}\n" +
+                    "  return false;\n" +
+                    "}");
+            return (v instanceof Boolean) && (Boolean) v;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
     // --- Basic Interaction ---
 
     public void click(String selector) {
         log("Action: Click '" + selector + "'");
+        try {
+            String s = selector == null ? "" : selector;
+            if ((s.contains("role=\"listbox\"") || s.contains("role=listbox") || s.contains("[role=\"listbox\"]") || s.contains("[role=listbox]")) && s.contains("text=")) {
+                log("  -> 检测到 listbox 选项点击。下拉选择场景请优先使用 web.selectDropdown(\"控件名/selector\", \"选项文本\")。");
+            }
+        } catch (Exception ignored) {}
         retry(() -> {
             Locator loc = locator(selector).first();
             int count = 0;
@@ -869,21 +1125,37 @@ public class WebDSL {
                 log("  -> Click target not found. Trying checkbox fallback...");
                 Locator alt = tryFallbackCheckboxLocator(selector);
                 if (alt != null) loc = alt.first();
+            } else if (count == 0) {
+                Locator alt = tryResolveClickTargetByText(selector);
+                if (alt != null) loc = alt.first();
             }
             
-            try {
-                if (loc.count() > 0 && !loc.isVisible()) {
-                    loc.evaluate("el => { const label = el.closest('label'); if (label) { label.click(); return; } const box = el.closest('.ant-checkbox') || el.closest('[role=checkbox]'); if (box) { box.click(); return; } if (el.parentElement) { el.parentElement.click(); return; } el.click(); }");
-                    return;
+            boolean hasTarget = false;
+            try { hasTarget = loc.count() > 0; } catch (Exception ignored) { hasTarget = false; }
+            if (hasTarget) {
+                boolean visible = false;
+                try { visible = loc.isVisible(); } catch (Exception ignored) { visible = false; }
+                if (!visible) {
+                    try { loc.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+                    try { visible = loc.isVisible(); } catch (Exception ignored) { visible = false; }
+                    if (!visible) {
+                        if (tryDomClickFallback(loc)) return;
+                        throw new RuntimeException("Click target not visible: " + selector);
+                    }
                 }
-            } catch (Exception ignored) {}
+            }
             
             try {
                 loc.waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
             } catch (Exception ignored) {}
             
             highlight(loc);
-            loc.click();
+            try {
+                loc.click();
+            } catch (Exception e) {
+                if (tryDomClickFallback(loc)) return;
+                throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException(e);
+            }
         }, "click " + selector);
     }
     
@@ -892,7 +1164,12 @@ public class WebDSL {
         retry(() -> {
             Locator loc = locator(selector).nth(index);
             highlight(loc);
-            loc.click();
+            try {
+                loc.click();
+            } catch (Exception e) {
+                if (tryDomClickFallback(loc)) return;
+                throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException(e);
+            }
         }, "click " + selector + " at " + index);
     }
 
@@ -919,7 +1196,42 @@ public class WebDSL {
                 }
             }
             highlight(target);
-            target.fill(text);
+            try {
+                target.fill(text);
+            } catch (Exception fillEx) {
+                try { if (target.count() > 0 && !target.isVisible()) tryDomClickFallback(target); } catch (Exception ignored) {}
+                Locator input = null;
+                try {
+                    input = target.locator("input, textarea, [contenteditable=true]").first();
+                    waitForLocatorAttached(input, 300);
+                    if (input != null && input.count() > 0 && input.isVisible()) {
+                        highlight(input);
+                        input.fill(text);
+                        return;
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    Locator wrap = target.locator("xpath=ancestor-or-self::*[.//input or .//textarea or @contenteditable='true'][1]").first();
+                    waitForLocatorAttached(wrap, 300);
+                    if (wrap != null && wrap.count() > 0) {
+                        input = wrap.locator("input, textarea, [contenteditable=true]").first();
+                        waitForLocatorAttached(input, 300);
+                        if (input != null && input.count() > 0 && input.isVisible()) {
+                            highlight(input);
+                            input.fill(text);
+                            return;
+                        }
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    Locator dd = resolveDropdownTrigger(selector);
+                    if (dd != null) {
+                        selectDropdown(selector, text);
+                        return;
+                    }
+                } catch (Exception ignored) {}
+                throw (fillEx instanceof RuntimeException) ? (RuntimeException) fillEx : new RuntimeException(fillEx);
+            }
         }, "type into " + selector);
     }
     
@@ -992,6 +1304,59 @@ public class WebDSL {
             loc.selectOption(new com.microsoft.playwright.options.SelectOption().setLabel(valueOrLabel));
         }
     }
+    
+    public void selectDropdown(String dropdownNameOrSelector, String optionText) {
+        selectDropdown(dropdownNameOrSelector, optionText, 12);
+    }
+    
+    public void selectDropdown(String dropdownNameOrSelector, String optionText, int maxScrolls) {
+        String dd = dropdownNameOrSelector == null ? "" : dropdownNameOrSelector.trim();
+        String opt = optionText == null ? "" : optionText.trim();
+        log("Action: Select dropdown '" + dd + "' -> '" + opt + "'");
+        retry(() -> {
+            Locator trigger = resolveDropdownTrigger(dd);
+            if (trigger == null) throw new RuntimeException("Dropdown not found: " + dd);
+            waitForLocatorAttached(trigger, defaultTimeout);
+            boolean opened = openDropdownTrigger(trigger);
+            if (!opened) throw new RuntimeException("Dropdown did not open: " + dd);
+            wait(120);
+            
+            if (tryClickDropdownOption(opt)) return;
+            
+            int max = Math.max(0, maxScrolls);
+            Locator container = resolveDropdownPopupContainer();
+            for (int i = 0; i < max; i++) {
+                if (tryClickDropdownOption(opt)) return;
+                boolean scrolled = false;
+                if (container == null) container = resolveDropdownPopupContainer();
+                if (container != null) {
+                    try {
+                        if (container.count() > 0 && container.first().isVisible()) {
+                            highlight(container.first());
+                            container.first().hover();
+                            page.mouse().wheel(0, 800);
+                            scrolled = true;
+                        }
+                    } catch (Exception ignored) {}
+                }
+                if (!scrolled) {
+                    page.mouse().wheel(0, 800);
+                }
+                wait(150);
+            }
+            
+            if (tryTypeDropdownAndEnter(trigger, opt)) return;
+
+            java.util.List<String> visibleOptions = collectVisibleDropdownOptions(30);
+            String url = "";
+            try { url = getCurrentUrl(); } catch (Exception ignored) {}
+            StringBuilder sb = new StringBuilder("Dropdown option not found/clickable: ");
+            sb.append(opt).append(" | dropdown=").append(dd);
+            if (url != null && !url.isEmpty()) sb.append(" | url=").append(url);
+            if (visibleOptions != null && !visibleOptions.isEmpty()) sb.append(" | visibleOptions=").append(visibleOptions);
+            throw new RuntimeException(sb.toString());
+        }, "selectDropdown " + dd + " -> " + opt);
+    }
 
     public String getText(String selector) {
         return retrySupply(() -> {
@@ -1010,6 +1375,389 @@ public class WebDSL {
 
     public List<String> getAllText(String selector, int index) {
         return locator(selector).nth(index).allInnerTexts();
+    }
+
+    private Locator resolveDropdownTrigger(String dropdownNameOrSelector) {
+        String s = dropdownNameOrSelector == null ? "" : dropdownNameOrSelector.trim();
+        if (s.isEmpty()) return null;
+        
+        try {
+            if (isSelectorLike(s) || s.startsWith("role=") || s.startsWith("text=") || s.startsWith("xpath=")) {
+                Locator base = locator(s);
+                waitForLocatorAttached(base.first(), 800);
+                if (base.count() == 0) return null;
+                try {
+                    Locator ant = base.first().locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
+                    waitForLocatorAttached(ant, 200);
+                    if (ant.count() > 0) {
+                        Locator t = ant.first().locator(".ant-select-selection-overflow-item-suffix, .ant-select-selector, [role=combobox]").first();
+                        waitForLocatorAttached(t, 200);
+                        if (t.count() > 0) return t;
+                    }
+                } catch (Exception ignored) {}
+                Locator selfOrAncestorCombobox = base.first().locator("xpath=ancestor-or-self::*[@role='combobox'][1]");
+                try {
+                    waitForLocatorAttached(selfOrAncestorCombobox, 200);
+                    if (selfOrAncestorCombobox.count() > 0) return selfOrAncestorCombobox.first();
+                } catch (Exception ignored) {}
+                Locator descendantCombobox = base.first().locator("[role=combobox]");
+                try {
+                    waitForLocatorAttached(descendantCombobox, 200);
+                    if (descendantCombobox.count() > 0) return descendantCombobox.first();
+                } catch (Exception ignored) {}
+                return base.first();
+            }
+        } catch (Exception ignored) {}
+        
+        String escaped = escapeForSelectorValue(s);
+        Frame f = ensureFrame();
+        try {
+            Locator byRole = (f != null) ? f.locator("role=combobox[name=\"" + escaped + "\"]") : page.locator("role=combobox[name=\"" + escaped + "\"]");
+            waitForLocatorAttached(byRole, 600);
+            if (byRole.count() > 0) {
+                Locator cb = byRole.first();
+                try {
+                    Locator ant = cb.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
+                    waitForLocatorAttached(ant, 200);
+                    if (ant.count() > 0) {
+                        Locator t = ant.first().locator(".ant-select-selection-overflow-item-suffix, .ant-select-selector, [role=combobox]").first();
+                        waitForLocatorAttached(t, 200);
+                        if (t.count() > 0) return t;
+                    }
+                } catch (Exception ignored) {}
+                return cb;
+            }
+        } catch (Exception ignored) {}
+        
+        try {
+            Locator byLabel = (f != null) ? f.getByLabel(s) : page.getByLabel(s);
+            waitForLocatorAttached(byLabel, 600);
+            if (byLabel.count() > 0) {
+                Locator lb = byLabel.first();
+                try {
+                    Locator ant = lb.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
+                    waitForLocatorAttached(ant, 200);
+                    if (ant.count() > 0) {
+                        Locator t = ant.first().locator(".ant-select-selection-overflow-item-suffix, .ant-select-selector, [role=combobox]").first();
+                        waitForLocatorAttached(t, 200);
+                        if (t.count() > 0) return t;
+                    }
+                } catch (Exception ignored) {}
+                return lb;
+            }
+        } catch (Exception ignored) {}
+        
+        try {
+            Locator text = (f != null) ? f.locator("text=\"" + escaped + "\"") : page.locator("text=\"" + escaped + "\"");
+            waitForLocatorAttached(text.first(), 400);
+            if (text.count() == 0) return null;
+            try {
+                Locator formItem = text.first().locator("xpath=ancestor-or-self::*[contains(@class,'ant-form-item')][1]");
+                waitForLocatorAttached(formItem, 200);
+                if (formItem.count() > 0) {
+                    Locator ant = formItem.first().locator(".ant-select").first();
+                    waitForLocatorAttached(ant, 200);
+                    if (ant.count() > 0) {
+                        Locator t = ant.locator(".ant-select-selection-overflow-item-suffix, .ant-select-selector, [role=combobox]").first();
+                        waitForLocatorAttached(t, 200);
+                        if (t.count() > 0) return t;
+                    }
+                }
+            } catch (Exception ignored) {}
+            Locator nextCombobox = text.first().locator("xpath=following::*[@role='combobox'][1]");
+            waitForLocatorAttached(nextCombobox, 400);
+            if (nextCombobox.count() > 0) return nextCombobox.first();
+            Locator ancestorCombobox = text.first().locator("xpath=ancestor-or-self::*[@role='combobox'][1]");
+            waitForLocatorAttached(ancestorCombobox, 400);
+            if (ancestorCombobox.count() > 0) return ancestorCombobox.first();
+        } catch (Exception ignored) {}
+        
+        return null;
+    }
+    
+    private boolean isDropdownOpen(Locator trigger) {
+        try {
+            Locator c = resolveDropdownPopupContainer();
+            if (c != null && c.count() > 0 && c.first().isVisible()) return true;
+        } catch (Exception ignored) {}
+        if (trigger == null) return false;
+        try {
+            Object v = trigger.evaluate("el => {\n" +
+                    "  try {\n" +
+                    "    const ant = el && el.closest ? el.closest('.ant-select') : null;\n" +
+                    "    if (ant && ant.classList && ant.classList.contains('ant-select-open')) return true;\n" +
+                    "    const cb = (el && el.closest) ? (el.closest('[role=combobox]') || (el.querySelector ? el.querySelector('[role=combobox]') : null)) : null;\n" +
+                    "    if (cb && cb.getAttribute && cb.getAttribute('aria-expanded') === 'true') return true;\n" +
+                    "    const elsel = el && el.closest ? el.closest('.el-select') : null;\n" +
+                    "    if (elsel && elsel.classList && (elsel.classList.contains('is-visible') || elsel.classList.contains('is-focus') || elsel.classList.contains('is-opened'))) return true;\n" +
+                    "  } catch (e) {}\n" +
+                    "  return false;\n" +
+                    "}");
+            return (v instanceof Boolean) && (Boolean) v;
+        } catch (Exception ignored) {}
+        return false;
+    }
+    
+    private boolean openDropdownTrigger(Locator trigger) {
+        if (trigger == null) return false;
+        try { if (trigger.count() == 0) return false; } catch (Exception ignored) { return false; }
+        
+        try {
+            if (isDropdownOpen(trigger)) return true;
+        } catch (Exception ignored) {}
+        
+        java.util.ArrayList<Locator> candidates = new java.util.ArrayList<>();
+        try {
+            Locator ant = trigger.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]").first();
+            waitForLocatorAttached(ant, 150);
+            if (ant.count() > 0) {
+                candidates.add(ant.locator(".ant-select-selection-overflow-item-suffix").first());
+                candidates.add(ant.locator(".ant-select-selection-overflow-item").first());
+                candidates.add(ant.locator(".ant-select-selector").first());
+                candidates.add(ant.locator(".ant-select-arrow").first());
+                candidates.add(ant);
+            }
+        } catch (Exception ignored) {}
+        try {
+            Locator elsel = trigger.locator("xpath=ancestor-or-self::*[contains(@class,'el-select')][1]").first();
+            waitForLocatorAttached(elsel, 150);
+            if (elsel.count() > 0) {
+                candidates.add(elsel.locator(".el-input__inner").first());
+                candidates.add(elsel.locator(".el-select__caret").first());
+                candidates.add(elsel);
+            }
+        } catch (Exception ignored) {}
+        try {
+            candidates.add(trigger.locator("xpath=ancestor-or-self::*[@role='combobox'][1]").first());
+        } catch (Exception ignored) {}
+        candidates.add(trigger);
+        
+        for (Locator c : candidates) {
+            if (c == null) continue;
+            try { if (c.count() == 0) continue; } catch (Exception ignored) { continue; }
+            try {
+                if (c.isVisible()) {
+                    try { c.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+                    highlight(c);
+                    try { c.click(); } catch (Exception e) { if (!tryDomClickFallback(c)) throw e; }
+                } else {
+                    if (!tryDomClickFallback(c)) continue;
+                }
+            } catch (Exception ignored) {}
+            try { page.waitForTimeout(80); } catch (Exception ignored) {}
+            if (isDropdownOpen(trigger)) return true;
+        }
+        
+        try {
+            if (trigger.isVisible()) {
+                highlight(trigger);
+                try { trigger.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+                trigger.evaluate("el => { const fire = (t) => { try { t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); } catch (e) {} try { t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); } catch (e) {} try { t.click(); } catch (e) {} }; const ant = el.closest('.ant-select'); if (ant) { const t = ant.querySelector('.ant-select-selection-overflow-item-suffix') || ant.querySelector('.ant-select-selection-overflow-item') || ant.querySelector('.ant-select-selector') || ant; fire(t); return; } const elsel = el.closest('.el-select'); if (elsel) { const t = elsel.querySelector('.el-input__inner') || elsel; fire(t); return; } fire(el); }");
+            } else {
+                trigger.evaluate("el => { const fire = (t) => { try { t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); } catch (e) {} try { t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); } catch (e) {} try { t.click(); } catch (e) {} }; const ant = el.closest('.ant-select'); if (ant) { const t = ant.querySelector('.ant-select-selection-overflow-item-suffix') || ant.querySelector('.ant-select-selection-overflow-item') || ant.querySelector('.ant-select-selector') || ant; fire(t); return; } const elsel = el.closest('.el-select'); if (elsel) { const t = elsel.querySelector('.el-input__inner') || elsel; fire(t); return; } const label = el.closest('label'); if (label) { fire(label); return; } if (el.parentElement) { fire(el.parentElement); return; } fire(el); }");
+            }
+        } catch (Exception ignored) {}
+        
+        try { page.waitForTimeout(120); } catch (Exception ignored) {}
+        return isDropdownOpen(trigger);
+    }
+    
+    private boolean tryClickDropdownOption(String optionText) {
+        String opt = optionText == null ? "" : optionText.trim();
+        if (opt.isEmpty()) return false;
+        String escaped = escapeForSelectorValue(opt);
+        
+        String[] selectors = new String[] {
+                "role=option[name=\"" + escaped + "\"]",
+                "[role=option]:has-text(\"" + escaped + "\")",
+                ".ant-select-item-option-content:has-text(\"" + escaped + "\")",
+                ".ant-select-item-option:has-text(\"" + escaped + "\")",
+                ".el-select-dropdown__item:has-text(\"" + escaped + "\")",
+                "[role=listbox] >> text=\"" + escaped + "\"",
+                "text=\"" + escaped + "\""
+        };
+        
+        Locator container = resolveDropdownPopupContainer();
+        if (container != null) {
+            for (String sel : selectors) {
+                if (sel == null || sel.trim().isEmpty()) continue;
+                try {
+                    Locator loc = container.locator(sel).first();
+                    waitForLocatorAttached(loc, 300);
+                    if (loc.count() == 0) continue;
+                    if (!loc.isVisible()) continue;
+                    highlight(loc);
+                    try {
+                        loc.click();
+                    } catch (Exception e) {
+                        Locator wrap = null;
+                        try {
+                            wrap = loc.locator("xpath=ancestor-or-self::*[@role='option' or contains(@class,'ant-select-item-option') or contains(@class,'el-select-dropdown__item')][1]").first();
+                            waitForLocatorAttached(wrap, 200);
+                        } catch (Exception ignored) { wrap = null; }
+                        if (wrap != null && wrap.count() > 0 && wrap.isVisible()) {
+                            highlight(wrap);
+                            try { wrap.click(); } catch (Exception ignored) { if (!tryDomClickFallback(wrap)) throw e; }
+                        } else if (!tryDomClickFallback(loc)) {
+                            throw e;
+                        }
+                    }
+                    return true;
+                } catch (Exception ignored) {}
+            }
+        }
+        
+        for (String sel : selectors) {
+            if (sel == null || sel.trim().isEmpty()) continue;
+            try {
+                Locator loc = locator(sel).first();
+                waitForLocatorAttached(loc, 300);
+                if (loc.count() == 0) throw new RuntimeException("no match in current context");
+                if (!loc.isVisible()) throw new RuntimeException("not visible in current context");
+                highlight(loc);
+                try {
+                    loc.click();
+                } catch (Exception e) {
+                    Locator wrap = null;
+                    try {
+                        wrap = loc.locator("xpath=ancestor-or-self::*[@role='option' or contains(@class,'ant-select-item-option') or contains(@class,'el-select-dropdown__item')][1]").first();
+                        waitForLocatorAttached(wrap, 200);
+                    } catch (Exception ignored) { wrap = null; }
+                    if (wrap != null && wrap.count() > 0 && wrap.isVisible()) {
+                        highlight(wrap);
+                        try { wrap.click(); } catch (Exception ignored) { if (!tryDomClickFallback(wrap)) throw e; }
+                    } else if (!tryDomClickFallback(loc)) {
+                        throw e;
+                    }
+                }
+                return true;
+            } catch (Exception ignored) {}
+            
+            try {
+                Frame f = ensureFrame();
+                if (f == null) continue;
+                Locator loc = page.locator(sel).first();
+                waitForLocatorAttached(loc, 300);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                highlight(loc);
+                try {
+                    loc.click();
+                } catch (Exception e) {
+                    Locator wrap = null;
+                    try {
+                        wrap = loc.locator("xpath=ancestor-or-self::*[@role='option' or contains(@class,'ant-select-item-option') or contains(@class,'el-select-dropdown__item')][1]").first();
+                        waitForLocatorAttached(wrap, 200);
+                    } catch (Exception ignored2) { wrap = null; }
+                    if (wrap != null && wrap.count() > 0 && wrap.isVisible()) {
+                        highlight(wrap);
+                        try { wrap.click(); } catch (Exception ignored2) { if (!tryDomClickFallback(wrap)) throw e; }
+                    } else if (!tryDomClickFallback(loc)) {
+                        throw e;
+                    }
+                }
+                return true;
+            } catch (Exception ignored) {}
+        }
+        
+        return false;
+    }
+    
+    private Locator resolveDropdownPopupContainer() {
+        String[] selectors = new String[] {
+                ".ant-select-dropdown:visible",
+                ".ant-select-dropdown .rc-virtual-list-holder:visible",
+                ".rc-virtual-list-holder:visible",
+                ".el-select-dropdown:visible",
+                ".el-scrollbar__wrap:visible",
+                "[role=listbox]:visible"
+        };
+        for (String sel : selectors) {
+            try {
+                Locator loc = locator(sel).first();
+                waitForLocatorAttached(loc, 250);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                return loc;
+            } catch (Exception ignored) {}
+            try {
+                Frame f = ensureFrame();
+                if (f == null) continue;
+                Locator loc = page.locator(sel).first();
+                waitForLocatorAttached(loc, 250);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                return loc;
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private java.util.List<String> collectVisibleDropdownOptions(int maxItems) {
+        int max = Math.max(0, maxItems);
+        if (max == 0) return java.util.Collections.emptyList();
+        Locator container = resolveDropdownPopupContainer();
+        if (container == null) return java.util.Collections.emptyList();
+        String[] itemSelectors = new String[] {
+                "[role=option]",
+                ".ant-select-item-option-content",
+                ".ant-select-item-option",
+                ".el-select-dropdown__item"
+        };
+        java.util.LinkedHashSet<String> uniq = new java.util.LinkedHashSet<>();
+        for (String sel : itemSelectors) {
+            try {
+                Locator items = container.locator(sel);
+                waitForLocatorAttached(items.first(), 120);
+                int c = 0;
+                try { c = items.count(); } catch (Exception ignored) { c = 0; }
+                int take = Math.min(c, max - uniq.size());
+                for (int i = 0; i < take; i++) {
+                    try {
+                        String t = items.nth(i).innerText();
+                        if (t != null) t = t.trim();
+                        if (t != null && !t.isEmpty()) uniq.add(t);
+                    } catch (Exception ignored) {}
+                    if (uniq.size() >= max) break;
+                }
+            } catch (Exception ignored) {}
+            if (uniq.size() >= max) break;
+        }
+        return new java.util.ArrayList<>(uniq);
+    }
+    
+    private boolean tryTypeDropdownAndEnter(Locator trigger, String optionText) {
+        String opt = optionText == null ? "" : optionText.trim();
+        if (opt.isEmpty()) return false;
+        if (trigger == null) return false;
+        
+        try {
+            Locator input = null;
+            try {
+                input = trigger.locator("input").first();
+                waitForLocatorAttached(input, 300);
+            } catch (Exception ignored) {
+                input = null;
+            }
+            if (input == null || input.count() == 0) {
+                try {
+                    input = locator(".ant-select-selection-search-input").first();
+                    waitForLocatorAttached(input, 300);
+                } catch (Exception ignored) {
+                    input = null;
+                }
+            }
+            if (input == null || input.count() == 0) return false;
+            if (!input.isVisible()) return false;
+            
+            highlight(input);
+            input.fill(opt);
+            input.press("Enter");
+            wait(150);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
     
     /**
@@ -1066,6 +1814,12 @@ public class WebDSL {
                     return;
                 }
             }
+            Locator alt = tryResolveClickTargetByText(selector);
+            if (alt != null) {
+                log("  -> Wait fallback: text '" + selector + "'");
+                alt.first().waitFor(new Locator.WaitForOptions().setTimeout(defaultTimeout));
+                return;
+            }
             RuntimeException login = rewriteIfLogin(e, "waitFor " + selector);
             if (login != null) throw login;
             throw e;
@@ -1074,8 +1828,29 @@ public class WebDSL {
     
     public void waitFor(String selector, Number timeout) {
         log("Wait: For element '" + selector + "' with timeout " + timeout);
+        String ariaLabel = extractOnlyAriaLabel(selector);
         Locator loc = locator(selector).first();
-        loc.waitFor(new Locator.WaitForOptions().setTimeout(timeout.doubleValue()));
+        try {
+            loc.waitFor(new Locator.WaitForOptions().setTimeout(timeout.doubleValue()));
+        } catch (RuntimeException e) {
+            if (ariaLabel != null) {
+                Locator alt2 = resolveInputLocatorFromAriaLabel(ariaLabel);
+                if (alt2 != null) {
+                    log("  -> Wait fallback: aria-label '" + ariaLabel + "'");
+                    alt2.first().waitFor(new Locator.WaitForOptions().setTimeout(timeout.doubleValue()));
+                    return;
+                }
+            }
+            Locator alt = tryResolveClickTargetByText(selector);
+            if (alt != null) {
+                log("  -> Wait fallback: text '" + selector + "'");
+                alt.first().waitFor(new Locator.WaitForOptions().setTimeout(timeout.doubleValue()));
+                return;
+            }
+            RuntimeException login = rewriteIfLogin(e, "waitFor " + selector);
+            if (login != null) throw login;
+            throw e;
+        }
     }
 
     /**
@@ -1099,13 +1874,53 @@ public class WebDSL {
     
     public void hover(String selector) {
         log("Action: Hover over '" + selector + "'");
-        highlight(selector);
-        locator(selector).first().hover();
+        retry(() -> {
+            Locator loc = locator(selector).first();
+            int c = 0;
+            try { c = loc.count(); } catch (Exception ignored) {}
+            if (c == 0) {
+                Locator alt = tryResolveClickTargetByText(selector);
+                if (alt != null) loc = alt.first();
+            }
+            try { loc.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+            try {
+                highlight(loc);
+                loc.hover();
+                return;
+            } catch (Exception ignored) {}
+            try {
+                Locator h = loc.locator("xpath=ancestor-or-self::*[self::button or self::a or @role='button' or @role='combobox'][1]").first();
+                waitForLocatorAttached(h, 300);
+                if (h.count() > 0) {
+                    try { h.scrollIntoViewIfNeeded(); } catch (Exception ignored2) {}
+                    highlight(h);
+                    h.hover();
+                    return;
+                }
+            } catch (Exception ignored) {}
+            throw new RuntimeException("Hover failed: " + selector);
+        }, "hover " + selector);
     }
     
     public void press(String selector, String key) {
         log("Action: Press key '" + key + "' on '" + selector + "'");
-        locator(selector).first().press(key);
+        retry(() -> {
+            Locator loc = locator(selector).first();
+            try {
+                loc.press(key);
+                return;
+            } catch (Exception ignored) {}
+            try {
+                Locator input = loc.locator("input, textarea, [contenteditable=true]").first();
+                waitForLocatorAttached(input, 300);
+                if (input.count() > 0) {
+                    highlight(input);
+                    input.press(key);
+                    return;
+                }
+            } catch (Exception ignored) {}
+            throw new RuntimeException("Press failed: " + selector + " -> " + key);
+        }, "press " + selector + " " + key);
     }
     
     /**
@@ -1314,6 +2129,13 @@ public class WebDSL {
         while (pageCount < maxPages) {
             // Extract current page
             List<java.util.Map<String, String>> pageData = extractFirstPageTable(containerSelector, rowSelector, columns);
+            if (pageData == null || pageData.isEmpty()) {
+                List<java.util.Map<String, String>> fallback = extractFirstPageTable(columns);
+                if (fallback != null && !fallback.isEmpty()) {
+                    log("  -> Fallback: heuristic table extraction succeeded on page " + (pageCount + 1));
+                    pageData = fallback;
+                }
+            }
             if (pageData != null && !pageData.isEmpty()) {
                 int added = 0;
                 for (java.util.Map<String, String> row : pageData) {
@@ -1553,6 +2375,7 @@ public class WebDSL {
                 Locator containers = locator(containerSelector);
                 int c = containers.count();
                 if (c == 0) {
+                    log("Warning: containerSelector not found: '" + containerSelector + "'. Fallback to auto-detect via rowSelector/common containers.");
                     containerSelector = null;
                 } else {
                 for (int i = 0; i < c; i++) {
@@ -1607,7 +2430,8 @@ public class WebDSL {
         try {
             if (rowSelector == null || rowSelector.trim().isEmpty()) throw new RuntimeException("empty rowSelector");
             Locator rows = locator(rowSelector);
-            if (rows.count() == 0) throw new RuntimeException("rowSelector not found");
+            int rc = rows.count();
+            if (rc == 0) throw new RuntimeException("rowSelector not found");
             Locator row = rows.first();
             // Mark scrollable ancestor with a data attribute
             row.evaluate("el => { " +
@@ -1627,6 +2451,7 @@ public class WebDSL {
                 log("Action: Detected scrollable container via ancestor search");
                 return "[data-webdsl-scroll-target='1']";
             }
+            log("Warning: failed to detect scrollable container via rowSelector='" + rowSelector + "' (visibleRows=" + rc + ")");
         } catch (Exception ignored) {}
         
         String[] commonContainers = new String[] {
@@ -1713,10 +2538,18 @@ public class WebDSL {
         log("Action: Scroll '" + selector + "' by " + amount + "px");
         if (!exists(selector)) {
             log("Warning: scrollBy target not found: '" + selector + "'");
+            scrollWindowBy(amount);
             return;
         }
         highlight(selector);
         locator(selector).first().evaluate("el => { el.scrollTop += " + amount + "; el.dispatchEvent(new Event('scroll', { bubbles: true })); }");
+    }
+
+    private void scrollWindowBy(int amount) {
+        try {
+            log("Action: Scroll window by " + amount + "px");
+            page.evaluate("amount => window.scrollBy(0, amount)", amount);
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -1787,31 +2620,105 @@ public class WebDSL {
      * Tries to find a button by text or selector and click it.
      */
     public void clickButton(String textOrSelector) {
-        // Try as selector first if it looks like one, otherwise try as text
-        boolean looksLikeSelector = textOrSelector.startsWith(".") || textOrSelector.startsWith("#") || textOrSelector.contains("[");
-        
-        if (looksLikeSelector && isVisible(textOrSelector)) {
-            click(textOrSelector);
-            return;
+        String raw = textOrSelector == null ? "" : textOrSelector.trim();
+        if (raw.isEmpty()) throw new RuntimeException("clickButton: empty input");
+
+        boolean treatAsSelector = isSelectorLike(raw) || raw.startsWith("role=") || raw.startsWith("text=") || raw.startsWith("xpath=") || raw.startsWith("css=");
+        if (treatAsSelector) {
+            try {
+                if (isVisible(raw)) {
+                    click(raw);
+                    return;
+                }
+            } catch (Exception ignored) {}
         }
-        
-        // Try finding by text (button, link, or generic clickable)
-        String[] attempts = {
-            "button:has-text('" + textOrSelector + "')",
-            "a:has-text('" + textOrSelector + "')",
-            "role=button[name='" + textOrSelector + "']",
-            "text='" + textOrSelector + "'"
-        };
-        
+
+        String[] attempts;
+        if (looksLikeTextRegex(raw)) {
+            String pattern = escapeForRegexLiteralInSelector(raw);
+            attempts = new String[] {
+                    "role=button[name=/" + pattern + "/]",
+                    "role=link[name=/" + pattern + "/]",
+                    "text=/" + pattern + "/"
+            };
+        } else {
+            String escaped = escapeForSelectorValue(raw);
+            attempts = new String[] {
+                    "role=button[name=\"" + escaped + "\"]",
+                    "button:has-text(\"" + escaped + "\")",
+                    "role=link[name=\"" + escaped + "\"]",
+                    "a:has-text(\"" + escaped + "\")",
+                    "text=\"" + escaped + "\""
+            };
+        }
+
         for (String sel : attempts) {
-            if (locator(sel).first().isVisible()) {
+            try {
+                Locator loc = locator(sel).first();
+                waitForLocatorAttached(loc, 250);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
                 click(sel);
                 return;
-            }
+            } catch (Exception ignored) {}
         }
-        
-        // Fallback: just try the input as a selector even if it didn't look like one
-        click(textOrSelector);
+
+        if (treatAsSelector) {
+            click(raw);
+            return;
+        }
+        throw new RuntimeException("Button not found/clickable: " + raw);
+    }
+
+    public void clickTab(String textOrSelector) {
+        String raw = textOrSelector == null ? "" : textOrSelector.trim();
+        if (raw.isEmpty()) throw new RuntimeException("clickTab: empty input");
+
+        boolean treatAsSelector = isSelectorLike(raw) || raw.startsWith("role=") || raw.startsWith("text=") || raw.startsWith("xpath=") || raw.startsWith("css=");
+        if (treatAsSelector) {
+            try {
+                if (isVisible(raw)) {
+                    click(raw);
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        String[] attempts;
+        if (looksLikeTextRegex(raw)) {
+            String pattern = escapeForRegexLiteralInSelector(raw);
+            attempts = new String[] {
+                    "role=tab[name=/" + pattern + "/]",
+                    "[role=tab] >> text=/" + pattern + "/",
+                    "text=/" + pattern + "/"
+            };
+        } else {
+            String escaped = escapeForSelectorValue(raw);
+            attempts = new String[] {
+                    "role=tab[name=\"" + escaped + "\"]",
+                    "[role=tab]:has-text(\"" + escaped + "\")",
+                    ".ant-tabs-tab:has-text(\"" + escaped + "\")",
+                    ".el-tabs__item:has-text(\"" + escaped + "\")",
+                    "text=\"" + escaped + "\""
+            };
+        }
+
+        for (String sel : attempts) {
+            try {
+                Locator loc = locator(sel).first();
+                waitForLocatorAttached(loc, 250);
+                if (loc.count() == 0) continue;
+                if (!loc.isVisible()) continue;
+                click(sel);
+                return;
+            } catch (Exception ignored) {}
+        }
+
+        if (treatAsSelector) {
+            click(raw);
+            return;
+        }
+        throw new RuntimeException("Tab not found/clickable: " + raw);
     }
     
     public void clickWithRetry(String selector) {

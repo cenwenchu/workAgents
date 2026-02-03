@@ -14,6 +14,7 @@ import com.microsoft.playwright.Playwright;
 import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
 import com.microsoft.playwright.options.AriaRole;
 import com.microsoft.playwright.options.LoadState;
+import com.qiyi.config.AppConfig;
 
 /*
  * Action list
@@ -91,7 +92,10 @@ public class PlayWrightDemo
             });
             
             // 确保新标签页完全加载
-            newPage.waitForLoadState(LoadState.NETWORKIDLE);
+            newPage.waitForLoadState(
+                    LoadState.NETWORKIDLE,
+                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+            );
 
             // 获取所有打开的页面
             List<Page> pages = page.context().pages();

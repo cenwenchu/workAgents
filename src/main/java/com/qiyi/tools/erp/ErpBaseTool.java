@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.RequestOptions;
+import com.qiyi.config.AppConfig;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
 import com.qiyi.util.PlayWrightUtil;
@@ -34,7 +35,10 @@ public abstract class ErpBaseTool implements Tool {
 
             page.navigate(targetUrl);
             try {
-                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(10000));
+                page.waitForLoadState(
+                        com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                        new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                );
             } catch (Exception e) {
                 // Ignore timeout, page might still be usable or we check login next
             }

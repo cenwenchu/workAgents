@@ -9,6 +9,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.ScreenshotScale;
+import com.qiyi.config.AppConfig;
 import com.qiyi.util.DingTalkUtil;
 import com.qiyi.util.PodCastUtil;
 import com.qiyi.wechat.WechatArticle;
@@ -338,7 +339,10 @@ public class PodCastPostToWechat {
                     if (i > 0) {
                         log("未找到已发布文章，刷新页面重试 (" + i + "/" + maxRetries + ")...");
                         page.reload();
-                        page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+                        page.waitForLoadState(
+                                com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                                new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                        );
                     }
 
                     page.waitForSelector("//a[@title='首页']", new Page.WaitForSelectorOptions().setTimeout(20000)).click();
@@ -385,7 +389,10 @@ public class PodCastPostToWechat {
     //打开微信公众号后台，判断是否登陆，登陆后，进入发布页面
     public void openWechatPodcastBackground(Page page) {
         page.navigate(WECHAT_LOGIN_URL);
-        page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+        page.waitForLoadState(
+                com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+        );
 
         long maxWaitTime = 5 * 60 * 1000; // 5 minutes
         long startTime = System.currentTimeMillis();

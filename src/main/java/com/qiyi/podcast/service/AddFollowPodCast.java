@@ -6,6 +6,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
+import com.qiyi.config.AppConfig;
 import com.qiyi.util.PodCastUtil;
 
 public class AddFollowPodCast {
@@ -31,7 +32,10 @@ public class AddFollowPodCast {
         try (Page page = context.newPage()) {
             page.navigate(searchUrl);
             
-            page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+            page.waitForLoadState(
+                    LoadState.DOMCONTENTLOADED,
+                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+            );
           
            if (!PodCastUtil.isLoggedIn(page)) {
             System.out.println("用户未登录，请手动登录后继续");
@@ -39,7 +43,10 @@ public class AddFollowPodCast {
             PodCastUtil.waitForManualLogin(page);
             }
             
-            page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+            page.waitForLoadState(
+                    LoadState.DOMCONTENTLOADED,
+                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+            );
 
 
             for(String podCastName : podCastNames) 
@@ -48,7 +55,10 @@ public class AddFollowPodCast {
                 // 检查page url 是否为 searchUrl
                 if (!page.url().equals(searchUrl)) {
                     page.navigate(searchUrl);
-                    page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+                    page.waitForLoadState(
+                            LoadState.DOMCONTENTLOADED,
+                            new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
                 }
 
                 // 使用正确的等待方式
@@ -142,7 +152,10 @@ public class AddFollowPodCast {
                         if (backButton != null) {
                             backButton.click();
                             // 等待返回后页面加载完成
-                            page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+                            page.waitForLoadState(
+                                    LoadState.DOMCONTENTLOADED,
+                                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                            );
                         }
                     }
                     else

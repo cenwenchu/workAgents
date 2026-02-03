@@ -47,6 +47,27 @@ class StorageSupport {
         }
     }
 
+    static String formatLog(String scene, String content, Throwable err) {
+        String s = scene == null ? "" : scene.trim();
+        if (s.isEmpty()) s = "AUTO_WEB";
+        String c = content == null ? "" : content.trim();
+        StringBuilder sb = new StringBuilder();
+        sb.append("[").append(s).append("] ");
+        sb.append(c);
+        if (err != null) {
+            String m = err.getMessage();
+            sb.append(" | err=").append(err.getClass().getSimpleName());
+            if (m != null && !m.trim().isEmpty()) sb.append(": ").append(m.trim());
+        }
+        return sb.toString();
+    }
+
+    static void log(java.util.function.Consumer<String> uiLogger, String scene, String content, Throwable err) {
+        String msg = formatLog(scene, content, err);
+        if (uiLogger != null) uiLogger.accept(msg);
+        else System.out.println(msg);
+    }
+
     /**
      * 记录请求 payload/prompt 字节统计
      */
@@ -138,6 +159,18 @@ class StorageSupport {
             String content,
             java.util.function.Consumer<String> uiLogger
     ) {
+        return saveDebugArtifact(ts, modelName, mode, kind, content, uiLogger, 2_000_000);
+    }
+
+    static String saveDebugArtifact(
+            String ts,
+            String modelName,
+            String mode,
+            String kind,
+            String content,
+            java.util.function.Consumer<String> uiLogger,
+            int maxChars
+    ) {
         try {
             java.nio.file.Path dir = ensureDebugDir();
             String fileName = sanitizeFileToken(ts) + "_" +
@@ -146,7 +179,8 @@ class StorageSupport {
                     sanitizeFileToken(kind) + ".txt";
             java.nio.file.Path path = dir.resolve(fileName);
 
-            String processed = truncateForDebug(redactForDebug(content), 2_000_000);
+            String redacted = redactForDebug(content);
+            String processed = (maxChars <= 0) ? redacted : truncateForDebug(redacted, maxChars);
             String sha = sha256Hex(processed);
 
             StringBuilder sb = new StringBuilder();

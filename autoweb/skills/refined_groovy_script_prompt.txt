@@ -51,6 +51,8 @@ CRITICAL FIX REQUIREMENTS:
 - **Accessibility Tree 模式**: 如果 Context Payload 看起来是 Accessibility Tree/ARIA Snapshot（包含 role/name、AXTree、ariaSnapshot 结构或纯语义节点文本），必须遵循：
   - 优先基于可见文本/role/name 的选择方式（如 `text='...'` 或 `:has-text('...')`），避免深层 DOM 链路或未出现在快照中的属性。
   - 优先使用 `web.clickButton('文本')`、`web.waitFor('text=...')`、`web.waitForLoadState()`；页面跳转或弹窗出现后先等待再交互。
+  - 标签页切换优先用 `web.clickTab('待发货')`；不要用 `web.click('text=待发货')` 乱点。
+  - 弹窗/对话框关闭优先用 `web.closeModal()` / `web.dismissPopups()`；不要手写点“×/关闭”。
   - 当中文文本可能被空格拆开时，使用正则文本选择器（如 `text=/搜\\s*索/`）。
   - 尽量避免使用 `nth` 或基于索引的定位，除非快照中只有索引可用且已明确。
 - **Popup/Modal Data**: When extracting info (counts, messages, reasons) from a modal, ALWAYS prefer `extractModalData` with regex for ALL fields. Do NOT try to `getText` on sub-elements (like `.error-message`) unless regex fails, as structure is often flat.
@@ -60,6 +62,9 @@ CRITICAL FIX REQUIREMENTS:
 - Do NOT wait for hidden inputs to be visible; click the label or parent (the DSL handles this).
 - For Chinese UI texts that may contain random spaces (e.g. "重 置", "搜 索"):
   - Prefer regex text selectors to ignore whitespace, e.g. `text=/重\\s*置/`, `text=/搜\\s*索/`, `text=/已\\s*发\\s*货/`.
+- For dropdown / combobox / filter option selection by visible label, ALWAYS use `web.selectDropdown("控件名称", "选项文本")` as the ONLY allowed pattern.
+  - 如果旧代码是“先 click 打开下拉，再 click listbox/option 选项”（例如 `web.click('text=\"资料已完善的平台\"')` + `web.click('div[role=\"listbox\"] >> text=\"淘宝\"')`），必须改写为：`web.selectDropdown("资料已完善的平台", "淘宝")`。
+  - 不允许保留 `div[role="listbox"]` / `[role=listbox]` / `[role=option]` 这类手写点击流程；统一用 `selectDropdown`。
 - For table operations, PREFER per-row CSS selectors with `:nth-child()` (e.g., `".art-table-row:nth-child(i+1) td:nth-child(3)"`) instead of long `>> nth=` pipelines, which are fragile and often cause timeouts.
 - For flaky elements, increase robustness with `web.withMaxRetries(5)` or `web.clickWithRetry('#selector')`. Adjust timeouts via `web.withDefaultTimeout(40000)`.
 
@@ -82,7 +87,7 @@ Use high-level DSL methods. Avoid manual scroll loops and DOM re-reading after e
 - **Locate Item**: `web.locateItem(containerSelector, rowSelector, textToFind)`.
 
 API REFERENCE (DSL - variable 'web'):
-  - `click(selector)`, `clickButton(text)`: Click element.
+  - `click(selector)`, `clickButton(text)`, `clickTab(text)`: Click element/tab.
   - `clickWithRetry(selector)`: Click with retries based on `withMaxRetries`.
   - `type(selector, text)`: Type text.
   - `withDefaultTimeout(ms)`: Set default wait timeout.
@@ -90,6 +95,7 @@ API REFERENCE (DSL - variable 'web'):
   - `check(selector)`, `uncheck(selector)`: For checkboxes/radios.
   - `isChecked(selector)`: Returns boolean.
   - `selectOption(selector, valueOrLabel)`: For standard `<select>`.
+  - `selectDropdown(dropdownNameOrSelector, optionText)`: For common dropdown/combobox components (e.g. AntD/Element UI).
   - `getText(selector)`: Get inner text.
   - `getAllText(selector)`: Get list of texts for all matching elements.
   - `count(selector)`: Get number of matching elements.
@@ -111,7 +117,9 @@ API REFERENCE (DSL - variable 'web'):
   - `extractPagesTable(containerSelector, rowSelector, columnsMap, nextBtnSelector, maxPages)`: **POWERFUL**. Extracts data across multiple pages by clicking 'next' button.
   - `locateItem(containerSelector, rowSelector, textToFind)`: **POWERFUL**. Scrolls until item is found and visible. Returns `boolean`.
   - `extractModalData(modalSelector, regexPatternsMap)`: **POWERFUL**. Extracts data from a popup using regex. Example: `web.extractModalData('.modal', ['success': '成功.*?(\\d+)'])`.
+  - `closeModal()`: Tries to close the currently visible modal/dialog (with fallbacks).
   - `closeModal(modalSelector, closeBtnSelector)`: Closes a modal and waits for it to vanish.
+  - `dismissPopups()`: Tries to dismiss common popups/notifications (with fallbacks).
   - `dismissPopups(selectors...)`: Try to click specified selectors to close ads/notifications.
   - `open(url)`: Opens a URL.
   - `waitForNewPage(triggerAction)`: **POWERFUL**. Returns new WebDSL for new window. Example: `def newPage = web.waitForNewPage { web.click('#link') }`.

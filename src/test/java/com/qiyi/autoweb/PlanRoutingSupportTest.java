@@ -3,6 +3,9 @@ package com.qiyi.autoweb;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 public class PlanRoutingSupportTest {
 
     @Test
@@ -77,5 +80,115 @@ public class PlanRoutingSupportTest {
         Assertions.assertTrue(normalized.contains("PLAN_END"));
         Assertions.assertFalse(normalized.contains("// PLAN_START"));
         Assertions.assertFalse(normalized.contains("// PLAN_END"));
+    }
+
+    @Test
+    public void normalizeGeneratedGroovy_shouldRewriteClickListboxToSelectDropdown() {
+        String code = String.join("\n",
+                "// Step 2",
+                "web.log('开始筛选平台为“淘宝”的商品...')",
+                "web.click('text=\"资料已完善的平台\"')",
+                "web.wait(500)",
+                "// 在展开的下拉列表中选择“淘宝”",
+                "web.click('div[role=\"listbox\"] >> text=\"淘宝\"')",
+                "web.wait(500)",
+                ""
+        );
+
+        String normalized = AutoWebAgent.normalizeGeneratedGroovy(code);
+        Assertions.assertTrue(normalized.contains("web.selectDropdown(\"资料已完善的平台\", \"淘宝\")"));
+        Assertions.assertFalse(normalized.contains("div[role=\"listbox\"] >> text=\"淘宝\""));
+        Assertions.assertFalse(normalized.contains("web.click('text=\"资料已完善的平台\"')"));
+    }
+
+    @Test
+    public void readCachedHtml_shouldTreatEmptyA11yCacheAsMiss() throws Exception {
+        String oldUserDir = System.getProperty("user.dir");
+        Path tmp = Files.createTempDirectory("autoweb-cache-test");
+        try {
+            System.setProperty("user.dir", tmp.toAbsolutePath().toString());
+            HtmlSnapshotDao.writeCachedHtml(
+                    1,
+                    "https://example.com",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT,
+                    true,
+                    "{\n  \"ariaSnapshotText\": \"\"\n}",
+                    "{\n  \"ariaSnapshotText\": \"\"\n}"
+            );
+            AutoWebAgent.HtmlSnapshot snap = HtmlSnapshotDao.readCachedHtml(
+                    1,
+                    "https://example.com",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT,
+                    true
+            );
+            Assertions.assertNull(snap);
+        } finally {
+            System.setProperty("user.dir", oldUserDir == null ? "" : oldUserDir);
+        }
+    }
+
+    @Test
+    public void readCachedHtml_shouldKeepA11yCacheWhenAxTreePresent() throws Exception {
+        String oldUserDir = System.getProperty("user.dir");
+        Path tmp = Files.createTempDirectory("autoweb-cache-test");
+        try {
+            System.setProperty("user.dir", tmp.toAbsolutePath().toString());
+            String payload = "{\n  \"ariaSnapshotText\": \"\",\n  \"axTree\": {\"nodes\": []}\n}";
+            HtmlSnapshotDao.writeCachedHtml(
+                    1,
+                    "https://example.com",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT,
+                    true,
+                    payload,
+                    payload
+            );
+            AutoWebAgent.HtmlSnapshot snap = HtmlSnapshotDao.readCachedHtml(
+                    1,
+                    "https://example.com",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT,
+                    true
+            );
+            Assertions.assertNotNull(snap);
+            Assertions.assertTrue(snap.cleanedHtml.contains("axTree"));
+        } finally {
+            System.setProperty("user.dir", oldUserDir == null ? "" : oldUserDir);
+        }
+    }
+
+    @Test
+    public void readCachedHtml_shouldReuseCacheAcrossDifferentQueryParams() throws Exception {
+        String oldUserDir = System.getProperty("user.dir");
+        Path tmp = Files.createTempDirectory("autoweb-cache-test");
+        try {
+            System.setProperty("user.dir", tmp.toAbsolutePath().toString());
+
+            AutoWebAgent.HtmlSnapshot written = HtmlSnapshotDao.writeCachedHtml(
+                    1,
+                    "https://example.com/orders?a=1",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.RAW_HTML,
+                    true,
+                    "<html><body>ok</body></html>",
+                    "<html><body>ok</body></html>"
+            );
+            Assertions.assertNotNull(written);
+
+            AutoWebAgent.HtmlSnapshot read = HtmlSnapshotDao.readCachedHtml(
+                    2,
+                    "https://example.com/orders?b=2",
+                    "Direct URL",
+                    AutoWebAgent.HtmlCaptureMode.RAW_HTML,
+                    true
+            );
+            Assertions.assertNotNull(read);
+            Assertions.assertEquals(written.cacheKey, read.cacheKey);
+            Assertions.assertEquals("https://example.com/orders", read.url);
+        } finally {
+            System.setProperty("user.dir", oldUserDir == null ? "" : oldUserDir);
+        }
     }
 }

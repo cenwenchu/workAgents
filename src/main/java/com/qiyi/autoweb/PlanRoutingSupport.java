@@ -1,6 +1,7 @@
 package com.qiyi.autoweb;
 
 import com.microsoft.playwright.Page;
+import com.qiyi.config.AppConfig;
 
 /**
  * 计划解析与页面上下文路由工具
@@ -191,10 +192,16 @@ class PlanRoutingSupport {
                 return false;
             }
             try {
-                rootPage.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(15000));
+                rootPage.waitForLoadState(
+                        com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                        new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                );
             } catch (Exception ignored) {
                 try {
-                    rootPage.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(15000));
+                    rootPage.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED,
+                            new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
                 } catch (Exception ignored2) {}
             }
             try { rootPage.waitForTimeout(500); } catch (Exception ignored) {}
@@ -217,6 +224,10 @@ class PlanRoutingSupport {
      * @return 扫描结果，包含所有上下文与最佳候选
      */
     static AutoWebAgent.ScanResult scanContexts(Page page) {
+        return scanContexts(page, null);
+    }
+
+    static AutoWebAgent.ScanResult scanContexts(Page page, java.util.function.Consumer<String> uiLogger) {
         synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
             AutoWebAgent.ScanResult result = new AutoWebAgent.ScanResult();
 
@@ -227,10 +238,20 @@ class PlanRoutingSupport {
             result.best = mainPageWrapper;
 
             double maxArea = 0;
+            final double minCandidateArea = 10_000;
+            final double minCandidateMinDim = 100;
 
-            System.out.println("Scanning frames...");
+            StorageSupport.log(uiLogger, "FRAME_SCAN", "Scanning frames...", null);
             AutoWebAgent.ContextWrapper firstFrame = null;
+            double firstFrameArea = 0;
+            double firstFrameW = 0;
+            double firstFrameH = 0;
+            boolean firstFrameVisible = false;
             AutoWebAgent.ContextWrapper bestUrlFrame = null;
+            double bestUrlFrameArea = 0;
+            double bestUrlFrameW = 0;
+            double bestUrlFrameH = 0;
+            boolean bestUrlFrameVisible = false;
             String pageUrl = "";
             try {
                 pageUrl = page.url();
@@ -248,7 +269,31 @@ class PlanRoutingSupport {
                     fw.name = "Frame: " + fName + " (" + f.url() + ")";
 
                     result.wrappers.add(fw);
-                    if (firstFrame == null) firstFrame = fw;
+                    com.microsoft.playwright.ElementHandle element = f.frameElement();
+                    double area = 0;
+                    boolean isVisible = false;
+                    double w = 0;
+                    double h = 0;
+
+                    if (element != null) {
+                        com.microsoft.playwright.options.BoundingBox box = element.boundingBox();
+                        if (box != null) {
+                            w = box.width;
+                            h = box.height;
+                            area = box.width * box.height;
+                            if (box.width > 0 && box.height > 0) {
+                                isVisible = true;
+                            }
+                        }
+                    }
+
+                    if (firstFrame == null) {
+                        firstFrame = fw;
+                        firstFrameArea = area;
+                        firstFrameW = w;
+                        firstFrameH = h;
+                        firstFrameVisible = isVisible;
+                    }
 
                     String fUrl = "";
                     try {
@@ -261,6 +306,10 @@ class PlanRoutingSupport {
                         if (differentFromPage) {
                             if (bestUrlFrame == null) {
                                 bestUrlFrame = fw;
+                                bestUrlFrameArea = area;
+                                bestUrlFrameW = w;
+                                bestUrlFrameH = h;
+                                bestUrlFrameVisible = isVisible;
                             } else {
                                 String bestUrl = "";
                                 try {
@@ -272,47 +321,57 @@ class PlanRoutingSupport {
                                 bestUrl = bestUrl.trim();
                                 if (bestUrl.isEmpty() || fUrl.length() > bestUrl.length()) {
                                     bestUrlFrame = fw;
+                                    bestUrlFrameArea = area;
+                                    bestUrlFrameW = w;
+                                    bestUrlFrameH = h;
+                                    bestUrlFrameVisible = isVisible;
                                 }
                             }
                         }
                     }
 
-                    com.microsoft.playwright.ElementHandle element = f.frameElement();
-                    double area = 0;
-                    boolean isVisible = false;
+                    StorageSupport.log(
+                            uiLogger,
+                            "FRAME_SCAN",
+                            "Found frame=" + fName + " | url=" + fUrl + " | area=" + (long) area + " | w=" + (long) w + " | h=" + (long) h + " | visible=" + isVisible,
+                            null
+                    );
 
-                    if (element != null) {
-                        com.microsoft.playwright.options.BoundingBox box = element.boundingBox();
-                        if (box != null) {
-                            area = box.width * box.height;
-                            if (box.width > 0 && box.height > 0) {
-                                isVisible = true;
-                            }
-                        }
-                    }
-
-                    System.out.println(" - Found Frame: " + fName + " | Area: " + area + " | Visible: " + isVisible);
-
-                    if (isVisible && area > maxArea) {
+                    boolean isCandidate = isVisible
+                            && w >= minCandidateMinDim
+                            && h >= minCandidateMinDim
+                            && area >= minCandidateArea;
+                    if (isCandidate && area > maxArea) {
                         maxArea = area;
                         result.best = fw;
                     }
                 } catch (Exception e) {
-                    System.out.println(" - Error checking frame " + f.name() + ": " + e.getMessage());
+                    StorageSupport.log(uiLogger, "FRAME_SCAN", "Error checking frame=" + (f == null ? "" : f.name()), e);
                 }
             }
 
             if (result.best == mainPageWrapper && firstFrame != null) {
-                if (bestUrlFrame != null) {
-                    System.out.println(" - No definitely visible frame found. Fallback to URL frame: " + bestUrlFrame.name);
+                boolean bestUrlOk = bestUrlFrame != null
+                        && bestUrlFrameVisible
+                        && bestUrlFrameW >= minCandidateMinDim
+                        && bestUrlFrameH >= minCandidateMinDim
+                        && bestUrlFrameArea >= minCandidateArea;
+                boolean firstOk = firstFrameVisible
+                        && firstFrameW >= minCandidateMinDim
+                        && firstFrameH >= minCandidateMinDim
+                        && firstFrameArea >= minCandidateArea;
+                if (bestUrlOk) {
+                    StorageSupport.log(uiLogger, "FRAME_SCAN", "No visible content frame. Fallback=url_frame | frame=" + (bestUrlFrame == null ? "" : bestUrlFrame.name), null);
                     result.best = bestUrlFrame;
-                } else {
-                    System.out.println(" - No definitely visible frame found. Fallback to first found frame: " + firstFrame.name);
+                } else if (firstOk) {
+                    StorageSupport.log(uiLogger, "FRAME_SCAN", "No visible content frame. Fallback=first_frame | frame=" + firstFrame.name, null);
                     result.best = firstFrame;
+                } else {
+                    StorageSupport.log(uiLogger, "FRAME_SCAN", "No suitable content frame. Fallback=main_page", null);
                 }
             }
 
-            System.out.println("Scan complete. Best candidate: " + result.best.name);
+            StorageSupport.log(uiLogger, "FRAME_SCAN", "Scan complete. best=" + (result.best == null ? "" : result.best.name), null);
             return result;
         }
     }
@@ -325,15 +384,15 @@ class PlanRoutingSupport {
      * @return 最佳上下文包装
      */
     static AutoWebAgent.ContextWrapper selectBestContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
-        AutoWebAgent.ScanResult res = scanContexts(rootPage);
+        AutoWebAgent.ScanResult res = scanContexts(rootPage, uiLogger);
         if (res != null && res.best != null) {
-            if (uiLogger != null) uiLogger.accept("已自动选中最佳上下文: " + res.best.name);
+            StorageSupport.log(uiLogger, "CTX_SELECT", "已自动选中最佳上下文: " + res.best.name, null);
             return res.best;
         }
         AutoWebAgent.ContextWrapper fallback = new AutoWebAgent.ContextWrapper();
         fallback.context = rootPage;
         fallback.name = "Main Page";
-        if (uiLogger != null) uiLogger.accept("未能找到合适的上下文，回退使用主页面。");
+        StorageSupport.log(uiLogger, "CTX_SELECT", "未能找到合适的上下文，回退使用主页面。", null);
         return fallback;
     }
 
@@ -355,7 +414,7 @@ class PlanRoutingSupport {
 
             try {
                 rootPage.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED,
-                        new Page.WaitForLoadStateOptions().setTimeout(12000));
+                        new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs()));
             } catch (Exception ignored) {}
 
             // iframe 场景常见“先出主页面再异步挂载内容 frame”：这里短暂轮询等待内容 frame 出现
@@ -549,7 +608,7 @@ class PlanRoutingSupport {
         res.confirmed = !upper.contains("STATUS: UNKNOWN") && !res.hasQuestion;
 
         // 使用 Step N 作为分段标记，把整段 plan 切成多个 step block
-        java.util.regex.Pattern stepHeader = java.util.regex.Pattern.compile("(?mi)^\\s*(?:[-*]\\s*)?\\**(?:Step|步骤)\\s*(\\d+)\\**\\s*[:：]?\\s*(.*)$");
+        java.util.regex.Pattern stepHeader = java.util.regex.Pattern.compile("(?mi)^\\s*(?:[-*]\\s*)?\\**(?:(?:Step|步骤)\\s*(\\d+)|第\\s*(\\d+)\\s*(?:步|步骤)|Part\\s*(\\d+))\\**\\s*[:：]?\\s*(.*)$");
         java.util.regex.Matcher mh = stepHeader.matcher(parseSrc);
         java.util.List<Integer> stepStarts = new java.util.ArrayList<>();
         java.util.List<Integer> stepNums = new java.util.ArrayList<>();
@@ -557,11 +616,20 @@ class PlanRoutingSupport {
         while (mh.find()) {
             stepStarts.add(mh.start());
             try {
-                stepNums.add(Integer.parseInt(mh.group(1)));
+                String token = null;
+                try { token = mh.group(1); } catch (Exception ignored) {}
+                if (token == null || token.trim().isEmpty()) {
+                    try { token = mh.group(2); } catch (Exception ignored) {}
+                }
+                if (token == null || token.trim().isEmpty()) {
+                    try { token = mh.group(3); } catch (Exception ignored) {}
+                }
+                Integer n = parseUnicodeInt(token);
+                stepNums.add(n == null ? (stepNums.size() + 1) : n);
             } catch (Exception ignored) {
                 stepNums.add(stepNums.size() + 1);
             }
-            String inline = mh.group(2);
+            String inline = mh.group(4);
             inlineDescs.add(inline == null ? "" : inline.trim());
         }
         if (stepNums.isEmpty()) {
@@ -611,6 +679,21 @@ class PlanRoutingSupport {
         }
 
         return res;
+    }
+    
+    private static Integer parseUnicodeInt(String token) {
+        if (token == null) return null;
+        String s = token.trim();
+        if (s.isEmpty()) return null;
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!Character.isDigit(c)) return null;
+            int d = Character.getNumericValue(c);
+            if (d < 0 || d > 9) return null;
+            n = n * 10 + d;
+        }
+        return n;
     }
 
     private static java.util.List<String> inferMissingEntryLabels(java.util.List<String> modelNames, java.util.Map<String, AutoWebAgent.ModelSession> sessionsByModel) {

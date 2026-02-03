@@ -19,7 +19,7 @@ class AutoWebAgentUtils {
             Path debugDir = Paths.get(System.getProperty("user.dir"), "autoweb", "debug");
             if (Files.exists(debugDir)) {
                 // 核心逻辑：倒序删除目录树，避免先删父目录失败
-                System.out.println("Cleaning debug directory: " + debugDir.toAbsolutePath());
+                StorageSupport.log(null, "DIR_CLEAN", "Cleaning debug directory | path=" + debugDir.toAbsolutePath(), null);
                 try (java.util.stream.Stream<Path> walk = Files.walk(debugDir)) {
                     walk.sorted(java.util.Comparator.reverseOrder())
                         .forEach(p -> {
@@ -32,7 +32,7 @@ class AutoWebAgentUtils {
             // 核心逻辑：确保目录存在供后续写入
             Files.createDirectories(debugDir);
         } catch (IOException e) {
-            System.err.println("Warning: Failed to clean debug directory: " + e.getMessage());
+            StorageSupport.log(null, "DIR_CLEAN", "Failed to clean debug directory", e);
         }
     }
 
@@ -45,7 +45,7 @@ class AutoWebAgentUtils {
             Path cacheDir = Paths.get(System.getProperty("user.dir"), "autoweb", "cache");
             if (Files.exists(cacheDir)) {
                 // 核心逻辑：倒序删除目录树，避免父目录非空
-                System.out.println("Cleaning cache directory: " + cacheDir.toAbsolutePath());
+                StorageSupport.log(null, "DIR_CLEAN", "Cleaning cache directory | path=" + cacheDir.toAbsolutePath(), null);
                 try (java.util.stream.Stream<Path> walk = Files.walk(cacheDir)) {
                     walk.sorted(java.util.Comparator.reverseOrder())
                             .forEach(p -> {
@@ -58,7 +58,7 @@ class AutoWebAgentUtils {
             // 核心逻辑：确保目录存在供后续写入
             Files.createDirectories(cacheDir);
         } catch (IOException e) {
-            System.err.println("Warning: Failed to clean cache directory: " + e.getMessage());
+            StorageSupport.log(null, "DIR_CLEAN", "Failed to clean cache directory", e);
         }
     }
 
@@ -173,15 +173,11 @@ class AutoWebAgentUtils {
         } catch (java.util.concurrent.TimeoutException te) {
             // 核心逻辑：超时后取消任务，避免阻塞
             future.cancel(true);
-            if (uiLogger != null) {
-                uiLogger.accept("LLM 调用超时，模型: " + modelName + "，已中止本次请求。");
-            }
+            StorageSupport.log(uiLogger, "LLM", "调用超时，模型=" + (modelName == null ? "" : modelName) + "，已中止本次请求", te);
         } catch (Exception ex) {
             // 核心逻辑：异常取消任务并输出错误
             future.cancel(true);
-            if (uiLogger != null) {
-                uiLogger.accept("LLM 调用失败，模型: " + modelName + "，错误: " + ex.getMessage());
-            }
+            StorageSupport.log(uiLogger, "LLM", "调用失败，模型=" + (modelName == null ? "" : modelName), ex);
         } finally {
             executor.shutdownNow();
         }

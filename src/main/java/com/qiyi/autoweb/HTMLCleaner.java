@@ -50,7 +50,7 @@ public class HTMLCleaner {
      */
     public static String clean(String html) {
         if (html == null || html.isEmpty()) return "";
-        System.out.println("HTMLCleaner.before:\n" + html.length());
+        StorageSupport.log(null, "HTML_CLEAN", "before len=" + html.length(), null);
 
         Document doc = Jsoup.parse(html);
 
@@ -119,7 +119,7 @@ public class HTMLCleaner {
         
         // 进一步压缩连续空白
         cleaned = cleaned.replaceAll("\\s+", " ").trim();
-        System.out.println("HTMLCleaner.after:\n" + cleaned.length());
+        StorageSupport.log(null, "HTML_CLEAN", "after len=" + cleaned.length(), null);
         
         return cleaned;
     }

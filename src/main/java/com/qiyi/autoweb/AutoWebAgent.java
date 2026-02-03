@@ -5,8 +5,11 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.microsoft.playwright.CDPSession;
+import com.microsoft.playwright.Frame;
 import com.microsoft.playwright.Page;
+import com.qiyi.config.AppConfig;
 import com.qiyi.util.LLMUtil;
 import com.qiyi.util.PlayWrightUtil;
 import javax.swing.SwingUtilities;
@@ -19,6 +22,59 @@ public class AutoWebAgent {
     static String ACTIVE_MODEL = "DEEPSEEK";
     static final Object PLAYWRIGHT_LOCK = new Object();
     private static final Gson PRETTY_GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+
+    static java.util.List<String> supportedModelKeys() {
+        return java.util.Arrays.asList(
+                "DEEPSEEK",
+                "QWEN_MAX",
+                "MOONSHOT",
+                "GLM",
+                "MINIMAX",
+                "GEMINI",
+                "OLLAMA_QWEN3_8B"
+        );
+    }
+
+    static String[] supportedModelDisplayNames() {
+        java.util.List<String> keys = supportedModelKeys();
+        String[] out = new String[keys.size()];
+        for (int i = 0; i < keys.size(); i++) {
+            out[i] = modelKeyToDisplayName(keys.get(i));
+        }
+        return out;
+    }
+
+    static String modelKeyToDisplayName(String modelKey) {
+        String k = modelKey == null ? "" : modelKey.trim().toUpperCase();
+        if ("QWEN_MAX".equals(k)) return "Qwen-Max";
+        if ("GEMINI".equals(k)) return "Gemini";
+        if ("MOONSHOT".equals(k)) return "Moonshot";
+        if ("GLM".equals(k)) return "GLM";
+        if ("MINIMAX".equals(k)) return "Minimax";
+        if ("OLLAMA_QWEN3_8B".equals(k)) return "Ollama Qwen3:8B";
+        return "DeepSeek";
+    }
+
+    static String normalizeModelKey(String displayOrKey) {
+        if (displayOrKey == null) return "DEEPSEEK";
+        String raw = displayOrKey.trim();
+        if (raw.isEmpty()) return "DEEPSEEK";
+        String upper = raw.toUpperCase();
+
+        if (upper.contains("DEEPSEEK")) return "DEEPSEEK";
+        if (upper.contains("QWEN_MAX") || upper.contains("QWEN-MAX") || upper.contains("ALIYUN_QWEN_MAX")) return "QWEN_MAX";
+        if (upper.contains("GEMINI")) return "GEMINI";
+        if (upper.contains("MOONSHOT")) return "MOONSHOT";
+        if (upper.equals("GLM") || upper.contains("ZHIPU")) return "GLM";
+        if (upper.contains("MINIMAX")) return "MINIMAX";
+        if (upper.contains("OLLAMA") || upper.contains("QWEN3:8B") || upper.contains("QWEN3_8B") || upper.contains("QWEN3")) return "OLLAMA_QWEN3_8B";
+
+        String maybeKey = upper.replace('-', '_').replace(' ', '_');
+        for (String k : supportedModelKeys()) {
+            if (k.equalsIgnoreCase(maybeKey)) return k;
+        }
+        return "DEEPSEEK";
+    }
 
     /**
      * 页面采集模式：原始 HTML 或 ARIA 快照
@@ -43,41 +99,23 @@ public class AutoWebAgent {
             //         "再输出页面底部显示的总记录数（比如“共xx条”）。" +
             //         "最后选中第一页第一条记录，并点击“审核推单”。";
 
-            String userPrompt = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\\\"列名:列内容（去掉回车换行）\\\"，然后用\\\"｜\\\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
+            //String userPrompt = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\\\"列名:列内容（去掉回车换行）\\\"，然后用\\\"｜\\\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
+            String userPrompt = "请查询资料已完善平台为淘宝的商品，输出这些商品的商品信息、类目名称、库存、基本售价";
 
-            System.out.println("No arguments provided. Running default example:");
-            System.out.println("URL: " + url);
-            System.out.println("Prompt: " + userPrompt);
+
+            StorageSupport.log(null, "CLI", "No arguments provided. Running default example", null);
+            StorageSupport.log(null, "CLI", "URL=" + url, null);
+            StorageSupport.log(null, "CLI", "Prompt=" + userPrompt, null);
             run(url, userPrompt);
         } else {
             if (args.length >= 3 && args[2] != null) {
-                String modelArg = args[2].trim();
-                String upper = modelArg.toUpperCase();
-                if ("DEEPSEEK".equals(upper)) {
-                    ACTIVE_MODEL = "DEEPSEEK";
-                    System.out.println("Using model: DeepSeek (remote)");
-                } else if ("QWEN-MAX".equals(upper) || "QWEN_MAX".equals(upper) || "ALIYUN_QWEN_MAX".equals(upper)) {
-                    ACTIVE_MODEL = "QWEN_MAX";
-                    System.out.println("Using model: Aliyun Qwen-Max (remote)");
-                } else if ("GEMINI".equals(upper) || "GEMINI_FLASH".equals(upper)) {
-                    ACTIVE_MODEL = "GEMINI";
-                    System.out.println("Using model: Gemini (remote)");
-                } else if ("MOONSHOT".equals(upper) || "MOONSHOT_MOONSHOT".equals(upper) || "MOONSHOT_V1".equals(upper)) {
-                    ACTIVE_MODEL = "MOONSHOT";
-                    System.out.println("Using model: Moonshot (remote)");
-                } else if ("GLM".equals(upper) || "ZHIPU".equals(upper)) {
-                    ACTIVE_MODEL = "GLM";
-                    System.out.println("Using model: Zhipu GLM (remote)");
-                } else if ("OLLAMA_MODEL_QWEN3_8B".equals(upper)
-                        || "OLLAMA_QWEN3_8B".equals(upper)
-                        || "OLLAMA".equals(upper)
-                        || "QWEN3_8B".equals(upper)
-                        || "QWEN3:8B".equals(upper)) {
-                    ACTIVE_MODEL = "OLLAMA_QWEN3_8B";
-                    System.out.println("Using local Ollama model: " + LLMUtil.OLLAMA_MODEL_QWEN3_8B + " @ " + LLMUtil.OLLAMA_HOST);
+                String modelKey = normalizeModelKey(args[2]);
+                ACTIVE_MODEL = modelKey;
+                String display = modelKeyToDisplayName(modelKey);
+                if ("OLLAMA_QWEN3_8B".equals(modelKey)) {
+                    StorageSupport.log(null, "CLI", "Using model: " + display + " (" + LLMUtil.OLLAMA_MODEL_QWEN3_8B + " @ " + LLMUtil.OLLAMA_HOST + ")", null);
                 } else {
-                    ACTIVE_MODEL = "DEEPSEEK";
-                    System.out.println("Unknown model arg '" + modelArg + "', defaulting to DeepSeek.");
+                    StorageSupport.log(null, "CLI", "Using model: " + display + " (" + modelKey + ")", null);
                 }
             } else {
                 ACTIVE_MODEL = "DEEPSEEK";
@@ -93,7 +131,7 @@ public class AutoWebAgent {
         GroovySupport.loadPrompts();
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
         if (connection == null) {
-            System.err.println("Failed to connect to browser.");
+            StorageSupport.log(null, "BROWSER", "Failed to connect to browser", null);
             return;
         }
 
@@ -115,7 +153,7 @@ public class AutoWebAgent {
                 }
 
                 if (page == null) {
-                    System.out.println("Page not found, creating new page and navigating...");
+                    StorageSupport.log(null, "BROWSER_ATTACH", "Page not found, creating new page and navigating", null);
                     // 优先使用现有的上下文（即用户配置目录的上下文），以保留登录态
                     if (!connection.browser.contexts().isEmpty()) {
                         page = connection.browser.contexts().get(0).newPage();
@@ -124,7 +162,7 @@ public class AutoWebAgent {
                     }
                     page.navigate(url);
                 } else {
-                    System.out.println("Found existing page: " + page.title());
+                    StorageSupport.log(null, "BROWSER_ATTACH", "Found existing page | title=" + page.title(), null);
                     page.bringToFront();
                 }
 
@@ -137,23 +175,23 @@ public class AutoWebAgent {
                     if (System.currentTimeMillis() - startTime > maxWaitTime) {
                         throw new RuntimeException("Timeout waiting for target URL. Current URL: " + safePageUrl(page));
                     }
-                    System.out.println("Current URL: " + safePageUrl(page) + ". Waiting for target URL: " + urlCheck + " (ignoring query, login might be required)...");
+                    StorageSupport.log(null, "BROWSER_ATTACH", "Waiting for target URL | current=" + safePageUrl(page) + " | target=" + urlCheck + " | ignoreQuery=true", null);
                     synchronized (PLAYWRIGHT_LOCK) {
                         page.waitForTimeout(interval);
                     }
                 }
             } else {
                 // No URL provided - Just pick the first active page or create a blank one
-                System.out.println("No target URL provided. Attaching to active page...");
+                StorageSupport.log(null, "BROWSER_ATTACH", "No target URL provided. Attaching to active page", null);
                 if (!connection.browser.contexts().isEmpty() && !connection.browser.contexts().get(0).pages().isEmpty()) {
                     // Pick the last used page (usually the most relevant)
                     com.microsoft.playwright.BrowserContext context = connection.browser.contexts().get(0);
                     // Use the last page as it's likely the most recently opened
                     page = context.pages().get(context.pages().size() - 1);
                     page.bringToFront();
-                    System.out.println("Attached to existing page: " + page.title() + " (" + safePageUrl(page) + ")");
+                    StorageSupport.log(null, "BROWSER_ATTACH", "Attached to existing page | title=" + page.title() + " | url=" + safePageUrl(page), null);
                 } else {
-                    System.out.println("No active pages found. Creating a blank new page.");
+                    StorageSupport.log(null, "BROWSER_ATTACH", "No active pages found. Creating a blank new page", null);
                     if (!connection.browser.contexts().isEmpty()) {
                         page = connection.browser.contexts().get(0).newPage();
                     } else {
@@ -165,15 +203,18 @@ public class AutoWebAgent {
             boolean fastStart = (url == null || url.isEmpty());
             if (!fastStart) {
                 try {
-                    page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(10000));
+                    page.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                            new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
                 } catch (Exception e) {
-                    System.out.println("Wait for NETWORKIDLE timed out or failed, continuing...");
+                    StorageSupport.log(null, "PAGE_WAIT", "Wait for NETWORKIDLE timed out or failed, continuing", e);
                 }
 
-                System.out.println("Waiting 1 second for dynamic content to render...");
+                StorageSupport.log(null, "PAGE_WAIT", "Waiting 1 second for dynamic content to render", null);
                 page.waitForTimeout(1000);
             } else {
-                System.out.println("Fast start mode: Skipping network idle wait and dynamic content wait.");
+                StorageSupport.log(null, "PAGE_WAIT", "Fast start mode: Skipping network idle wait and dynamic content wait", null);
             }
 
             com.microsoft.playwright.Frame contentFrame = null;
@@ -183,7 +224,7 @@ public class AutoWebAgent {
             if (page.frames().size() > 1) {
                 int maxScanRetries = fastStart ? 1 : 3;
                 int waitBetweenScansMs = fastStart ? 0 : 1000;
-                System.out.println("Checking frames (scanning up to " + maxScanRetries + " times)...");
+                StorageSupport.log(null, "FRAME_SCAN", "Checking frames | maxScanRetries=" + maxScanRetries + " | waitBetweenScansMs=" + waitBetweenScansMs, null);
                 for (int i = 0; i < maxScanRetries; i++) {
                     maxArea = 0;
                     contentFrame = null;
@@ -202,7 +243,7 @@ public class AutoWebAgent {
                                             frameUrl = f.url();
                                         }
                                     } catch (Exception ignored) {}
-                                    System.out.println(" - [" + i + "] Frame: " + f.name() + " | URL: " + frameUrl + " | Area: " + area);
+                                    StorageSupport.log(null, "FRAME_SCAN", "Found frame | round=" + i + " | name=" + f.name() + " | url=" + frameUrl + " | area=" + (long) area, null);
 
                                     if (box.width > 0 && box.height > 0) {
                                         if (area > maxArea) {
@@ -214,33 +255,32 @@ public class AutoWebAgent {
                                 }
                             }
                         } catch (Exception e) {
-                            System.out.println(" - Error checking frame " + f.name() + ": " + e.getMessage());
+                            StorageSupport.log(null, "FRAME_SCAN", "Error checking frame=" + f.name(), e);
                         }
                     }
 
                     if (contentFrame != null) {
-                        System.out.println("   -> Identified largest frame as content frame: " + frameName + " (Area: " + maxArea + ")");
+                        StorageSupport.log(null, "FRAME_SCAN", "Identified largest frame as content frame | name=" + frameName + " | area=" + (long) maxArea, null);
                         break;
                     }
 
                     if (waitBetweenScansMs > 0) {
-                        System.out.println("   -> No significant child frame found yet. Waiting " + (waitBetweenScansMs / 1000) + "s...");
+                        StorageSupport.log(null, "FRAME_SCAN", "No significant child frame found yet. Waiting " + (waitBetweenScansMs / 1000) + "s", null);
                         page.waitForTimeout(waitBetweenScansMs);
                     }
                 }
             } else {
-                System.out.println("No child frames detected, skipping frame scan.");
+                StorageSupport.log(null, "FRAME_SCAN", "No child frames detected, skipping frame scan", null);
             }
 
             // Launch UI
-            System.out.println("Launching Control UI...");
+            StorageSupport.log(null, "UI", "Launching Control UI", null);
             // Use contentFrame if available, otherwise use page
             Object executionContext = (contentFrame != null) ? contentFrame : page;
             SwingUtilities.invokeLater(() -> AutoWebAgentUI.createGUI(executionContext, "", userPrompt, connection));
 
         } catch (Exception e) {
-            e.printStackTrace();
-            System.err.println("Error during initialization: " + e.getMessage());
+            StorageSupport.log(null, "INIT", "Error during initialization", e);
             if (connection != null && connection.playwright != null) {
                 connection.playwright.close();
             }
@@ -311,6 +351,8 @@ public class AutoWebAgent {
         java.util.Map<Integer, HtmlSnapshot> stepSnapshots = new java.util.HashMap<>();
         boolean planConfirmed;
         boolean htmlPrepared;
+        HtmlCaptureMode htmlCaptureMode;
+        boolean htmlA11yInterestingOnly;
         String lastArtifactType;
     }
 
@@ -358,6 +400,13 @@ public class AutoWebAgent {
         return HtmlSnapshotDao.writeCachedHtml(stepIndex, url, entryAction, captureMode, a11yInterestingOnly, rawHtml, cleanedHtml);
     }
 
+    private static HtmlSnapshot captureAndCacheSnapshot(int stepIndex, String url, String entryAction, Object pageOrFrame, HtmlCaptureMode captureMode, boolean a11yInterestingOnly) {
+        String rawHtml = "";
+        try { rawHtml = getPageContent(pageOrFrame, captureMode, a11yInterestingOnly); } catch (Exception ignored) {}
+        String cleaned = cleanCapturedContent(rawHtml, captureMode);
+        return writeCachedHtml(stepIndex, url, entryAction, captureMode, a11yInterestingOnly, rawHtml, cleaned);
+    }
+
     static String newDebugTimestamp() {
         return StorageSupport.newDebugTimestamp();
     }
@@ -398,16 +447,32 @@ public class AutoWebAgent {
         return PayloadSupport.buildPlanRefinePayload(currentPage, userPrompt, refineHint);
     }
 
+    static String buildPlanRefinePayload(Page currentPage, String userPrompt, String refineHint, String visualDescription) {
+        return PayloadSupport.buildPlanRefinePayload(currentPage, userPrompt, refineHint, visualDescription);
+    }
+
     static String buildPlanRefinePayload(String currentUrl, String userPrompt, String refineHint) {
         return PayloadSupport.buildPlanRefinePayload(currentUrl, userPrompt, refineHint);
+    }
+
+    static String buildPlanRefinePayload(String currentUrl, String userPrompt, String refineHint, String visualDescription) {
+        return PayloadSupport.buildPlanRefinePayload(currentUrl, userPrompt, refineHint, visualDescription);
     }
 
     static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots) {
         return PayloadSupport.buildCodegenPayload(currentPage, planText, snapshots);
     }
 
+    static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
+        return PayloadSupport.buildCodegenPayload(currentPage, planText, snapshots, visualDescription);
+    }
+
     static String buildRefinePayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint) {
         return PayloadSupport.buildRefinePayload(currentPage, planText, snapshots, currentCleanedHtml, userPrompt, refineHint);
+    }
+
+    static String buildRefinePayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint, String visualDescription) {
+        return PayloadSupport.buildRefinePayload(currentPage, planText, snapshots, currentCleanedHtml, userPrompt, refineHint, visualDescription);
     }
 
     static long utf8Bytes(String s) {
@@ -416,6 +481,139 @@ public class AutoWebAgent {
 
     static String saveDebugArtifact(String ts, String modelName, String mode, String kind, String content, java.util.function.Consumer<String> uiLogger) {
         return StorageSupport.saveDebugArtifact(ts, modelName, mode, kind, content, uiLogger);
+    }
+
+    private static JsonObject contextToJson(ContextWrapper ctx) {
+        JsonObject o = new JsonObject();
+        if (ctx == null) return o;
+        o.addProperty("name", ctx.name == null ? "" : ctx.name);
+        Object c = ctx.context;
+        if (c == null) return o;
+        if (c instanceof Frame) {
+            o.addProperty("type", "Frame");
+            String u = "";
+            try { u = ((Frame) c).url(); } catch (Exception ignored) {}
+            o.addProperty("url", u == null ? "" : u);
+            String n = "";
+            try { n = ((Frame) c).name(); } catch (Exception ignored) {}
+            o.addProperty("frameName", n == null ? "" : n);
+        } else if (c instanceof Page) {
+            o.addProperty("type", "Page");
+            String u = "";
+            try { u = ((Page) c).url(); } catch (Exception ignored) {}
+            o.addProperty("url", u == null ? "" : u);
+        } else {
+            o.addProperty("type", c.getClass().getName());
+        }
+        return o;
+    }
+
+    private static JsonObject frameToJson(Page page, Frame f) {
+        JsonObject o = new JsonObject();
+        if (f == null) return o;
+        String n = "";
+        String u = "";
+        boolean isMain = false;
+        try { n = f.name(); } catch (Exception ignored) {}
+        try { u = f.url(); } catch (Exception ignored) {}
+        try { isMain = (page != null && page.mainFrame() == f); } catch (Exception ignored) {}
+        o.addProperty("name", n == null ? "" : n);
+        o.addProperty("url", u == null ? "" : u);
+        o.addProperty("isMainFrame", isMain);
+
+        double area = 0;
+        boolean isVisible = false;
+        boolean hasFrameElement = false;
+        JsonObject boxJson = new JsonObject();
+        try {
+            com.microsoft.playwright.ElementHandle el = f.frameElement();
+            if (el != null) {
+                hasFrameElement = true;
+                com.microsoft.playwright.options.BoundingBox box = el.boundingBox();
+                if (box != null) {
+                    boxJson.addProperty("x", box.x);
+                    boxJson.addProperty("y", box.y);
+                    boxJson.addProperty("width", box.width);
+                    boxJson.addProperty("height", box.height);
+                    area = box.width * box.height;
+                    isVisible = box.width > 0 && box.height > 0;
+                }
+            }
+        } catch (Exception ignored) {}
+        o.addProperty("hasFrameElement", hasFrameElement);
+        o.addProperty("area", area);
+        o.addProperty("isVisible", isVisible);
+        o.add("boundingBox", boxJson);
+        return o;
+    }
+
+    private static JsonObject scanAttemptToJson(Page page, ScanResult sr, int attempt) {
+        JsonObject o = new JsonObject();
+        o.addProperty("attempt", attempt);
+        String pageUrl = "";
+        try { pageUrl = page == null ? "" : page.url(); } catch (Exception ignored) {}
+        o.addProperty("pageUrl", pageUrl == null ? "" : pageUrl);
+        o.add("best", sr == null ? new JsonObject() : contextToJson(sr.best));
+
+        JsonArray frames = new JsonArray();
+        try {
+            if (page != null) {
+                for (Frame f : page.frames()) {
+                    frames.add(frameToJson(page, f));
+                }
+            }
+        } catch (Exception ignored) {}
+        o.add("frames", frames);
+
+        JsonArray wrappers = new JsonArray();
+        try {
+            if (sr != null && sr.wrappers != null) {
+                for (ContextWrapper w : sr.wrappers) {
+                    wrappers.add(contextToJson(w));
+                }
+            }
+        } catch (Exception ignored) {}
+        o.add("wrappers", wrappers);
+        return o;
+    }
+
+    private static void saveFrameDiagnostics(
+            int stepIndex,
+            String targetUrl,
+            String urlKey,
+            HtmlCaptureMode captureMode,
+            boolean a11yInterestingOnly,
+            Page page,
+            JsonArray attempts,
+            ContextWrapper finalBest,
+            java.util.function.Consumer<String> uiLogger
+    ) {
+        try {
+            JsonObject root = new JsonObject();
+            root.addProperty("stepIndex", stepIndex);
+            root.addProperty("targetUrl", targetUrl == null ? "" : targetUrl);
+            root.addProperty("urlKey", urlKey == null ? "" : urlKey);
+            root.addProperty("captureMode", captureMode == null ? "" : captureMode.name());
+            root.addProperty("a11yInterestingOnly", a11yInterestingOnly);
+            String pageUrl = "";
+            try { pageUrl = page == null ? "" : page.url(); } catch (Exception ignored) {}
+            root.addProperty("pageUrl", pageUrl == null ? "" : pageUrl);
+            root.add("finalBest", contextToJson(finalBest));
+            root.add("attempts", attempts == null ? new JsonArray() : attempts);
+
+            String ts = newDebugTimestamp();
+            String path = saveDebugArtifact(
+                    ts,
+                    "AUTOWEB",
+                    "HTML_CAPTURE",
+                    "frame_diagnostics_step_" + stepIndex,
+                    PRETTY_GSON.toJson(root),
+                    uiLogger
+            );
+            if (uiLogger != null && path != null && !path.trim().isEmpty()) {
+                uiLogger.accept("Frame diagnostics saved: " + path);
+            }
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -503,6 +701,8 @@ public class AutoWebAgent {
     ) {
         if (steps == null || steps.isEmpty()) return new java.util.ArrayList<>();
         synchronized (PLAYWRIGHT_LOCK) {
+            HtmlCaptureMode primaryMode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
+            HtmlCaptureMode secondaryMode = (primaryMode == HtmlCaptureMode.ARIA_SNAPSHOT) ? HtmlCaptureMode.RAW_HTML : HtmlCaptureMode.ARIA_SNAPSHOT;
             java.util.List<HtmlSnapshot> out = new java.util.ArrayList<>();
             AutoWebAgentUI.FrameState frameState = AutoWebAgentUI.captureFrameState();
 
@@ -528,16 +728,16 @@ public class AutoWebAgent {
                     url = normalizeUrlToken(url);
                     if (!looksLikeUrl(url)) {
                         // 不是标准 URL（可能是占位符/标签/UNKNOWN），只能尝试按原样读缓存
-                        HtmlSnapshot cached = readCachedHtml(step.index, url, step.entryAction, captureMode, a11yInterestingOnly);
+                        HtmlSnapshot cached = readCachedHtml(step.index, url, step.entryAction, primaryMode, a11yInterestingOnly);
                         if (cached != null) out.add(cached);
                         continue;
                     }
 
-                    String urlKey = url == null ? "" : url.trim();
+                    String urlKey = PlanRoutingSupport.stripUrlQuery(url == null ? "" : url.trim());
                     HtmlSnapshot existing = urlKey.isEmpty() ? null : snapshotByUrl.get(urlKey);
                     if (existing != null) {
                         // 同 URL 的 step 直接复用第一次采集的 cleanedHtml，只更新 stepIndex/entryAction
-                        if (uiLogger != null) uiLogger.accept("复用已采集页面: Step " + step.index + " | " + url + " | sameAsStep=" + existing.stepIndex);
+                        if (uiLogger != null) uiLogger.accept("复用已采集页面: Step " + step.index + " | " + urlKey + " | sameAsStep=" + existing.stepIndex);
                         HtmlSnapshot clone = new HtmlSnapshot();
                         clone.stepIndex = step.index;
                         clone.url = existing.url;
@@ -550,26 +750,35 @@ public class AutoWebAgent {
 
                     if (isCurrentPage) {
                         // 当前页面：优先走缓存；未命中时从 rootPage 采集，并自动选择最佳 iframe 上下文
-                        HtmlSnapshot cached = readCachedHtml(step.index, url, step.entryAction, captureMode, a11yInterestingOnly);
-                        if (cached != null) {
-                            if (uiLogger != null) uiLogger.accept("命中缓存: Step " + step.index + " | " + url);
-                            if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, cached);
-                            out.add(cached);
+                        HtmlSnapshot cachedPrimary = readCachedHtml(step.index, url, step.entryAction, primaryMode, a11yInterestingOnly);
+                        HtmlSnapshot cachedSecondary = readCachedHtml(step.index, url, step.entryAction, secondaryMode, a11yInterestingOnly);
+                        if (cachedPrimary != null && cachedSecondary != null) {
+                            if (uiLogger != null) uiLogger.accept("命中缓存: Step " + step.index + " | " + urlKey);
+                            if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, cachedPrimary);
+                            out.add(cachedPrimary);
                             continue;
                         }
 
                         // 采集时尽量减少控制台窗口遮挡对页面可见性/布局的影响
                         AutoWebAgentUI.minimizeFrameIfNeeded(frameState);
-                        if (uiLogger != null) uiLogger.accept("采集当前页面: Step " + step.index + " | " + url);
-                        String rawHtml = "";
+                        if (uiLogger != null) uiLogger.accept("采集当前页面: Step " + step.index + " | " + urlKey);
+                        Object captureContext = rootPage;
                         try {
                             ContextWrapper best = null;
+                            boolean debugFrames = AppConfig.getInstance().isAutowebDebugFrameCaptureEnabled();
+                            JsonArray attempts = new JsonArray();
                             for (int attempt = 0; attempt < 16; attempt++) {
                                 // 页面可能动态加载 iframe：短轮询等待最佳内容上下文出现
                                 ScanResult sr = scanContexts(rootPage);
                                 if (sr != null) best = sr.best;
+                                if (debugFrames) {
+                                    attempts.add(scanAttemptToJson(rootPage, sr, attempt));
+                                }
                                 if (best != null && best.name != null && !"Main Page".equals(best.name)) break;
                                 try { rootPage.waitForTimeout(500); } catch (Exception ignored) {}
+                            }
+                            if (debugFrames) {
+                                saveFrameDiagnostics(step.index, url, urlKey, primaryMode, a11yInterestingOnly, rootPage, attempts, best, uiLogger);
                             }
                             if (best != null) {
                                 String ctxUrl = "";
@@ -583,48 +792,63 @@ public class AutoWebAgent {
                                 if (uiLogger != null) {
                                     uiLogger.accept("采集 HTML 上下文: Step " + step.index + " | " + best.name + (ctxUrl == null || ctxUrl.trim().isEmpty() ? "" : " | " + ctxUrl.trim()));
                                 }
-                                rawHtml = getPageContent(best.context, captureMode, a11yInterestingOnly);
+                                captureContext = best.context;
                             } else {
-                                // 极端情况：上下文扫描失败则回退采集主 Page
-                                rawHtml = getPageContent(rootPage, captureMode, a11yInterestingOnly);
+                                captureContext = rootPage;
                             }
                         } catch (Exception ignored) {
-                            try { rawHtml = getPageContent(rootPage, captureMode, a11yInterestingOnly); } catch (Exception ignored2) {}
+                            captureContext = rootPage;
                         }
-                        String cleaned = cleanCapturedContent(rawHtml, captureMode);
-                        // raw/cleaned 同时落盘缓存，供后续 CODEGEN/REFINE 复用
-                        HtmlSnapshot snap = writeCachedHtml(step.index, url, step.entryAction, captureMode, a11yInterestingOnly, rawHtml, cleaned);
-                        if (snap != null) {
-                            if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, snap);
-                            out.add(snap);
+                        HtmlSnapshot primarySnap = cachedPrimary;
+                        if (primarySnap == null) primarySnap = captureAndCacheSnapshot(step.index, url, step.entryAction, captureContext, primaryMode, a11yInterestingOnly);
+                        if (cachedSecondary == null) captureAndCacheSnapshot(step.index, url, step.entryAction, captureContext, secondaryMode, a11yInterestingOnly);
+                        if (primarySnap != null) {
+                            if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, primarySnap);
+                            out.add(primarySnap);
                         }
                         continue;
                     }
 
                     // 非当前页面：先查缓存，未命中则导航到目标 URL 再采集
-                    HtmlSnapshot cached = readCachedHtml(step.index, url, step.entryAction, captureMode, a11yInterestingOnly);
-                    if (cached != null) {
-                        if (uiLogger != null) uiLogger.accept("命中缓存: Step " + step.index + " | " + url);
-                        if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, cached);
-                        out.add(cached);
+                    HtmlSnapshot cachedPrimary = readCachedHtml(step.index, url, step.entryAction, primaryMode, a11yInterestingOnly);
+                    HtmlSnapshot cachedSecondary = readCachedHtml(step.index, url, step.entryAction, secondaryMode, a11yInterestingOnly);
+                    if (cachedPrimary != null && cachedSecondary != null) {
+                        if (uiLogger != null) uiLogger.accept("命中缓存: Step " + step.index + " | " + urlKey);
+                        if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, cachedPrimary);
+                        out.add(cachedPrimary);
                         continue;
+                    }
+                    if (cachedPrimary != null && cachedSecondary == null && uiLogger != null) {
+                        uiLogger.accept("补齐缓存(另一采集模式): Step " + step.index + " | " + urlKey);
                     }
 
                     AutoWebAgentUI.minimizeFrameIfNeeded(frameState);
-                    if (uiLogger != null) uiLogger.accept("采集页面: Step " + step.index + " | " + url);
+                    if (uiLogger != null) uiLogger.accept("采集页面: Step " + step.index + " | " + urlKey);
                     try {
                         tmp.navigate(url);
                     } catch (Exception navEx) {
                         if (uiLogger != null) uiLogger.accept("打开 URL 失败: " + navEx.getMessage());
                     }
                     try {
-                        tmp.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(10000));
+                        tmp.waitForLoadState(
+                                com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                                new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                        );
                     } catch (Exception ignored) {
-                        try { tmp.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD); } catch (Exception ignored2) {}
+                        try {
+                            tmp.waitForLoadState(
+                                    com.microsoft.playwright.options.LoadState.LOAD,
+                                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                            );
+                        } catch (Exception ignored2) {}
                     }
                     // 登录/跳转场景可能带 query 或中间页：用“URL 前缀”方式等待落到目标页面（忽略参数）
                     boolean stepOk = waitForUrlPrefix(tmp, url, 120000, 2000, uiLogger, "采集页面 Step " + step.index);
                     if (!stepOk) {
+                        if (cachedPrimary != null) {
+                            if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, cachedPrimary);
+                            out.add(cachedPrimary);
+                        }
                         continue;
                     }
 
@@ -648,7 +872,19 @@ public class AutoWebAgent {
                                             tmp = newPage;
                                             openedPages.add(tmp);
                                             try { old.close(); } catch (Exception ignored) {}
-                                            tmp.waitForLoadState();
+                                            try {
+                                                tmp.waitForLoadState(
+                                                        com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                                                        new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                                                );
+                                            } catch (Exception ignored) {
+                                                try {
+                                                    tmp.waitForLoadState(
+                                                            com.microsoft.playwright.options.LoadState.LOAD,
+                                                            new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                                                    );
+                                                } catch (Exception ignored2) {}
+                                            }
                                         }
                                     } catch (Exception e) {
                                         try { loc.click(new com.microsoft.playwright.Locator.ClickOptions().setTimeout(5000)); } catch (Exception ignored) {}
@@ -657,22 +893,33 @@ public class AutoWebAgent {
                                     // 普通点击：尽力等待网络空闲，提升采集到稳定 DOM 的概率
                                     try { loc.click(new com.microsoft.playwright.Locator.ClickOptions().setTimeout(5000)); } catch (Exception ignored) {}
                                     try {
-                                        tmp.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(8000));
+                                        tmp.waitForLoadState(
+                                                com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                                                new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                                        );
                                     } catch (Exception ignored2) {}
                                 }
                             }
                         } catch (Exception ignored) {}
                     }
 
-                    String rawHtml = "";
+                    Object captureContext = tmp;
                     try {
                         ContextWrapper best = null;
+                        boolean debugFrames = AppConfig.getInstance().isAutowebDebugFrameCaptureEnabled();
+                        JsonArray attempts = new JsonArray();
                         for (int attempt = 0; attempt < 16; attempt++) {
                             // 采集前同样扫描 iframe：优先选择可见面积最大的内容 frame
                             ScanResult sr = scanContexts(tmp);
                             if (sr != null) best = sr.best;
+                            if (debugFrames) {
+                                attempts.add(scanAttemptToJson(tmp, sr, attempt));
+                            }
                             if (best != null && best.name != null && !"Main Page".equals(best.name)) break;
                             try { tmp.waitForTimeout(500); } catch (Exception ignored) {}
+                        }
+                        if (debugFrames) {
+                            saveFrameDiagnostics(step.index, url, urlKey, primaryMode, a11yInterestingOnly, tmp, attempts, best, uiLogger);
                         }
                         if (best != null) {
                             String ctxUrl = "";
@@ -686,18 +933,19 @@ public class AutoWebAgent {
                             if (uiLogger != null) {
                                 uiLogger.accept("采集 HTML 上下文: Step " + step.index + " | " + best.name + (ctxUrl == null || ctxUrl.trim().isEmpty() ? "" : " | " + ctxUrl.trim()));
                             }
-                            rawHtml = getPageContent(best.context, captureMode, a11yInterestingOnly);
+                            captureContext = best.context;
                         } else {
-                            rawHtml = getPageContent(tmp, captureMode, a11yInterestingOnly);
+                            captureContext = tmp;
                         }
                     } catch (Exception ignored) {
-                        try { rawHtml = getPageContent(tmp, captureMode, a11yInterestingOnly); } catch (Exception ignored2) {}
+                        captureContext = tmp;
                     }
-                    String cleaned = cleanCapturedContent(rawHtml, captureMode);
-                    HtmlSnapshot snap = writeCachedHtml(step.index, url, step.entryAction, captureMode, a11yInterestingOnly, rawHtml, cleaned);
-                    if (snap != null) {
-                        if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, snap);
-                        out.add(snap);
+                    HtmlSnapshot primarySnap = cachedPrimary;
+                    if (primarySnap == null) primarySnap = captureAndCacheSnapshot(step.index, url, step.entryAction, captureContext, primaryMode, a11yInterestingOnly);
+                    if (cachedSecondary == null) captureAndCacheSnapshot(step.index, url, step.entryAction, captureContext, secondaryMode, a11yInterestingOnly);
+                    if (primarySnap != null) {
+                        if (!urlKey.isEmpty()) snapshotByUrl.putIfAbsent(urlKey, primarySnap);
+                        out.add(primarySnap);
                     }
                 }
             } finally {
@@ -754,12 +1002,121 @@ public class AutoWebAgent {
     }
 
     private static String getRawHtmlContent(Object pageOrFrame) {
-        if (pageOrFrame instanceof Page) {
-            return ((Page) pageOrFrame).content();
-        } else if (pageOrFrame instanceof com.microsoft.playwright.Frame) {
-            return ((com.microsoft.playwright.Frame) pageOrFrame).content();
+        try {
+            if (pageOrFrame instanceof Page) {
+                Page p = (Page) pageOrFrame;
+                try {
+                    p.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED,
+                            new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
+                } catch (Exception ignored) {}
+                try {
+                    p.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                            new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
+                } catch (Exception ignored) {}
+                String html = "";
+                try { html = p.content(); } catch (Exception ignored) {}
+                if (html != null && !html.trim().isEmpty()) {
+                    if (!looksLikeEmptySpaShell(html)) return html;
+                    String latest = html;
+                    for (int i = 0; i < 12; i++) {
+                        try { p.waitForTimeout(500); } catch (Exception ignored) {}
+                        try { latest = p.content(); } catch (Exception ignored) {}
+                        if (latest != null && !latest.trim().isEmpty() && !looksLikeEmptySpaShell(latest)) return latest;
+                    }
+                    return latest == null ? "" : latest;
+                }
+                try {
+                    Object v = p.locator("html").evaluate("el => el ? el.outerHTML : ''");
+                    String s = v == null ? "" : String.valueOf(v);
+                    return s == null ? "" : s;
+                } catch (Exception ignored) {}
+                try {
+                    Object v = p.locator("body").evaluate("el => el ? el.outerHTML : ''");
+                    String s = v == null ? "" : String.valueOf(v);
+                    return s == null ? "" : s;
+                } catch (Exception ignored) {}
+                return "";
+            } else if (pageOrFrame instanceof com.microsoft.playwright.Frame) {
+                com.microsoft.playwright.Frame f = (com.microsoft.playwright.Frame) pageOrFrame;
+                try {
+                    f.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED,
+                            new Frame.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
+                } catch (Exception ignored) {}
+                try {
+                    f.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                            new Frame.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                    );
+                } catch (Exception ignored) {}
+                String html = "";
+                try { html = f.content(); } catch (Exception ignored) {}
+                if (html != null && !html.trim().isEmpty()) {
+                    if (!looksLikeEmptySpaShell(html)) return html;
+                    String latest = html;
+                    for (int i = 0; i < 12; i++) {
+                        try {
+                            Page fp = f.page();
+                            if (fp != null) fp.waitForTimeout(500);
+                        } catch (Exception ignored) {}
+                        try { latest = f.content(); } catch (Exception ignored) {}
+                        if (latest != null && !latest.trim().isEmpty() && !looksLikeEmptySpaShell(latest)) return latest;
+                    }
+                    return latest == null ? "" : latest;
+                }
+                try {
+                    Object v = f.locator("html").evaluate("el => el ? el.outerHTML : ''");
+                    String s = v == null ? "" : String.valueOf(v);
+                    return s == null ? "" : s;
+                } catch (Exception ignored) {}
+                try {
+                    Object v = f.locator("body").evaluate("el => el ? el.outerHTML : ''");
+                    String s = v == null ? "" : String.valueOf(v);
+                    return s == null ? "" : s;
+                } catch (Exception ignored) {}
+                return "";
+            }
+            return "";
+        } catch (Exception ignored) {
+            return "";
         }
-        return "";
+    }
+
+    private static boolean looksLikeEmptySpaShell(String html) {
+        if (html == null) return true;
+        String s = html.trim();
+        if (s.isEmpty()) return true;
+        String t = s.toLowerCase();
+        if (t.contains("<div id=\"root\"></div>")) return true;
+        if (t.contains("<div id='root'></div>")) return true;
+        if (t.contains("<div id=\"app\"></div>")) return true;
+        if (t.contains("<div id='app'></div>")) return true;
+        if (t.contains("<div id=\"root\">") && t.contains("</div>")) {
+            int idx = t.indexOf("<div id=\"root\">");
+            int end = t.indexOf("</div>", idx);
+            if (idx >= 0 && end > idx) {
+                String mid = t.substring(idx, Math.min(end, idx + 200));
+                if (!mid.contains("<div") && !mid.contains("<span") && !mid.contains("<table") && !mid.contains("<form") && !mid.contains("<button") && !mid.contains("<input")) {
+                    return true;
+                }
+            }
+        }
+        if (t.contains("<div id='root'>") && t.contains("</div>")) {
+            int idx = t.indexOf("<div id='root'>");
+            int end = t.indexOf("</div>", idx);
+            if (idx >= 0 && end > idx) {
+                String mid = t.substring(idx, Math.min(end, idx + 200));
+                if (!mid.contains("<div") && !mid.contains("<span") && !mid.contains("<table") && !mid.contains("<form") && !mid.contains("<button") && !mid.contains("<input")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static String getAriaSnapshot(Object pageOrFrame, boolean a11yInterestingOnly) {
@@ -779,20 +1136,50 @@ public class AutoWebAgent {
                     }
                 } catch (Exception ignored) {}
                 
-                String snapText;
-                if (scoped instanceof com.microsoft.playwright.Frame) {
-                    snapText = ((com.microsoft.playwright.Frame) scoped).locator("body").ariaSnapshot();
-                } else {
-                    snapText = p.locator("body").ariaSnapshot();
+                String snapText = "";
+                try {
+                    if (scoped instanceof com.microsoft.playwright.Frame) {
+                        com.microsoft.playwright.Frame f = (com.microsoft.playwright.Frame) scoped;
+                        snapText = f.locator("body").ariaSnapshot();
+                        if (snapText == null || snapText.trim().isEmpty()) {
+                            snapText = f.locator("html").ariaSnapshot();
+                        }
+                    } else {
+                        snapText = p.locator("body").ariaSnapshot();
+                        if (snapText == null || snapText.trim().isEmpty()) {
+                            snapText = p.locator("html").ariaSnapshot();
+                        }
+                    }
+                } catch (Exception ignored) {
+                    snapText = "";
                 }
-                // 统一包成 JSON 文本，便于后续调试落盘与模型阅读
-                return wrapAsJsonText(snapText);
+                if (snapText != null && !snapText.trim().isEmpty()) {
+                    return wrapAsJsonText(snapText);
+                }
+                String axTree = "";
+                try {
+                    axTree = getA11yFullAxTreeJson(p, a11yInterestingOnly, safePageUrl(p));
+                } catch (Exception ignored) {
+                    axTree = "";
+                }
+                if (axTree != null && !axTree.trim().isEmpty()) {
+                    return wrapAsA11yFallbackJson("", axTree);
+                }
+                String raw = getRawHtmlContent(scoped);
+                return raw == null ? "" : raw;
             } else if (pageOrFrame instanceof com.microsoft.playwright.Frame) {
                 com.microsoft.playwright.Frame f = (com.microsoft.playwright.Frame) pageOrFrame;
                 try {
                     String snapText = f.locator("body").ariaSnapshot();
-                    String snap = wrapAsJsonText(snapText);
-                    return snap == null ? "" : snap;
+                    if (snapText == null || snapText.trim().isEmpty()) {
+                        snapText = f.locator("html").ariaSnapshot();
+                    }
+                    if (snapText != null && !snapText.trim().isEmpty()) {
+                        String snap = wrapAsJsonText(snapText);
+                        return snap == null ? "" : snap;
+                    }
+                    String raw = getRawHtmlContent(f);
+                    return raw == null ? "" : raw;
                 } catch (Exception ignored) {
                     return "";
                 }
@@ -804,6 +1191,19 @@ public class AutoWebAgent {
     private static String wrapAsJsonText(String text) {
         JsonObject o = new JsonObject();
         o.addProperty("ariaSnapshotText", text == null ? "" : text);
+        return PRETTY_GSON.toJson(o);
+    }
+
+    private static String wrapAsA11yFallbackJson(String ariaSnapshotText, String axTreeJsonText) {
+        JsonObject o = new JsonObject();
+        o.addProperty("ariaSnapshotText", ariaSnapshotText == null ? "" : ariaSnapshotText);
+        if (axTreeJsonText != null && !axTreeJsonText.trim().isEmpty()) {
+            try {
+                o.add("axTree", JsonParser.parseString(axTreeJsonText));
+            } catch (Exception ignored) {
+                o.addProperty("axTreeText", axTreeJsonText);
+            }
+        }
         return PRETTY_GSON.toJson(o);
     }
 
@@ -1010,7 +1410,7 @@ public class AutoWebAgent {
         HtmlCaptureMode mode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
         String out;
         if (mode == HtmlCaptureMode.ARIA_SNAPSHOT) {
-            System.out.println("ARIA_SNAPSHOT.length:\n" + (captured == null ? 0 : captured.length()));
+            StorageSupport.log(null, "CAPTURE", "ARIA_SNAPSHOT len=" + (captured == null ? 0 : captured.length()), null);
             out = captured == null ? "" : captured.replace("\r\n", "\n");
         } else {
             out = HTMLCleaner.clean(captured);
@@ -1065,63 +1465,7 @@ public class AutoWebAgent {
     }
     
     static String normalizeGeneratedGroovy(String code) {
-        if (code == null) return null;
-        String normalized = code;
-        normalized = normalizePlanBlockCommentFormat(normalized);
-        normalized = normalized.replaceAll("(?m)^(\\s*)(PLAN:|THINK:|ANALYSIS:|REASONING:|思考过程|计划|QUESTION:)\\b", "$1// $2");
-        normalized = commentPlanMarkersOutsideBlockComment(normalized);
-        normalized = normalized.replaceAll("(?m)^(\\s*)(-\\s*[Pp]lan\\b.*)", "$1// $2");
-        normalized = normalized.replaceAll("(?m)^(\\s*)(\\*\\s*[Pp]lan\\b.*)", "$1// $2");
-        normalized = normalized.replaceAll("(?m)^(\\s*)(\\[Plan\\].*)", "$1// $2");
-        normalized = normalized.replaceAll("(?m)^(\\s*)(<plan>.*)</plan>\\s*$", "$1// $2");
-        normalized = normalized.replaceAll("(?m)^(\\s*)(<think>.*)</think>\\s*$", "$1// $2");
-        normalized = normalized.replaceAll("(?m)^(\\s*)(思考:.*)", "$1// $2");
-
-        boolean applyNormalization =
-                normalized.contains("web.extractList(") ||
-                normalized.matches("(?s).*\\browCount\\b\\s*=\\s*web\\.count\\(.*") ||
-                normalized.contains("rowTexts") ||
-                normalized.contains("joinedRow");
-        if (applyNormalization) {
-            String replacement = "def rows = web.extractFirstPageRows(containerSelector, rowSelector, cellSelector)\n" +
-                    "rows.each { row -> web.log(row) }\n";
-            java.util.regex.Pattern blockPatternA = java.util.regex.Pattern.compile(
-                    "(?s)def\\s+rowCount\\s*=\\s*web\\.count\\([^\\n]*\\).*?allRowsOutput\\.each\\s*\\{.*?\\}\\s*"
-            );
-            java.util.regex.Pattern blockPatternB = java.util.regex.Pattern.compile(
-                    "(?s)def\\s+rowCount\\s*=\\s*web\\.count\\([^\\n]*\\).*?(?=def\\s+totalCountText|def\\s+totalText|web\\.getText\\()"
-            );
-            normalized = blockPatternA.matcher(normalized).replaceAll(replacement);
-            normalized = blockPatternB.matcher(normalized).replaceAll(replacement);
-            normalized = normalized.replaceAll("(?s)def\\s+rowTexts\\s*=\\s*\\[\\].*?def\\s+joinedRow\\s*=.*?web\\.log\\(joinedRow\\).*?(?=def\\s+totalCountText|def\\s+totalText|web\\.getText\\()", "");
-            normalized = normalized.replaceAll("(?s)int\\s+rowCount\\s*=\\s*web\\.count\\([^\\n]*\\).*?for\\s*\\(\\s*int\\s+i\\s*=\\s*0;.*?\\)\\s*\\{.*?web\\.log\\(joinedRow\\)\\s*;?\\s*\\}.*?(?=def\\s+totalCountText|def\\s+totalText|web\\.getText\\()", replacement);
-            
-            java.util.regex.Pattern getTextLogAssignPattern = java.util.regex.Pattern.compile("(?s)(?:String|def|var)?\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*web\\.getText\\((\"|')(.*?)\\2\\)\\s*\\n\\s*web\\.log\\(\\1\\)");
-            java.util.regex.Matcher getTextLogAssignMatcher = getTextLogAssignPattern.matcher(normalized);
-            StringBuffer getTextLogAssignBuffer = new StringBuffer();
-            while (getTextLogAssignMatcher.find()) {
-                String varName = getTextLogAssignMatcher.group(1);
-                String sel = getTextLogAssignMatcher.group(3);
-                String replacementBlock = "def " + varName + " = web.getText(\"" + sel.replace("\"", "\\\"") + "\")\nweb.log(" + varName + ")";
-                getTextLogAssignMatcher.appendReplacement(getTextLogAssignBuffer, java.util.regex.Matcher.quoteReplacement(replacementBlock));
-            }
-            getTextLogAssignMatcher.appendTail(getTextLogAssignBuffer);
-            normalized = getTextLogAssignBuffer.toString();
-            
-            java.util.regex.Pattern getTextLogPattern = java.util.regex.Pattern.compile("(?s)web\\.getText\\((\"|')(.*?)\\1\\)\\s*\\n\\s*web\\.log\\(([^\\)]+)\\)");
-            java.util.regex.Matcher getTextLogMatcher = getTextLogPattern.matcher(normalized);
-            StringBuffer getTextLogBuffer = new StringBuffer();
-            while (getTextLogMatcher.find()) {
-                String sel = getTextLogMatcher.group(2);
-                String varName = getTextLogMatcher.group(3).trim();
-                String replacementBlock = "def " + varName + " = web.getText(\"" + sel.replace("\"", "\\\"") + "\")\nweb.log(" + varName + ")";
-                getTextLogMatcher.appendReplacement(getTextLogBuffer, java.util.regex.Matcher.quoteReplacement(replacementBlock));
-            }
-            getTextLogMatcher.appendTail(getTextLogBuffer);
-            normalized = getTextLogBuffer.toString();
-        }
-        normalized = escapeNonInterpolatedDollarInDoubleQuotedStrings(normalized);
-        return normalized;
+        return GroovySupport.normalizeGeneratedGroovy(code);
     }
 
     private static String normalizePlanBlockCommentFormat(String code) {
@@ -1273,6 +1617,15 @@ public class AutoWebAgent {
     }
 
     static void executeWithGroovy(String scriptCode, Object pageOrFrame, java.util.function.Consumer<String> logger) throws Exception {
+        if (scriptCode == null) {
+            if (logger != null) logger.accept("Groovy execution failed: scriptCode is null");
+            throw new IllegalArgumentException("scriptCode is null");
+        }
+        if (scriptCode.trim().isEmpty()) {
+            if (logger != null) logger.accept("Groovy execution failed: scriptCode is empty");
+            throw new IllegalArgumentException("empty scriptCode");
+        }
+
         // 1. Static Linting
         java.util.List<String> lintErrors = GroovyLinter.check(scriptCode);
         if (!lintErrors.isEmpty()) {
@@ -1326,7 +1679,29 @@ public class AutoWebAgent {
             shell.evaluate(scriptCode);
             logger.accept("Groovy script executed successfully.");
         } catch (Exception e) {
-            logger.accept("Groovy execution failed: " + e.getMessage());
+            String msg = e.getMessage();
+            if (msg == null) msg = "";
+            logger.accept("Groovy execution failed: " + e.getClass().getName() + (msg.isEmpty() ? "" : (": " + msg)));
+            try {
+                Throwable c = e.getCause();
+                if (c != null && c != e) {
+                    String cm = c.getMessage();
+                    if (cm == null) cm = "";
+                    logger.accept("Groovy execution cause: " + c.getClass().getName() + (cm.isEmpty() ? "" : (": " + cm)));
+                }
+            } catch (Exception ignored) {}
+            try {
+                String st = StorageSupport.stackTraceToString(e);
+                if (st != null && !st.trim().isEmpty()) {
+                    String[] lines = st.split("\\r?\\n", -1);
+                    int limit = Math.min(lines.length, 25);
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < limit; i++) {
+                        sb.append(lines[i]).append("\n");
+                    }
+                    logger.accept(sb.toString().trim());
+                }
+            } catch (Exception ignored) {}
             // 抛出异常以便主程序捕获并退出
             throw e;
         }

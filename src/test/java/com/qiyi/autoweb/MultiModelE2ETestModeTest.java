@@ -1,0 +1,991 @@
+package com.qiyi.autoweb;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.qiyi.util.LLMUtil;
+import com.qiyi.util.PlayWrightUtil;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
+public class MultiModelE2ETestModeTest {
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+
+    static class RunnerConfig {
+        List<String> models = new ArrayList<>();
+        List<CaseInput> cases = new ArrayList<>();
+        AutoWebAgent.HtmlCaptureMode captureMode = AutoWebAgent.HtmlCaptureMode.RAW_HTML;
+        boolean alsoStdout = true;
+        boolean localAnalyze = false;
+        String localAnalysisModel = LLMUtil.OLLAMA_MODEL_QWEN3_8B;
+        int reportMaxChars = 8_000_000;
+    }
+
+    static class CaseInput {
+        String id;
+        String entryUrl;
+        String userTask;
+    }
+
+    static class StepExecutionResult {
+        int stepIndex;
+        boolean ok;
+        long durationMs;
+        String error;
+        String logTail;
+    }
+
+    static class ModelRunResult {
+        String model;
+        String prompt;
+        int attemptIndex;
+        boolean repairAttempt;
+        String planText;
+        boolean planConfirmed;
+        boolean planHasQuestion;
+        List<AutoWebAgent.PlanStep> planSteps;
+        String code;
+        List<String> lintErrors;
+        String entryUrlUsed;
+        List<StepExecutionResult> stepResults;
+        List<String> formattedErrors;
+        String runLogHead;
+        String runLogTail;
+    }
+
+    static class CaseRunResult {
+        String id;
+        String entryUrl;
+        String userTask;
+        List<ModelRunResult> runs;
+    }
+
+    static class Report {
+        String ts;
+        List<String> models;
+        String captureMode;
+        List<CaseRunResult> cases;
+        String analysisPrompt;
+        String localAnalysisModel;
+        String localAnalysis;
+    }
+
+    public static void main(String[] args) throws Exception {
+        RunnerConfig cfg = defaultConfig();
+
+        cfg.models.add(AutoWebAgent.normalizeModelKey("deepseek"));
+        cfg.models.add(AutoWebAgent.normalizeModelKey("QWEN_MAX"));
+        cfg.models.add(AutoWebAgent.normalizeModelKey("MOONSHOT"));
+
+        cfg.cases.add(new CaseInput() {{
+            id = "1";
+            entryUrl = "https://sc.scm121.com/tradeManage/tower/distribute";
+            userTask = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\"列名:列内容（去掉回车换行）\"，然后用\"｜\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
+        }});
+
+        cfg.cases.add(new CaseInput() {{
+            id = "2";
+            entryUrl = "https://sc.scm121.com/manage/goods/goodsManage/index?pageNum=1&pageSize=20";
+            userTask = "请查询资料编码包含\"自由品牌\"的商品，输出这些商品的商品信息、类目名称、库存、基本售价";
+        }});
+
+        
+        Report report = runOnce(cfg);
+        printConsoleSummary(report, System.out::println);
+        String reportJson = GSON.toJson(toJson(report));
+        String reportPath = StorageSupport.saveDebugArtifact(report.ts, "MULTI", "E2E", "multimodel_report", reportJson, new BufferingLogger("[E2E] ", true), cfg.reportMaxChars);
+        System.out.println("Multi-model E2E report saved: " + (reportPath == null ? "" : reportPath));
+
+        if (cfg.localAnalyze) {
+            String analysisInput = buildCompactAnalysisInput(report);
+            String analysis = LLMUtil.chatWithOllama(analysisInput, cfg.localAnalysisModel, null, false);
+            report.localAnalysis = analysis == null ? "" : analysis;
+            String updated = GSON.toJson(toJson(report));
+            String path2 = StorageSupport.saveDebugArtifact(report.ts, "MULTI", "E2E", "multimodel_report_with_local_analysis", updated, new BufferingLogger("[E2E] ", true), cfg.reportMaxChars);
+            System.out.println("Multi-model E2E report (with local analysis) saved: " + (path2 == null ? "" : path2));
+        }
+    }
+
+    static class BufferingLogger implements java.util.function.Consumer<String> {
+        private final List<String> lines = new ArrayList<>();
+        private final boolean alsoStdout;
+        private final String prefix;
+
+        BufferingLogger(String prefix, boolean alsoStdout) {
+            this.prefix = prefix == null ? "" : prefix;
+            this.alsoStdout = alsoStdout;
+        }
+
+        @Override
+        public void accept(String s) {
+            String v = s == null ? "" : s;
+            String line = prefix.isEmpty() ? v : (prefix + v);
+            lines.add(line);
+            if (alsoStdout) {
+                System.out.println(line);
+            }
+        }
+
+        List<String> snapshot() {
+            return new ArrayList<>(lines);
+        }
+
+        String head(int maxLines) {
+            int n = Math.min(maxLines, lines.size());
+            return String.join("\n", lines.subList(0, n));
+        }
+
+        String tail(int maxLines) {
+            int n = Math.min(maxLines, lines.size());
+            return String.join("\n", lines.subList(lines.size() - n, lines.size()));
+        }
+    }
+
+    @Test
+    public void runMultiModelE2E() throws Exception {
+        boolean enabled = Boolean.parseBoolean(System.getProperty("autoweb.e2e.enabled", "false"));
+        Assumptions.assumeTrue(enabled, "Set -Dautoweb.e2e.enabled=true to run the multi-model E2E test mode.");
+
+        RunnerConfig cfg = configFromSystemProperties();
+        Assumptions.assumeTrue(cfg.models != null && !cfg.models.isEmpty(), "Missing -Dautoweb.e2e.models");
+        Assumptions.assumeTrue(cfg.cases != null && !cfg.cases.isEmpty(), "Missing cases. Provide -Dautoweb.e2e.cases or -Dautoweb.e2e.casesFile");
+
+        Report report = runOnce(cfg);
+        String reportJson = GSON.toJson(toJson(report));
+        BufferingLogger rootLogger = new BufferingLogger("[E2E] ", cfg.alsoStdout);
+        String reportPath = StorageSupport.saveDebugArtifact(report.ts, "MULTI", "E2E", "multimodel_report", reportJson, rootLogger, cfg.reportMaxChars);
+        rootLogger.accept("Multi-model E2E report saved: " + (reportPath == null ? "" : reportPath));
+        printConsoleSummary(report, rootLogger);
+
+        if (cfg.localAnalyze) {
+            String analysisInput = buildCompactAnalysisInput(report);
+            String analysis = LLMUtil.chatWithOllama(analysisInput, cfg.localAnalysisModel, null, false);
+            report.localAnalysis = analysis == null ? "" : analysis;
+            String updated = GSON.toJson(toJson(report));
+            StorageSupport.saveDebugArtifact(report.ts, "MULTI", "E2E", "multimodel_report_with_local_analysis", updated, rootLogger, cfg.reportMaxChars);
+        }
+    }
+
+    private static Report runOnce(RunnerConfig cfg) throws Exception {
+        if (cfg == null) throw new IllegalArgumentException("cfg is null");
+        if (cfg.models == null || cfg.models.isEmpty()) throw new IllegalArgumentException("cfg.models is empty");
+        if (cfg.cases == null || cfg.cases.isEmpty()) throw new IllegalArgumentException("cfg.cases is empty");
+
+        String ts = AutoWebAgent.newDebugTimestamp();
+        Report report = new Report();
+        report.ts = ts;
+        report.models = cfg.models;
+        report.captureMode = cfg.captureMode == null ? "" : cfg.captureMode.name();
+        report.cases = new ArrayList<>();
+        report.analysisPrompt = buildAnalysisPrompt();
+        report.localAnalysisModel = cfg.localAnalyze ? (cfg.localAnalysisModel == null ? "" : cfg.localAnalysisModel) : "";
+        report.localAnalysis = "";
+
+        GroovySupport.loadPrompts();
+
+        BufferingLogger rootLogger = new BufferingLogger("[E2E] ", cfg.alsoStdout);
+        PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
+        if (connection == null || connection.browser == null) throw new RuntimeException("Failed to connect to browser.");
+
+        try {
+            for (CaseInput c : cfg.cases) {
+                CaseRunResult caseResult = new CaseRunResult();
+                caseResult.id = c.id;
+                caseResult.entryUrl = c.entryUrl;
+                caseResult.userTask = c.userTask;
+                caseResult.runs = new ArrayList<>();
+
+                PageHandle pageHandle = null;
+                try {
+                    pageHandle = openPage(connection, c.entryUrl, rootLogger);
+                    for (String model : cfg.models) {
+                        try {
+                            List<ModelRunResult> rs = runSingleModelCase(model, c, pageHandle.page, cfg.captureMode, cfg.alsoStdout);
+                            if (rs != null) caseResult.runs.addAll(rs);
+                        } catch (Exception ex) {
+                            ModelRunResult r = new ModelRunResult();
+                            r.model = model;
+                            r.prompt = buildPrompt(c);
+                            r.attemptIndex = 1;
+                            r.repairAttempt = false;
+                            r.planSteps = new ArrayList<>();
+                            r.lintErrors = new ArrayList<>();
+                            r.stepResults = new ArrayList<>();
+                            r.formattedErrors = new ArrayList<>();
+                            r.entryUrlUsed = c == null ? "" : c.entryUrl;
+                            r.formattedErrors.add("步骤: (runner), 出错信息: " + (ex.getMessage() == null ? ex.toString() : ex.getMessage()));
+                            r.runLogHead = "";
+                            r.runLogTail = "";
+                            caseResult.runs.add(r);
+                        }
+                    }
+                } catch (Exception ex) {
+                    for (String model : cfg.models) {
+                        ModelRunResult r = new ModelRunResult();
+                        r.model = model;
+                        r.prompt = buildPrompt(c);
+                        r.attemptIndex = 1;
+                        r.repairAttempt = false;
+                        r.planSteps = new ArrayList<>();
+                        r.lintErrors = new ArrayList<>();
+                        r.stepResults = new ArrayList<>();
+                        r.formattedErrors = new ArrayList<>();
+                        r.entryUrlUsed = c == null ? "" : c.entryUrl;
+                        r.formattedErrors.add("步骤: (openPage), 出错信息: " + (ex.getMessage() == null ? ex.toString() : ex.getMessage()));
+                        r.runLogHead = "";
+                        r.runLogTail = "";
+                        caseResult.runs.add(r);
+                    }
+                } finally {
+                    if (pageHandle != null) {
+                        try {
+                            pageHandle.page.close();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+
+                report.cases.add(caseResult);
+            }
+        } finally {
+            try {
+                PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
+            } catch (Exception ignored) {
+            }
+        }
+
+        return report;
+    }
+
+    private static class PageHandle {
+        com.microsoft.playwright.Page page;
+    }
+
+    private static PageHandle openPage(PlayWrightUtil.Connection connection, String entryUrl, java.util.function.Consumer<String> logger) {
+        PageHandle h = new PageHandle();
+        com.microsoft.playwright.BrowserContext ctx = null;
+        try {
+            if (connection.browser.contexts() != null && !connection.browser.contexts().isEmpty()) {
+                ctx = connection.browser.contexts().get(0);
+            }
+        } catch (Exception ignored) {
+            ctx = null;
+        }
+
+        if (ctx == null) {
+            ctx = connection.browser.newContext();
+        }
+
+        h.page = ctx.newPage();
+        if (entryUrl != null && !entryUrl.trim().isEmpty()) {
+            synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
+                h.page.navigate(entryUrl.trim());
+                try {
+                    h.page.waitForLoadState(
+                            com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                            new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(120_000)
+                    );
+                } catch (Exception ignored) {
+                }
+                h.page.waitForTimeout(1000);
+            }
+            if (logger != null) {
+                logger.accept("Opened page: " + StorageSupport.safePageUrl(h.page));
+            }
+        }
+        return h;
+    }
+
+    private static List<ModelRunResult> runSingleModelCase(
+            String model,
+            CaseInput c,
+            com.microsoft.playwright.Page page,
+            AutoWebAgent.HtmlCaptureMode captureMode,
+            boolean alsoStdout
+    ) {
+        List<ModelRunResult> outs = new ArrayList<>();
+
+        BufferingLogger logger = new BufferingLogger("[model=" + model + "] ", alsoStdout);
+        AutoWebAgent.ensureRootPageAtUrl(page, c.entryUrl, logger);
+
+        ModelRunResult out = new ModelRunResult();
+        out.model = model;
+        out.prompt = buildPrompt(c);
+        out.attemptIndex = 1;
+        out.repairAttempt = false;
+        out.planSteps = new ArrayList<>();
+        out.lintErrors = new ArrayList<>();
+        out.stepResults = new ArrayList<>();
+        out.formattedErrors = new ArrayList<>();
+        out.entryUrlUsed = c.entryUrl;
+
+        String currentUrl = StorageSupport.safePageUrl(page);
+        String planPayload = AutoWebAgent.buildPlanOnlyPayload(currentUrl, out.prompt);
+        String planText = AutoWebAgent.generateGroovyScript(out.prompt, planPayload, logger, model);
+        out.planText = planText == null ? "" : planText;
+
+        AutoWebAgent.PlanParseResult parsed = AutoWebAgent.parsePlanFromText(out.planText);
+        out.planConfirmed = parsed.confirmed;
+        out.planHasQuestion = parsed.hasQuestion;
+        out.planSteps = parsed.steps == null ? new ArrayList<>() : parsed.steps;
+
+        if (out.planSteps.isEmpty()) {
+            out.formattedErrors.add("步骤: (plan), 出错信息: 未解析到任何步骤");
+            out.runLogHead = logger.head(200);
+            out.runLogTail = logger.tail(200);
+            outs.add(out);
+            return outs;
+        }
+
+        List<AutoWebAgent.HtmlSnapshot> snapshots = AutoWebAgent.prepareStepHtmls(page, out.planSteps, logger, captureMode);
+        String codePayload = AutoWebAgent.buildCodegenPayload(page, parsed.planText, snapshots);
+        String code = AutoWebAgent.generateGroovyScript(out.prompt, codePayload, logger, model);
+        code = code == null ? "" : code;
+
+        code = maybeNormalizeCode(code);
+        out.code = code;
+        out.lintErrors = safeLintErrors(code);
+
+        executePlanSteps(out, model, c, page, code, alsoStdout, logger);
+        out.runLogHead = logger.head(200);
+        out.runLogTail = logger.tail(200);
+        outs.add(out);
+
+        if (shouldRepair(out)) {
+            BufferingLogger repairLogger = new BufferingLogger("[model=" + model + " REPAIR] ", alsoStdout);
+            AutoWebAgent.ensureRootPageAtUrl(page, c.entryUrl, repairLogger);
+
+            String freshHtml = "";
+            try {
+                freshHtml = AutoWebAgent.getPageContent(page, captureMode, true);
+            } catch (Exception ignored) {
+                freshHtml = "";
+            }
+            String freshCleanedHtml = AutoWebAgent.cleanCapturedContent(freshHtml, captureMode);
+            String refineHint = buildRepairHint(out);
+            String refinePayload = AutoWebAgent.buildRefinePayload(page, parsed.planText, snapshots, freshCleanedHtml, out.prompt, refineHint);
+            String execOutput = buildExecOutputForRepair(out);
+
+            String refined = AutoWebAgent.generateRefinedGroovyScript(out.prompt, refinePayload, out.code, execOutput, refineHint, repairLogger, model);
+            refined = refined == null ? "" : refined;
+            refined = maybeNormalizeCode(refined);
+
+            ModelRunResult repaired = new ModelRunResult();
+            repaired.model = model;
+            repaired.prompt = out.prompt;
+            repaired.attemptIndex = 2;
+            repaired.repairAttempt = true;
+            repaired.planText = out.planText;
+            repaired.planConfirmed = out.planConfirmed;
+            repaired.planHasQuestion = out.planHasQuestion;
+            repaired.planSteps = out.planSteps == null ? new ArrayList<>() : out.planSteps;
+            repaired.code = refined;
+            repaired.lintErrors = safeLintErrors(refined);
+            repaired.entryUrlUsed = out.entryUrlUsed;
+            repaired.stepResults = new ArrayList<>();
+            repaired.formattedErrors = new ArrayList<>();
+
+            executePlanSteps(repaired, model, c, page, refined, alsoStdout, repairLogger);
+            repaired.runLogHead = repairLogger.head(200);
+            repaired.runLogTail = repairLogger.tail(200);
+            outs.add(repaired);
+        }
+
+        return outs;
+    }
+
+    private static boolean shouldRepair(ModelRunResult r) {
+        if (r == null) return false;
+        if (r.planSteps == null || r.planSteps.isEmpty()) return false;
+        if (r.stepResults == null || r.stepResults.isEmpty()) return false;
+        for (StepExecutionResult sr : r.stepResults) {
+            if (sr != null && !sr.ok) return true;
+        }
+        return false;
+    }
+
+    private static void executePlanSteps(
+            ModelRunResult out,
+            String model,
+            CaseInput c,
+            com.microsoft.playwright.Page page,
+            String code,
+            boolean alsoStdout,
+            java.util.function.Consumer<String> attemptLogger
+    ) {
+        if (out == null) return;
+        if (out.stepResults == null) out.stepResults = new ArrayList<>();
+        if (out.formattedErrors == null) out.formattedErrors = new ArrayList<>();
+
+        AutoWebAgent.ensureRootPageAtUrl(page, c.entryUrl, attemptLogger);
+
+        String stepPrefix = out.repairAttempt ? ("[model=" + model + " REPAIR step=") : ("[model=" + model + " step=");
+
+        for (AutoWebAgent.PlanStep step : out.planSteps) {
+            if (step == null) continue;
+            int stepIndex = step.index;
+            BufferingLogger stepLogger = new BufferingLogger(stepPrefix + stepIndex + "] ", alsoStdout);
+            long t0 = System.currentTimeMillis();
+            StepExecutionResult sr = new StepExecutionResult();
+            sr.stepIndex = stepIndex;
+            sr.ok = false;
+            sr.durationMs = 0L;
+            sr.error = "";
+            sr.logTail = "";
+
+            String stepCode = extractStepCode(code, stepIndex);
+            if (stepCode == null || stepCode.trim().isEmpty()) {
+                sr.ok = false;
+                sr.error = "未找到步骤代码";
+                out.formattedErrors.add("步骤: " + stepIndex + ", 出错信息: " + sr.error);
+                sr.durationMs = System.currentTimeMillis() - t0;
+                sr.logTail = stepLogger.tail(200);
+                out.stepResults.add(sr);
+                continue;
+            }
+
+            try {
+                AutoWebAgent.ContextWrapper bestContext = AutoWebAgent.waitAndFindContext(page, stepLogger);
+                Object executionTarget = bestContext == null ? page : bestContext.context;
+                AutoWebAgent.executeWithGroovy(stepCode, executionTarget, stepLogger);
+                sr.ok = true;
+                sr.durationMs = System.currentTimeMillis() - t0;
+                sr.logTail = stepLogger.tail(200);
+            } catch (Exception ex) {
+                String reason = ex.getMessage();
+                if (reason == null || reason.trim().isEmpty()) reason = ex.toString();
+                sr.ok = false;
+                sr.error = reason;
+                sr.durationMs = System.currentTimeMillis() - t0;
+                sr.logTail = stepLogger.tail(200);
+                out.formattedErrors.add("步骤: " + stepIndex + ", 出错信息: " + reason);
+            }
+            out.stepResults.add(sr);
+        }
+    }
+
+    private static List<String> safeLintErrors(String code) {
+        List<String> lintErrors = GroovyLinter.check(code);
+        if (lintErrors == null || lintErrors.isEmpty()) return new ArrayList<>();
+        return lintErrors;
+    }
+
+    private static String maybeNormalizeCode(String code) {
+        String src = code == null ? "" : code;
+        String normalized = GroovySupport.normalizeGeneratedGroovy(src);
+        if (normalized != null && !normalized.equals(src)) {
+            List<String> normalizeErrors = GroovyLinter.check(normalized);
+            if (normalizeErrors != null && normalizeErrors.isEmpty()) {
+                return normalized;
+            }
+        }
+        return src;
+    }
+
+    private static String buildRepairHint(ModelRunResult r) {
+        List<String> failed = collectFailedStepLabels(r);
+        String failedText = failed.isEmpty() ? "" : String.join(",", failed);
+        return "运行代码阶段出现错误，请修复 Groovy 脚本，仅修改必要部分，保持原计划与输出格式不变。失败步骤=" + failedText;
+    }
+
+    private static String buildExecOutputForRepair(ModelRunResult r) {
+        if (r == null) return "";
+        StringBuilder sb = new StringBuilder();
+        if (r.formattedErrors != null && !r.formattedErrors.isEmpty()) {
+            sb.append("=== formattedErrors ===\n");
+            for (String e : r.formattedErrors) sb.append(e == null ? "" : e).append("\n");
+        }
+        if (r.stepResults != null && !r.stepResults.isEmpty()) {
+            sb.append("\n=== stepResults ===\n");
+            for (StepExecutionResult sr : r.stepResults) {
+                if (sr == null) continue;
+                if (sr.ok) continue;
+                sb.append("step=").append(sr.stepIndex).append(" ok=false\n");
+                sb.append("error=").append(sr.error == null ? "" : sr.error).append("\n");
+                if (sr.logTail != null && !sr.logTail.isEmpty()) {
+                    sb.append("logTail:\n").append(sr.logTail).append("\n");
+                }
+                sb.append("\n");
+            }
+        }
+        String out = sb.toString().trim();
+        return out;
+    }
+
+    private static boolean isRunOk(ModelRunResult r) {
+        if (r == null) return false;
+        if (r.planSteps == null || r.planSteps.isEmpty()) return false;
+        if (r.stepResults == null || r.stepResults.isEmpty()) return false;
+        for (StepExecutionResult sr : r.stepResults) {
+            if (sr == null || !sr.ok) return false;
+        }
+        return true;
+    }
+
+    private static List<String> collectFailedStepLabels(ModelRunResult r) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        if (r == null) return new ArrayList<>();
+        if (r.planSteps == null || r.planSteps.isEmpty()) {
+            out.add("plan");
+            return new ArrayList<>(out);
+        }
+        if (r.stepResults == null || r.stepResults.isEmpty()) {
+            out.add("run");
+            return new ArrayList<>(out);
+        }
+        for (StepExecutionResult sr : r.stepResults) {
+            if (sr == null) continue;
+            if (!sr.ok) out.add(String.valueOf(sr.stepIndex));
+        }
+        if (out.isEmpty() && r.formattedErrors != null && !r.formattedErrors.isEmpty()) {
+            out.add("unknown");
+        }
+        return new ArrayList<>(out);
+    }
+
+    private static void printConsoleSummary(Report report, java.util.function.Consumer<String> logger) {
+        if (report == null) return;
+        java.util.function.Consumer<String> out = logger == null ? System.out::println : logger;
+        out.accept("=== 多模型E2E执行汇总 ===");
+        if (report.models != null) out.accept("models=" + String.join(",", report.models));
+        out.accept("ts=" + (report.ts == null ? "" : report.ts));
+
+        if (report.cases == null) return;
+        for (CaseRunResult c : report.cases) {
+            if (c == null) continue;
+            String caseId = c.id == null ? "" : c.id;
+            if (report.models == null) continue;
+            for (String model : report.models) {
+                if (model == null) continue;
+                ModelRunResult first = null;
+                ModelRunResult repaired = null;
+                if (c.runs != null) {
+                    for (ModelRunResult r : c.runs) {
+                        if (r == null) continue;
+                        if (!model.equals(r.model)) continue;
+                        if (r.repairAttempt) repaired = r;
+                        else first = r;
+                    }
+                }
+                if (first == null) continue;
+
+                boolean ok1 = isRunOk(first);
+                boolean hasRepair = repaired != null;
+                boolean ok2 = hasRepair && isRunOk(repaired);
+                List<String> failed = new ArrayList<>();
+                if (!ok1 && !hasRepair) failed = collectFailedStepLabels(first);
+                else if (hasRepair && !ok2) failed = collectFailedStepLabels(repaired);
+                String failedText = failed.isEmpty() ? "" : String.join(",", failed);
+
+                StringBuilder line = new StringBuilder();
+                line.append("模型").append(model)
+                        .append("，任务").append(caseId)
+                        .append("，执行").append(ok1 ? "成功" : "失败")
+                        .append("，是否有修复代码").append(hasRepair ? "是" : "否");
+                if (hasRepair) {
+                    line.append("，修复后代码执行").append(ok2 ? "成功" : "失败");
+                }
+                if (!failedText.isEmpty()) {
+                    line.append("，执行失败的步骤为").append(failedText);
+                }
+                out.accept(line.toString());
+            }
+        }
+    }
+
+    private static String buildPrompt(CaseInput c) {
+        String task = c == null ? "" : (c.userTask == null ? "" : c.userTask.trim());
+        String url = c == null ? "" : (c.entryUrl == null ? "" : c.entryUrl.trim());
+        if (url.isEmpty()) return task;
+        if (task.isEmpty()) return "入口URL: " + url;
+        return task + "\n入口URL: " + url;
+    }
+
+    private static int parseInt(String s, int fallback) {
+        if (s == null) return fallback;
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static AutoWebAgent.HtmlCaptureMode parseCaptureMode(String s) {
+        String v = s == null ? "" : s.trim().toUpperCase();
+        if ("ARIA".equals(v) || "ARIA_SNAPSHOT".equals(v) || "A11Y".equals(v)) return AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT;
+        return AutoWebAgent.HtmlCaptureMode.RAW_HTML;
+    }
+
+    private static List<String> parseCsv(String s) {
+        if (s == null) return new ArrayList<>();
+        return java.util.Arrays.stream(s.split(","))
+                .map(String::trim)
+                .filter(x -> !x.isEmpty())
+                .collect(Collectors.toList());
+    }
+
+    private static List<CaseInput> loadCasesFromProperties() throws Exception {
+        String file = System.getProperty("autoweb.e2e.casesFile", "").trim();
+        if (!file.isEmpty()) {
+            Path p = Path.of(file);
+            if (!p.isAbsolute()) {
+                p = Path.of(System.getProperty("user.dir")).resolve(file).normalize();
+            }
+            if (!Files.exists(p)) return new ArrayList<>();
+            String text = Files.readString(p, StandardCharsets.UTF_8);
+            return parseCasesJson(text);
+        }
+
+        String raw = System.getProperty("autoweb.e2e.cases", "").trim();
+        if (raw.isEmpty()) return new ArrayList<>();
+        return parseCasesInline(raw);
+    }
+
+    private static RunnerConfig configFromSystemProperties() throws Exception {
+        RunnerConfig cfg = new RunnerConfig();
+        cfg.models = parseCsv(System.getProperty("autoweb.e2e.models", "DEEPSEEK"));
+        cfg.cases = loadCasesFromProperties();
+        cfg.captureMode = parseCaptureMode(System.getProperty("autoweb.e2e.captureMode", "RAW_HTML"));
+        cfg.alsoStdout = Boolean.parseBoolean(System.getProperty("autoweb.e2e.stdout", "true"));
+        cfg.localAnalyze = Boolean.parseBoolean(System.getProperty("autoweb.e2e.localAnalyze", "false"));
+        cfg.localAnalysisModel = System.getProperty("autoweb.e2e.localModel", LLMUtil.OLLAMA_MODEL_QWEN3_8B);
+        cfg.reportMaxChars = parseInt(System.getProperty("autoweb.e2e.reportMaxChars", "8000000"), 8_000_000);
+        return cfg;
+    }
+
+    private static RunnerConfig defaultConfig() {
+        RunnerConfig cfg = new RunnerConfig();
+        cfg.models = java.util.Arrays.asList("DEEPSEEK", "GEMINI", "MOONSHOT", "OLLAMA_QWEN3_8B");
+        cfg.captureMode = AutoWebAgent.HtmlCaptureMode.RAW_HTML;
+        cfg.alsoStdout = true;
+        cfg.localAnalyze = false;
+        cfg.localAnalysisModel = LLMUtil.OLLAMA_MODEL_QWEN3_8B;
+        cfg.reportMaxChars = 8_000_000;
+
+        CaseInput c1 = new CaseInput();
+        c1.id = "case_1";
+        c1.entryUrl = "https://example.com";
+        c1.userTask = "把这里替换成你的用户任务";
+        cfg.cases.add(c1);
+
+        return cfg;
+    }
+
+    private static List<CaseInput> parseCasesJson(String json) {
+        if (json == null || json.trim().isEmpty()) return new ArrayList<>();
+        try {
+            JsonElement el = com.google.gson.JsonParser.parseString(json);
+            if (el == null) return new ArrayList<>();
+            List<CaseInput> out = new ArrayList<>();
+            AtomicInteger seq = new AtomicInteger(1);
+            if (el.isJsonArray()) {
+                for (JsonElement e : el.getAsJsonArray()) {
+                    if (e == null || !e.isJsonObject()) continue;
+                    CaseInput c = parseCaseObject(e.getAsJsonObject(), String.valueOf(seq.getAndIncrement()));
+                    if (c != null) out.add(c);
+                }
+            } else if (el.isJsonObject()) {
+                CaseInput c = parseCaseObject(el.getAsJsonObject(), String.valueOf(seq.getAndIncrement()));
+                if (c != null) out.add(c);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return new ArrayList<>();
+        }
+    }
+
+    private static CaseInput parseCaseObject(JsonObject o, String fallbackId) {
+        if (o == null) return null;
+        CaseInput c = new CaseInput();
+        c.id = getFirstString(o, "id", "caseId", "name");
+        if (c.id == null || c.id.trim().isEmpty()) c.id = fallbackId;
+        c.entryUrl = getFirstString(o, "entryUrl", "url", "entry", "entryURL");
+        c.userTask = getFirstString(o, "userTask", "task", "prompt");
+        if (c.entryUrl == null) c.entryUrl = "";
+        if (c.userTask == null) c.userTask = "";
+        c.entryUrl = c.entryUrl.trim();
+        c.userTask = c.userTask.trim();
+        if (c.entryUrl.isEmpty() && c.userTask.isEmpty()) return null;
+        return c;
+    }
+
+    private static String getFirstString(JsonObject o, String... keys) {
+        if (o == null || keys == null) return null;
+        for (String k : keys) {
+            if (k == null) continue;
+            try {
+                JsonElement v = o.get(k);
+                if (v != null && v.isJsonPrimitive()) {
+                    String s = v.getAsString();
+                    if (s != null && !s.trim().isEmpty()) return s;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static List<CaseInput> parseCasesInline(String raw) {
+        List<CaseInput> out = new ArrayList<>();
+        AtomicInteger seq = new AtomicInteger(1);
+        String[] parts = raw.split("\\s*;;\\s*");
+        for (String part : parts) {
+            if (part == null) continue;
+            String p = part.trim();
+            if (p.isEmpty()) continue;
+            CaseInput c = parseSingleInlineCase(p, String.valueOf(seq.getAndIncrement()));
+            if (c != null) out.add(c);
+        }
+        return out;
+    }
+
+    private static CaseInput parseSingleInlineCase(String raw, String id) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        if (s.isEmpty()) return null;
+        String[] segs = s.split("\\s*\\|\\|\\|\\s*");
+        String a = segs.length > 0 ? segs[0].trim() : "";
+        String b = segs.length > 1 ? segs[1].trim() : "";
+        if (segs.length <= 1) {
+            CaseInput c = new CaseInput();
+            c.id = id;
+            c.userTask = s;
+            c.entryUrl = PlanRoutingSupport.extractFirstUrlFromText(s);
+            if (c.entryUrl == null) c.entryUrl = "";
+            return c;
+        }
+
+        String url;
+        String task;
+        if (PlanRoutingSupport.looksLikeUrl(a)) {
+            url = a;
+            task = b;
+        } else if (PlanRoutingSupport.looksLikeUrl(b)) {
+            url = b;
+            task = a;
+        } else {
+            url = PlanRoutingSupport.extractFirstUrlFromText(s);
+            if (url == null) url = "";
+            task = s;
+        }
+
+        CaseInput c = new CaseInput();
+        c.id = id;
+        c.entryUrl = url;
+        c.userTask = task;
+        if (c.entryUrl == null) c.entryUrl = "";
+        if (c.userTask == null) c.userTask = "";
+        c.entryUrl = c.entryUrl.trim();
+        c.userTask = c.userTask.trim();
+        if (c.entryUrl.isEmpty() && c.userTask.isEmpty()) return null;
+        return c;
+    }
+
+    private static String stripPlanBlock(String code) {
+        if (code == null) return "";
+        String src = code;
+        int ps = src.indexOf("PLAN_START");
+        int pe = src.indexOf("PLAN_END");
+        if (ps >= 0 && pe > ps) {
+            return (src.substring(0, ps) + "\n" + src.substring(pe + "PLAN_END".length())).trim();
+        }
+        return src;
+    }
+
+    private static String extractStepCode(String code, int stepIndex) {
+        if (code == null || code.trim().isEmpty()) return "";
+        String src = stripPlanBlock(code);
+
+        java.util.regex.Pattern header = java.util.regex.Pattern.compile("(?mi)^\\s*(?:/\\*+\\s*)?(?:\\*+\\s*)?(?://\\s*)?(?:#+\\s*)?(?:[-–—*>•]+\\s*)?(?:Step|步骤)\\s*[:：#\\-]?\\s*(\\d+).*$");
+        java.util.regex.Matcher m = header.matcher(src);
+        List<int[]> marks = new ArrayList<>();
+        while (m.find()) {
+            String g = m.group(1);
+            int idx;
+            try {
+                idx = Integer.parseInt(g);
+            } catch (Exception ignored) {
+                continue;
+            }
+            marks.add(new int[]{idx, m.start(), m.end()});
+        }
+
+        if (marks.isEmpty()) {
+            return stepIndex == 1 ? src : "";
+        }
+
+        marks.sort(Comparator.comparingInt(a -> a[1]));
+        int start = -1;
+        int end = -1;
+        for (int i = 0; i < marks.size(); i++) {
+            int[] cur = marks.get(i);
+            if (cur[0] == stepIndex) {
+                start = cur[1];
+                if (i + 1 < marks.size()) end = marks.get(i + 1)[1];
+                else end = src.length();
+                break;
+            }
+        }
+
+        if (start < 0) return "";
+        String block = src.substring(start, Math.min(end, src.length()));
+        return block.trim();
+    }
+
+    private static JsonObject toJson(Report report) {
+        JsonObject o = new JsonObject();
+        o.addProperty("ts", report.ts == null ? "" : report.ts);
+        o.addProperty("captureMode", report.captureMode == null ? "" : report.captureMode);
+        JsonArray models = new JsonArray();
+        if (report.models != null) {
+            for (String m : report.models) models.add(m);
+        }
+        o.add("models", models);
+
+        JsonArray cases = new JsonArray();
+        if (report.cases != null) {
+            for (CaseRunResult c : report.cases) {
+                JsonObject cj = new JsonObject();
+                cj.addProperty("id", c.id == null ? "" : c.id);
+                cj.addProperty("entryUrl", c.entryUrl == null ? "" : c.entryUrl);
+                cj.addProperty("userTask", c.userTask == null ? "" : c.userTask);
+
+                JsonArray runs = new JsonArray();
+                if (c.runs != null) {
+                    for (ModelRunResult r : c.runs) {
+                        JsonObject rj = new JsonObject();
+                        rj.addProperty("model", r.model == null ? "" : r.model);
+                        rj.addProperty("prompt", r.prompt == null ? "" : r.prompt);
+                        rj.addProperty("attemptIndex", r.attemptIndex);
+                        rj.addProperty("repairAttempt", r.repairAttempt);
+                        rj.addProperty("entryUrlUsed", r.entryUrlUsed == null ? "" : r.entryUrlUsed);
+                        rj.addProperty("planConfirmed", r.planConfirmed);
+                        rj.addProperty("planHasQuestion", r.planHasQuestion);
+                        rj.addProperty("planText", r.planText == null ? "" : r.planText);
+                        rj.addProperty("code", r.code == null ? "" : r.code);
+
+                        JsonArray steps = new JsonArray();
+                        if (r.planSteps != null) {
+                            for (AutoWebAgent.PlanStep s : r.planSteps) {
+                                if (s == null) continue;
+                                JsonObject sj = new JsonObject();
+                                sj.addProperty("index", s.index);
+                                sj.addProperty("description", s.description == null ? "" : s.description);
+                                sj.addProperty("targetUrl", s.targetUrl == null ? "" : s.targetUrl);
+                                sj.addProperty("entryAction", s.entryAction == null ? "" : s.entryAction);
+                                sj.addProperty("status", s.status == null ? "" : s.status);
+                                steps.add(sj);
+                            }
+                        }
+                        rj.add("planSteps", steps);
+
+                        JsonArray lint = new JsonArray();
+                        if (r.lintErrors != null) {
+                            for (String e : r.lintErrors) lint.add(e);
+                        }
+                        rj.add("lintErrors", lint);
+
+                        JsonArray exec = new JsonArray();
+                        if (r.stepResults != null) {
+                            for (StepExecutionResult sr : r.stepResults) {
+                                JsonObject ej = new JsonObject();
+                                ej.addProperty("stepIndex", sr.stepIndex);
+                                ej.addProperty("ok", sr.ok);
+                                ej.addProperty("durationMs", sr.durationMs);
+                                ej.addProperty("error", sr.error == null ? "" : sr.error);
+                                ej.addProperty("logTail", sr.logTail == null ? "" : sr.logTail);
+                                exec.add(ej);
+                            }
+                        }
+                        rj.add("stepResults", exec);
+
+                        JsonArray errs = new JsonArray();
+                        if (r.formattedErrors != null) {
+                            for (String e : r.formattedErrors) errs.add(e);
+                        }
+                        rj.add("formattedErrors", errs);
+                        rj.addProperty("runLogHead", r.runLogHead == null ? "" : r.runLogHead);
+                        rj.addProperty("runLogTail", r.runLogTail == null ? "" : r.runLogTail);
+
+                        runs.add(rj);
+                    }
+                }
+                cj.add("runs", runs);
+                cases.add(cj);
+            }
+        }
+        o.add("cases", cases);
+
+        o.addProperty("analysisPrompt", report.analysisPrompt == null ? "" : report.analysisPrompt);
+        o.addProperty("localAnalysisModel", report.localAnalysisModel == null ? "" : report.localAnalysisModel);
+        o.addProperty("localAnalysis", report.localAnalysis == null ? "" : report.localAnalysis);
+        return o;
+    }
+
+    private static String buildCompactAnalysisInput(Report report) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是一个资深Java自动化/LLM Agent工程师。请阅读以下多模型E2E测试汇总，给出可落地的代码优化建议（优先级排序），要求：\n");
+        sb.append("1) 优先发现结构性问题：可复用抽象、错误处理、日志落盘、并发/超时、可测性\n");
+        sb.append("2) 给出建议时同时指出可能修改的类/方法名\n");
+        sb.append("3) 输出格式：每条建议一行，含“原因/改法/影响范围”\n\n");
+        sb.append("=== 测试汇总 ===\n");
+        sb.append("ts=").append(report.ts).append("\n");
+        sb.append("models=").append(report.models == null ? "" : String.join(",", report.models)).append("\n");
+        sb.append("captureMode=").append(report.captureMode).append("\n\n");
+
+        if (report.cases != null) {
+            for (CaseRunResult c : report.cases) {
+                sb.append("CASE ").append(c.id).append("\n");
+                sb.append("entryUrl=").append(c.entryUrl).append("\n");
+                sb.append("task=").append(c.userTask == null ? "" : c.userTask.replace("\n", " ")).append("\n");
+                if (c.runs != null) {
+                    for (ModelRunResult r : c.runs) {
+                        int total = r.stepResults == null ? 0 : r.stepResults.size();
+                        int ok = 0;
+                        if (r.stepResults != null) {
+                            for (StepExecutionResult sr : r.stepResults) if (sr != null && sr.ok) ok++;
+                        }
+                        sb.append("- model=").append(r.model)
+                                .append(" attempt=").append(r.attemptIndex)
+                                .append(" repair=").append(r.repairAttempt)
+                                .append(" planConfirmed=").append(r.planConfirmed)
+                                .append(" steps=").append(total)
+                                .append(" ok=").append(ok)
+                                .append(" lintErrors=").append(r.lintErrors == null ? 0 : r.lintErrors.size())
+                                .append("\n");
+                        if (r.formattedErrors != null && !r.formattedErrors.isEmpty()) {
+                            for (String e : r.formattedErrors) {
+                                sb.append("  ").append(e).append("\n");
+                            }
+                        }
+                    }
+                }
+                sb.append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String buildAnalysisPrompt() {
+        return String.join("\n",
+                "把本报告文件内容整体提供给本地代码模型，并要求它：",
+                "1) 对比不同模型的Plan/Code差异，找出系统性失败点（如：frame选择、等待策略、selector鲁棒性、payload构造）",
+                "2) 针对失败步骤与lintErrors，给出AutoWebAgent/PlanRoutingSupport/WebDSL/GroovySupport等类的可落地优化建议",
+                "3) 输出为可执行的改动列表（文件+方法+改动点），以及风险点"
+        );
+    }
+}

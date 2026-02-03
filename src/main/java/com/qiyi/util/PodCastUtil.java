@@ -84,7 +84,10 @@ public class PodCastUtil {
             if (page.isVisible("//a[contains(text(),'登录')]")) {
                 page.click("//a[contains(text(),'登录')]");
                 //等待页面加载完毕
-                page.waitForLoadState(LoadState.NETWORKIDLE);
+                page.waitForLoadState(
+                        LoadState.NETWORKIDLE,
+                        new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+                );
             }
 
             // 检查是否有登录状态的元素
@@ -108,7 +111,10 @@ public class PodCastUtil {
             System.in.read();
             
             // 等待页面稳定
-            page.waitForLoadState(LoadState.NETWORKIDLE);
+            page.waitForLoadState(
+                    LoadState.NETWORKIDLE,
+                    new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
+            );
             
         } catch (Exception e) {
             e.printStackTrace();

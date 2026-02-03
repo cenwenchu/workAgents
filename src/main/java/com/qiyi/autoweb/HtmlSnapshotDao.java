@@ -21,14 +21,22 @@ class HtmlSnapshotDao {
         }
     }
 
+    private static String normalizeUrlForCache(String url) {
+        String v = url == null ? "" : url.trim();
+        if (v.isEmpty()) return v;
+        if (!PlanRoutingSupport.looksLikeUrl(v)) return v;
+        return PlanRoutingSupport.stripUrlQuery(v);
+    }
+
     /**
      * 生成缓存 key。
      * 核心逻辑：将 url/entryAction/采集模式拼接后做哈希。
      */
     private static String makeKey(String url, String entryAction, AutoWebAgent.HtmlCaptureMode captureMode, boolean a11yInterestingOnly) {
         AutoWebAgent.HtmlCaptureMode mode = captureMode == null ? AutoWebAgent.HtmlCaptureMode.RAW_HTML : captureMode;
+        String normalizedUrl = normalizeUrlForCache(url);
         StringBuilder sb = new StringBuilder();
-        sb.append(url == null ? "" : url).append("\n");
+        sb.append(normalizedUrl).append("\n");
         sb.append(entryAction == null ? "" : entryAction).append("\n");
         sb.append("CAPTURE_MODE=").append(mode.name()).append("\n");
         if (mode == AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT) {
@@ -57,26 +65,53 @@ class HtmlSnapshotDao {
         try {
             java.nio.file.Path dir = ensureCacheDir();
             AutoWebAgent.HtmlCaptureMode mode = captureMode == null ? AutoWebAgent.HtmlCaptureMode.RAW_HTML : captureMode;
+            String normalizedUrl = normalizeUrlForCache(url);
             String key = makeKey(url, entryAction, mode, a11yInterestingOnly);
             java.nio.file.Path cleanedPath = dir.resolve(key + ".cleaned.html");
             if (!java.nio.file.Files.exists(cleanedPath)) {
                 // 核心逻辑：兼容历史缓存 key
                 if (mode == AutoWebAgent.HtmlCaptureMode.RAW_HTML) {
-                    String legacyKey = sha256Hex((url == null ? "" : url) + "\n" + (entryAction == null ? "" : entryAction));
-                    java.nio.file.Path legacyCleaned = dir.resolve(legacyKey + ".cleaned.html");
-                    if (!java.nio.file.Files.exists(legacyCleaned)) return null;
-                    key = legacyKey;
-                    cleanedPath = legacyCleaned;
+                    String legacyKeyRaw = sha256Hex((url == null ? "" : url) + "\n" + (entryAction == null ? "" : entryAction));
+                    java.nio.file.Path legacyCleanedRaw = dir.resolve(legacyKeyRaw + ".cleaned.html");
+                    if (java.nio.file.Files.exists(legacyCleanedRaw)) {
+                        key = legacyKeyRaw;
+                        cleanedPath = legacyCleanedRaw;
+                    } else {
+                        String legacyKeyNorm = sha256Hex((normalizedUrl == null ? "" : normalizedUrl) + "\n" + (entryAction == null ? "" : entryAction));
+                        java.nio.file.Path legacyCleanedNorm = dir.resolve(legacyKeyNorm + ".cleaned.html");
+                        if (!java.nio.file.Files.exists(legacyCleanedNorm)) return null;
+                        key = legacyKeyNorm;
+                        cleanedPath = legacyCleanedNorm;
+                    }
                 } else {
                     return null;
                 }
             }
             AutoWebAgent.HtmlSnapshot snap = new AutoWebAgent.HtmlSnapshot();
             snap.stepIndex = stepIndex;
-            snap.url = url;
+            snap.url = normalizedUrl;
             snap.entryAction = entryAction;
             snap.cacheKey = key;
-            snap.cleanedHtml = new String(java.nio.file.Files.readAllBytes(cleanedPath), java.nio.charset.StandardCharsets.UTF_8);
+            String cleanedText = new String(java.nio.file.Files.readAllBytes(cleanedPath), java.nio.charset.StandardCharsets.UTF_8);
+            if (cleanedText == null || cleanedText.trim().isEmpty()) return null;
+            if (mode == AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT) {
+                try {
+                    String t = cleanedText.trim();
+                    if (t.startsWith("{") && t.contains("ariaSnapshotText")) {
+                        com.google.gson.JsonElement je = com.google.gson.JsonParser.parseString(t);
+                        if (je != null && je.isJsonObject()) {
+                            com.google.gson.JsonObject o = je.getAsJsonObject();
+                            com.google.gson.JsonElement v = o.get("ariaSnapshotText");
+                            String aria = (v == null || v.isJsonNull()) ? "" : v.getAsString();
+                            boolean hasAxTree = o.has("axTree") || o.has("axTreeText");
+                            if ((aria == null || aria.trim().isEmpty()) && !hasAxTree) {
+                                return null;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            snap.cleanedHtml = cleanedText;
             return snap;
         } catch (Exception ignored) {
             return null;
@@ -98,7 +133,7 @@ class HtmlSnapshotDao {
             java.nio.file.Files.write(cleanedPath, (cleanedHtml == null ? "" : cleanedHtml).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             AutoWebAgent.HtmlSnapshot snap = new AutoWebAgent.HtmlSnapshot();
             snap.stepIndex = stepIndex;
-            snap.url = url;
+            snap.url = normalizeUrlForCache(url);
             snap.entryAction = entryAction;
             snap.cacheKey = key;
             snap.cleanedHtml = cleanedHtml;

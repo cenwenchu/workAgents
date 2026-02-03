@@ -67,10 +67,12 @@ API REFERENCE (DSL - variable 'web'):
 - `web.click(selector)`: Clicks an element. High-level wrapper for `locator(selector).first().click()`.
 - `web.click(selector, index)`: Clicks the Nth matching element.
 - `web.clickButton(textOrSelector)`: Smartly finds and clicks a button/link by text OR selector. PREFER THIS for buttons.
+- `web.clickTab(textOrSelector)`: Smartly finds and clicks a tab by text OR selector. PREFER THIS for tabs.
 - `web.type(selector, text)`: Fills input.
 - `web.check(selector)`, `web.uncheck(selector)`: For checkboxes/radios.
 - `web.isChecked(selector)`: Returns boolean.
 - `web.selectOption(selector, valueOrLabel)`: For standard `<select>`.
+- `web.selectDropdown(dropdownNameOrSelector, optionText)`: For common dropdown/combobox components (e.g. AntD/Element UI).
 - `web.getText(selector)`: Returns inner text of first match.
 - `web.getAllText(selector)`: Returns list of strings for all matches.
 - `web.waitFor(selector)`: Explicit wait for element.
@@ -92,7 +94,9 @@ API REFERENCE (DSL - variable 'web'):
 - `web.extractPagesTable(containerSelector, rowSelector, columnsMap, nextBtnSelector, maxPages)`: **POWERFUL**. Extracts data across multiple pages by clicking 'next' button.
 - `web.extractTableData(containerSelector, rowSelector, limit, columnsMap)`: **POWERFUL**. Extracts structured data while scrolling (for virtual tables). Returns `List<Map<String, String>>`.
 - `web.extractModalData(modalSelector, regexPatternsMap)`: **POWERFUL**. Extracts data from a popup using regex. Example: `web.extractModalData('.modal', ['success': '成功.*?(\\d+)'])`.
+- `web.closeModal()`: Tries to close the currently visible modal/dialog (with fallbacks).
 - `web.closeModal(modalSelector, closeBtnSelector)`: Closes a modal and waits for it to vanish.
+- `web.dismissPopups()`: Tries to dismiss common popups/notifications (with fallbacks).
 - `web.dismissPopups(selectors...)`: Try to click specified selectors to close ads/notifications.
 - `web.locateItem(containerSelector, rowSelector, textToFind)`: **POWERFUL**. Scrolls until item is found and visible. Returns `boolean`.
 - `web.open(url)`: Opens a URL (alias for navigate).
@@ -110,7 +114,12 @@ API REFERENCE (DSL - variable 'web'):
 
 SECTION 1: INTERACTION
 - Use `web.clickButton('登录')` instead of complex selectors for buttons with text.
+- For tabs (e.g. "待发货/已发货/全部"), PREFER `web.clickTab('待发货')` instead of `web.click('text=...')`.
 - Use `web.type('#username', 'admin')` for inputs.
+- For dropdown / combobox / filter option selection by visible label, ALWAYS use `web.selectDropdown("控件名称", "选项文本")` as the ONLY allowed pattern.
+  - 禁止输出“先 click 打开下拉，再 click listbox/option 选项”的手写流程（例如 `web.click('text=\"资料已完善的平台\"')` + `web.click('div[role=\"listbox\"] >> text=\"淘宝\"')`），这类代码在 iframe/portal/虚拟列表下非常容易超时或点错。
+  - 正确示例：`web.selectDropdown("资料已完善的平台", "淘宝")`。如果控件名不确定，用更精确的 selector 作为第一个参数，但仍然只能用 `selectDropdown` 完成选择。
+- When a modal/popup appears, PREFER `web.closeModal()` / `web.dismissPopups()` instead of manually clicking “×/关闭”.
 - For flaky elements, set retries: `web.withMaxRetries(5)` or use `web.clickWithRetry('#selector')`.
 - Adjust timeouts if needed: `web.withDefaultTimeout(40000)`.
 
@@ -189,6 +198,10 @@ DECISION:
      - DO NOT GENERATE ANY EXECUTABLE CODE.
    - If ALL steps have `Status: CONFIRMED`:
      - Output the Plan.
+     - After the Plan block comment, you MUST structure the executable code by steps:
+       - Before each step’s executable code, output a single-line comment marker exactly like: `// Step N`
+       - Step numbers MUST match the Plan (Step 1..N), and each marker MUST be OUTSIDE the Plan block comment.
+       - Do NOT put all executable code under one step unless the plan truly has only one step.
      - Generate the full Groovy script.
 
 FINAL OUTPUT RULES:

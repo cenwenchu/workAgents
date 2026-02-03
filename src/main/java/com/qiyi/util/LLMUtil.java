@@ -165,30 +165,62 @@ public class LLMUtil {
      * @return 模型回复
      */
     public static String analyzeImageWithAliyun(java.io.File imageFile, String prompt) {
+        if (imageFile == null) return "";
+        return analyzeImageWithAliyun(java.util.Collections.singletonList(imageFile.getAbsolutePath()), prompt);
+    }
+
+    public static String analyzeImageWithAliyun(java.util.List<String> imageSources, String prompt) {
         try {
-            // Upload to OSS first as Aliyun VL models require URL
-            String imageUrl = OSSUtil.uploadFile(imageFile);
-            if (imageUrl == null) {
-                System.err.println("Failed to upload image to OSS for Aliyun analysis.");
+            MultiModalConversation conv = new MultiModalConversation();
+
+            java.util.List<Map<String, Object>> contents = new java.util.ArrayList<>();
+            if (imageSources != null) {
+                for (String src : imageSources) {
+                    if (src == null || src.trim().isEmpty()) continue;
+                    src = src.trim();
+                    String imageUrl = null;
+                    if (src.startsWith("http://") || src.startsWith("https://")) {
+                        imageUrl = src;
+                    } else {
+                        java.io.File f = null;
+                        if (src.startsWith("file:")) {
+                            try {
+                                f = java.nio.file.Paths.get(java.net.URI.create(src)).toFile();
+                            } catch (Exception ignored) {
+                                f = null;
+                            }
+                        }
+                        if (f == null) f = new java.io.File(src);
+                        if (f.exists()) {
+                            imageUrl = OSSUtil.uploadFile(f);
+                        }
+                    }
+                    if (imageUrl == null || imageUrl.trim().isEmpty()) {
+                        System.err.println("Failed to resolve image source for Aliyun analysis: " + src);
+                        continue;
+                    }
+                    contents.add(Collections.singletonMap("image", imageUrl));
+                }
+            }
+            if (contents.isEmpty()) {
+                System.err.println("Failed to resolve any images for Aliyun analysis.");
                 return "Error: Image upload failed.";
             }
 
-            MultiModalConversation conv = new MultiModalConversation();
-            
-            Map<String, Object> imageContent = Collections.singletonMap("image", imageUrl);
             Map<String, Object> textContent = Collections.singletonMap("text", prompt);
-            
+            contents.add(textContent);
+
             MultiModalMessage userMsg = MultiModalMessage.builder()
                     .role(Role.USER.getValue())
-                    .content(Arrays.asList(imageContent, textContent))
+                    .content(contents)
                     .build();
-            
+
             MultiModalConversationParam param = MultiModalConversationParam.builder()
                     .model("qwen3-vl-plus") // 使用 Qwen3-VL-Plus
                     .message(userMsg)
                     .apiKey(AppConfig.getInstance().getAliyunApiKey())
                     .build();
-            
+
             MultiModalConversationResult result = conv.call(param);
             return result.getOutput().getChoices().get(0).getMessage().getContent().get(0).get("text").toString();
         } catch (ApiException | NoApiKeyException | UploadFileException e) {

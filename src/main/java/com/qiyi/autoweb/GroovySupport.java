@@ -18,6 +18,10 @@ class GroovySupport {
      * 从 autoweb/skills 目录加载提示词模板
      */
     static void loadPrompts() {
+        loadPrompts(null);
+    }
+
+    static void loadPrompts(java.util.function.Consumer<String> uiLogger) {
         try {
             Path skillsDir = Paths.get(System.getProperty("user.dir"), "autoweb", "skills");
 
@@ -26,10 +30,10 @@ class GroovySupport {
                 String next = new String(Files.readAllBytes(groovyPromptPath), java.nio.charset.StandardCharsets.UTF_8);
                 if (!next.equals(GROOVY_SCRIPT_PROMPT_TEMPLATE)) {
                     GROOVY_SCRIPT_PROMPT_TEMPLATE = next;
-                    System.out.println("Loaded groovy_script_prompt.txt");
+                    StorageSupport.log(uiLogger, "PROMPT_LOAD", "Loaded groovy_script_prompt.txt", null);
                 }
             } else {
-                System.err.println("Warning: groovy_script_prompt.txt not found at " + groovyPromptPath.toAbsolutePath());
+                StorageSupport.log(uiLogger, "PROMPT_LOAD", "groovy_script_prompt.txt not found | path=" + groovyPromptPath.toAbsolutePath(), null);
             }
 
             Path refinedPromptPath = skillsDir.resolve("refined_groovy_script_prompt.txt");
@@ -37,14 +41,14 @@ class GroovySupport {
                 String next = new String(Files.readAllBytes(refinedPromptPath), java.nio.charset.StandardCharsets.UTF_8);
                 if (!next.equals(REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE)) {
                     REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE = next;
-                    System.out.println("Loaded refined_groovy_script_prompt.txt");
+                    StorageSupport.log(uiLogger, "PROMPT_LOAD", "Loaded refined_groovy_script_prompt.txt", null);
                 }
             } else {
-                System.err.println("Warning: refined_groovy_script_prompt.txt not found at " + refinedPromptPath.toAbsolutePath());
+                StorageSupport.log(uiLogger, "PROMPT_LOAD", "refined_groovy_script_prompt.txt not found | path=" + refinedPromptPath.toAbsolutePath(), null);
             }
 
         } catch (IOException e) {
-            System.err.println("Error loading prompts: " + e.getMessage());
+            StorageSupport.log(uiLogger, "PROMPT_LOAD", "Error loading prompts", e);
         }
     }
 
@@ -58,7 +62,7 @@ class GroovySupport {
      * @return 模型输出文本
      */
     static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger, String modelName) {
-        loadPrompts();
+        loadPrompts(uiLogger);
 
         String mode = extractModeFromPayload(cleanedHtml);
         String template = GROOVY_SCRIPT_PROMPT_TEMPLATE;
@@ -152,7 +156,7 @@ class GroovySupport {
         java.util.function.Consumer<String> uiLogger,
         String modelName
     ) {
-        loadPrompts();
+        loadPrompts(uiLogger);
 
         String mode = extractModeFromPayload(cleanedHtml);
         String template = REFINED_GROOVY_SCRIPT_PROMPT_TEMPLATE;
@@ -210,6 +214,7 @@ class GroovySupport {
         normalized = normalized.replaceAll("(?m)^(\\s*)(<plan>.*)</plan>\\s*$", "$1// $2");
         normalized = normalized.replaceAll("(?m)^(\\s*)(<think>.*)</think>\\s*$", "$1// $2");
         normalized = normalized.replaceAll("(?m)^(\\s*)(思考:.*)", "$1// $2");
+        normalized = normalizeClickListboxToSelectDropdown(normalized);
 
         boolean applyNormalization =
                 normalized.contains("web.extractList(") ||
@@ -256,6 +261,60 @@ class GroovySupport {
         }
         normalized = escapeNonInterpolatedDollarInDoubleQuotedStrings(normalized);
         return normalized;
+    }
+
+    private static String normalizeClickListboxToSelectDropdown(String code) {
+        if (code == null || code.isEmpty()) return code;
+        String[] lines = code.split("\\n", -1);
+        java.util.List<String> out = new java.util.ArrayList<>();
+
+        java.util.regex.Pattern openByText = java.util.regex.Pattern.compile("^\\s*web\\.click\\(\\s*(['\"])text=\\\"([^\\\"]+)\\\"\\1\\s*\\)\\s*;?\\s*$");
+        java.util.regex.Pattern waitLine = java.util.regex.Pattern.compile("^\\s*web\\.wait\\(\\s*\\d+\\s*\\)\\s*;?\\s*$");
+        java.util.regex.Pattern logLine = java.util.regex.Pattern.compile("^\\s*web\\.log\\(.*\\)\\s*;?\\s*$");
+        java.util.regex.Pattern blankLine = java.util.regex.Pattern.compile("^\\s*$");
+        java.util.regex.Pattern lineComment = java.util.regex.Pattern.compile("^\\s*//.*$");
+        java.util.regex.Pattern selectFromListbox = java.util.regex.Pattern.compile("^\\s*web\\.click\\(\\s*(['\"])(?:div\\[role=\\\"listbox\\\"\\]|\\[role=\\\"listbox\\\"\\]|div\\[role=listbox\\]|\\[role=listbox\\])\\s*>>\\s*text=\\\"([^\\\"]+)\\\"\\1\\s*\\)\\s*;?\\s*$");
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            java.util.regex.Matcher mOpen = openByText.matcher(line);
+            if (!mOpen.matches()) {
+                out.add(line);
+                continue;
+            }
+            String label = mOpen.group(2);
+
+            int j = i + 1;
+            java.util.List<String> between = new java.util.ArrayList<>();
+            int scanLimit = 10;
+            while (j < lines.length && scanLimit-- > 0) {
+                String next = lines[j];
+                if (waitLine.matcher(next).matches() || logLine.matcher(next).matches() || blankLine.matcher(next).matches() || lineComment.matcher(next).matches()) {
+                    between.add(next);
+                    j++;
+                    continue;
+                }
+                break;
+            }
+
+            if (j < lines.length) {
+                java.util.regex.Matcher mPick = selectFromListbox.matcher(lines[j]);
+                if (mPick.matches()) {
+                    String option = mPick.group(2);
+                    String indent = "";
+                    int p = 0;
+                    while (p < line.length() && Character.isWhitespace(line.charAt(p))) p++;
+                    indent = line.substring(0, p);
+                    out.addAll(between);
+                    out.add(indent + "web.selectDropdown(\"" + label.replace("\\", "\\\\").replace("\"", "\\\"") + "\", \"" + option.replace("\\", "\\\\").replace("\"", "\\\"") + "\")");
+                    i = j;
+                    continue;
+                }
+            }
+
+            out.add(line);
+        }
+        return String.join("\n", out);
     }
 
     private static String normalizePlanBlockCommentFormat(String code) {
@@ -410,6 +469,9 @@ class GroovySupport {
      * 进行静态检查并执行 Groovy 脚本，注入 page/web/out
      */
     static void executeWithGroovy(String scriptCode, Object pageOrFrame, java.util.function.Consumer<String> logger) throws Exception {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new RuntimeException("Execution interrupted.");
+        }
         java.util.List<String> lintErrors = GroovyLinter.check(scriptCode);
         if (!lintErrors.isEmpty()) {
             StringBuilder sb = new StringBuilder("Static Analysis Found Issues:\n");
@@ -457,6 +519,9 @@ class GroovySupport {
 
             groovy.lang.GroovyShell shell = new groovy.lang.GroovyShell(binding);
             shell.evaluate(scriptCode);
+            if (Thread.currentThread().isInterrupted()) {
+                throw new RuntimeException("Execution interrupted.");
+            }
             logger.accept("Groovy script executed successfully.");
         } catch (Exception e) {
             logger.accept("Groovy execution failed: " + e.getMessage());
@@ -469,7 +534,7 @@ class GroovySupport {
      */
     private static String callModel(String modelName, String prompt, java.util.function.Consumer<String> uiLogger) {
         String modelKey = getModelKey(modelName);
-        System.out.println("Calling LLM (model=" + modelKey + ")...");
+        StorageSupport.log(uiLogger, "LLM", "Calling LLM | model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey, null);
         long t0 = System.currentTimeMillis();
         String code = "";
 
@@ -500,13 +565,7 @@ class GroovySupport {
             }
         } catch (Exception ex) {
             long elapsed = System.currentTimeMillis() - t0;
-            if (uiLogger != null) {
-                uiLogger.accept("========== LLM_REQUEST_ERROR ==========");
-                uiLogger.accept("model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey);
-                uiLogger.accept("error=" + ex.getClass().getSimpleName() + ": " + (ex.getMessage() == null ? "" : ex.getMessage()));
-                uiLogger.accept("elapsedMs=" + elapsed);
-                uiLogger.accept("======================================");
-            }
+            StorageSupport.log(uiLogger, "LLM", "Request failed | model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey + " | elapsedMs=" + elapsed, ex);
             return "";
         }
 
@@ -515,29 +574,15 @@ class GroovySupport {
         }
         long elapsed = System.currentTimeMillis() - t0;
         if (uiLogger != null) {
-            uiLogger.accept(String.format("模型 %s 生成耗时: %.2f秒", modelName, elapsed / 1000.0));
+            StorageSupport.log(uiLogger, "LLM", String.format("模型 %s 生成耗时: %.2f秒", modelName, elapsed / 1000.0), null);
         }
         if (code == null || code.trim().isEmpty()) {
-            if (uiLogger != null) {
-                uiLogger.accept("========== LLM_EMPTY_RESPONSE ==========");
-                uiLogger.accept("model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey);
-                uiLogger.accept("elapsedMs=" + elapsed);
-                uiLogger.accept("=======================================");
-            }
+            StorageSupport.log(uiLogger, "LLM", "Empty response | model=" + (modelName == null ? "" : modelName) + " | key=" + modelKey + " | elapsedMs=" + elapsed, null);
         }
         return code;
     }
 
     private static String getModelKey(String displayName) {
-        if (displayName == null) return "DEEPSEEK";
-        String key = displayName.trim().toUpperCase();
-        if (key.contains("DEEPSEEK")) return "DEEPSEEK";
-        if (key.contains("QWEN-MAX") || key.contains("QWEN_MAX")) return "QWEN_MAX";
-        if (key.contains("MOONSHOT")) return "MOONSHOT";
-        if (key.contains("GLM") || key.contains("ZHIPU")) return "GLM";
-        if (key.contains("MINIMAX")) return "MINIMAX";
-        if (key.contains("GEMINI")) return "GEMINI";
-        if (key.contains("OLLAMA") || key.contains("QWEN3_8B")) return "OLLAMA_QWEN3_8B";
-        return key;
+        return AutoWebAgent.normalizeModelKey(displayName);
     }
 }
