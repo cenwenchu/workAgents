@@ -3217,6 +3217,33 @@ class AutoWebAgentUI {
         }
     }
 
+    private static java.util.Map<String, Object> readBestScrollerState(Page page) {
+        if (page == null) return java.util.Collections.emptyMap();
+        try {
+            Object stateObj = page.evaluate("() => {\n" +
+                    "  const el = window.__autowebBestScroller;\n" +
+                    "  if (el && el !== window) {\n" +
+                    "    return { mode: 'el', tag: (el.tagName || ''), y: (el.scrollTop || 0), ih: (el.clientHeight || 0), sh: (el.scrollHeight || 0) };\n" +
+                    "  }\n" +
+                    "  const de = document.scrollingElement || document.documentElement;\n" +
+                    "  return { mode: 'win', tag: '', y: (window.scrollY || 0), ih: (window.innerHeight || 0), sh: (de ? (de.scrollHeight || 0) : 0) };\n" +
+                    "}");
+            if (stateObj instanceof java.util.Map<?, ?> m) {
+                java.util.Map<String, Object> out = new java.util.HashMap<>();
+                for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                    if (e == null) continue;
+                    Object k = e.getKey();
+                    if (k == null) continue;
+                    out.put(String.valueOf(k), e.getValue());
+                }
+                return out;
+            }
+            return java.util.Collections.emptyMap();
+        } catch (Exception ignored) {
+            return java.util.Collections.emptyMap();
+        }
+    }
+
     private static java.util.List<java.io.File> captureMultiScreenScreenshots(Page page, java.util.function.Consumer<String> uiLogger) {
         if (page == null) return java.util.Collections.emptyList();
         synchronized (PLAYWRIGHT_LOCK) {
@@ -3260,7 +3287,7 @@ class AutoWebAgentUI {
                     initObj = page.evaluate("() => {\n" +
                             "  const winH = window.innerHeight || 0;\n" +
                             "  const nodes = document.querySelectorAll('body *');\n" +
-                            "  const limit = Math.min(nodes.length, 1500);\n" +
+                            "  const limit = Math.min(nodes.length, 6000);\n" +
                             "  let best = null;\n" +
                             "  let bestScore = 0;\n" +
                             "  for (let i = 0; i < limit; i++) {\n" +
@@ -3282,11 +3309,12 @@ class AutoWebAgentUI {
                             "    }\n" +
                             "  }\n" +
                             "  window.__autowebBestScroller = best || window;\n" +
-                            "  return { ok: true, hasEl: !!best, tag: best ? (best.tagName || '') : '', score: bestScore };\n" +
+                            "  return { ok: true, nodes: nodes.length, limit, hasEl: !!best, tag: best ? (best.tagName || '') : '', score: bestScore };\n" +
                             "}");
                 } catch (Exception ignored) {
                     initObj = null;
                 }
+                if (initObj != null) traceVisual("VISUAL_SCROLLER_PICK", String.valueOf(initObj));
                 if (uiLogger != null && initObj instanceof java.util.Map<?, ?> m) {
                     Object hasEl = m.get("hasEl");
                     if (Boolean.TRUE.equals(hasEl)) {
@@ -3297,17 +3325,14 @@ class AutoWebAgentUI {
 
                 double originY = 0;
                 try {
-                    Object stateObj = page.evaluate("() => {\n" +
-                            "  const el = window.__autowebBestScroller;\n" +
-                            "  if (el && el !== window) {\n" +
-                            "    return { y: (el.scrollTop || 0), ih: (el.clientHeight || 0), sh: (el.scrollHeight || 0) };\n" +
-                            "  }\n" +
-                            "  const de = document.scrollingElement || document.documentElement;\n" +
-                            "  return { y: (window.scrollY || 0), ih: (window.innerHeight || 0), sh: (de ? (de.scrollHeight || 0) : 0) };\n" +
-                            "}");
-                    if (stateObj instanceof java.util.Map<?, ?> m) {
-                        originY = asDouble(m.get("y"), 0);
-                    }
+                    java.util.Map<String, Object> s0 = readBestScrollerState(page);
+                    originY = asDouble(s0.get("y"), 0);
+                    traceVisual("VISUAL_SCROLL_ORIGIN",
+                            "mode=" + String.valueOf(s0.getOrDefault("mode", "")) +
+                                    ", tag=" + String.valueOf(s0.getOrDefault("tag", "")) +
+                                    ", y=" + originY +
+                                    ", ih=" + asDouble(s0.get("ih"), 0) +
+                                    ", sh=" + asDouble(s0.get("sh"), 0));
                 } catch (Exception ignored) {
                     originY = 0;
                 }
@@ -3323,28 +3348,38 @@ class AutoWebAgentUI {
                     double y = 0;
                     double ih = 0;
                     double sh = 0;
+                    String mode = "";
+                    String tag = "";
                     try {
-                        Object stateObj = page.evaluate("() => {\n" +
-                                "  const el = window.__autowebBestScroller;\n" +
-                                "  if (el && el !== window) {\n" +
-                                "    return { y: (el.scrollTop || 0), ih: (el.clientHeight || 0), sh: (el.scrollHeight || 0) };\n" +
-                                "  }\n" +
-                                "  const de = document.scrollingElement || document.documentElement;\n" +
-                                "  return { y: (window.scrollY || 0), ih: (window.innerHeight || 0), sh: (de ? (de.scrollHeight || 0) : 0) };\n" +
-                                "}");
-                        if (stateObj instanceof java.util.Map<?, ?> m) {
-                            y = asDouble(m.get("y"), 0);
-                            ih = asDouble(m.get("ih"), 0);
-                            sh = asDouble(m.get("sh"), 0);
-                        }
+                        java.util.Map<String, Object> s1 = readBestScrollerState(page);
+                        mode = String.valueOf(s1.getOrDefault("mode", ""));
+                        tag = String.valueOf(s1.getOrDefault("tag", ""));
+                        y = asDouble(s1.get("y"), 0);
+                        ih = asDouble(s1.get("ih"), 0);
+                        sh = asDouble(s1.get("sh"), 0);
                     } catch (Exception ignored) {
                     }
+                    traceVisual("VISUAL_SCROLL_STATE",
+                            "index=" + i +
+                                    ", mode=" + mode +
+                                    ", tag=" + tag +
+                                    ", y=" + y +
+                                    ", ih=" + ih +
+                                    ", sh=" + sh);
 
                     boolean hasMore = sh > ih + 8 && (y + ih + 8) < sh;
                     if (!hasMore) break;
 
                     double targetY = Math.min(y + Math.max(1, ih * 0.9), Math.max(0, sh - ih));
                     try {
+                        traceVisual("VISUAL_SCROLL_ATTEMPT",
+                                "index=" + i +
+                                        ", mode=" + mode +
+                                        ", tag=" + tag +
+                                        ", fromY=" + y +
+                                        ", targetY=" + targetY +
+                                        ", ih=" + ih +
+                                        ", sh=" + sh);
                         page.evaluate("yy => {\n" +
                                 "  const el = window.__autowebBestScroller;\n" +
                                 "  if (el && el !== window) {\n" +
@@ -3354,12 +3389,75 @@ class AutoWebAgentUI {
                                 "  window.scrollTo(0, yy);\n" +
                                 "}", targetY);
                         page.waitForTimeout(350);
-                        traceVisual("VISUAL_SCROLL", "targetY=" + targetY + ", hasMore=true");
+                        java.util.Map<String, Object> s2 = readBestScrollerState(page);
+                        double afterY = asDouble(s2.get("y"), y);
+                        traceVisual("VISUAL_SCROLL_AFTER",
+                                "index=" + i +
+                                        ", afterY=" + afterY +
+                                        ", expectedY=" + targetY +
+                                        ", delta=" + (afterY - y) +
+                                        ", mode=" + String.valueOf(s2.getOrDefault("mode", mode)) +
+                                        ", tag=" + String.valueOf(s2.getOrDefault("tag", tag)));
+                        if (Math.abs(afterY - y) < 2) {
+                            try {
+                                int dy = (int) Math.max(200, ih * 0.9);
+                                double mx = 0;
+                                double my = 0;
+                                try {
+                                    Object ptObj = page.evaluate("() => {\n" +
+                                            "  const el = window.__autowebBestScroller;\n" +
+                                            "  if (el && el !== window) {\n" +
+                                            "    const r = el.getBoundingClientRect();\n" +
+                                            "    const x = (r.left || 0) + (r.width || 0) / 2;\n" +
+                                            "    const y = (r.top || 0) + Math.max(1, Math.min((r.height || 0) - 1, (r.height || 0) / 2));\n" +
+                                            "    return { x, y };\n" +
+                                            "  }\n" +
+                                            "  const x = (window.innerWidth || 0) / 2;\n" +
+                                            "  const y = (window.innerHeight || 0) / 2;\n" +
+                                            "  return { x, y };\n" +
+                                            "}");
+                                    if (ptObj instanceof java.util.Map<?, ?> mpt) {
+                                        mx = asDouble(mpt.get("x"), 0);
+                                        my = asDouble(mpt.get("y"), 0);
+                                    }
+                                } catch (Exception ignored) {
+                                    mx = 0;
+                                    my = 0;
+                                }
+                                traceVisual("VISUAL_SCROLL_WHEEL_ATTEMPT",
+                                        "index=" + i +
+                                                ", dy=" + dy +
+                                                ", mouseX=" + mx +
+                                                ", mouseY=" + my +
+                                                ", fromY=" + y +
+                                                ", mode=" + mode +
+                                                ", tag=" + tag);
+                                if (mx > 0 && my > 0) {
+                                    page.mouse().move(mx, my);
+                                    page.waitForTimeout(60);
+                                }
+                                page.mouse().wheel(0, dy);
+                                page.waitForTimeout(350);
+                                java.util.Map<String, Object> s3 = readBestScrollerState(page);
+                                double wheelAfterY = asDouble(s3.get("y"), afterY);
+                                traceVisual("VISUAL_SCROLL_WHEEL_AFTER",
+                                        "index=" + i +
+                                                ", afterY=" + wheelAfterY +
+                                                ", delta=" + (wheelAfterY - y) +
+                                                ", mode=" + String.valueOf(s3.getOrDefault("mode", mode)) +
+                                                ", tag=" + String.valueOf(s3.getOrDefault("tag", tag)));
+                                if (uiLogger != null && Math.abs(wheelAfterY - y) < 2) {
+                                    uiLogger.accept("视觉补充: 翻页滚动未生效（index=" + i + ", mode=" + mode + ", tag=" + tag + "）");
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        }
                     } catch (Exception ignored) {
                     }
                 }
 
                 try {
+                    traceVisual("VISUAL_SCROLL_RESTORE", "originY=" + originY);
                     page.evaluate("yy => {\n" +
                             "  const el = window.__autowebBestScroller;\n" +
                             "  if (el && el !== window) {\n" +
@@ -3369,6 +3467,11 @@ class AutoWebAgentUI {
                             "  window.scrollTo(0, yy);\n" +
                             "}", originY);
                     page.waitForTimeout(150);
+                    java.util.Map<String, Object> sr = readBestScrollerState(page);
+                    traceVisual("VISUAL_SCROLL_RESTORE_DONE",
+                            "afterY=" + asDouble(sr.get("y"), originY) +
+                                    ", mode=" + String.valueOf(sr.getOrDefault("mode", "")) +
+                                    ", tag=" + String.valueOf(sr.getOrDefault("tag", "")));
                 } catch (Exception ignored) {}
 
                 return out;
