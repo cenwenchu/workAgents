@@ -108,6 +108,7 @@ public class WebDSL {
         if (a11y != null) return a11y;
         
         String normalized = normalizeSelectorString(selector);
+        normalized = normalizeTextRegexSelectorString(normalized);
         if (selector != null && normalized != null && !normalized.equals(selector)) {
             log("Selector: Normalize '" + selector + "' -> '" + normalized + "'");
         }
@@ -116,6 +117,51 @@ public class WebDSL {
         } else {
             return page.locator(normalized);
         }
+    }
+
+    private String normalizeTextRegexSelectorString(String selector) {
+        if (selector == null) return null;
+        if (!selector.contains("text=")) return selector;
+
+        String[] parts = selector.split(">>");
+        boolean changed = false;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i] == null ? "" : parts[i].trim();
+            String normalized = normalizeTextRegexSegment(part);
+            if (!normalized.equals(part)) changed = true;
+            if (i > 0) sb.append(" >> ");
+            sb.append(normalized);
+        }
+        return changed ? sb.toString() : selector;
+    }
+
+    private String normalizeTextRegexSegment(String segment) {
+        if (segment == null) return "";
+        String s = segment.trim();
+        if (!s.startsWith("text=")) return segment;
+
+        String payload = s.substring("text=".length()).trim();
+        if (payload.isEmpty()) return segment;
+        if (payload.startsWith("/")) return segment;
+        if (payload.startsWith("\"") || payload.startsWith("'")) return segment;
+        if (!looksLikeRegexPayload(payload)) return segment;
+
+        String p = payload;
+        if (p.contains("共\\d+条")) {
+            p = p.replace("共\\d+条", "共\\s*\\d+\\s*条");
+        }
+        if (p.contains("/")) return segment;
+        return "text=/" + p + "/";
+    }
+
+    private boolean looksLikeRegexPayload(String payload) {
+        if (payload == null) return false;
+        String p = payload;
+        if (p.contains("\\d") || p.contains("\\s") || p.contains("\\w")) return true;
+        if (p.contains(".*") || p.contains(".+") || p.contains("^") || p.contains("$")) return true;
+        if (p.contains("[") || p.contains("]") || p.contains("(") || p.contains(")") || p.contains("{") || p.contains("}") || p.contains("|")) return true;
+        return false;
     }
     
     private String extractOnlyAriaLabel(String selector) {

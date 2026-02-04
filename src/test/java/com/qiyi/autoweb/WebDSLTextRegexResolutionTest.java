@@ -46,6 +46,26 @@ public class WebDSLTextRegexResolutionTest {
     }
 
     @Test
+    public void waitFor_shouldNormalizeTextRegexSelector() {
+        Page page = Mockito.mock(Page.class);
+        Consumer<String> logger = s -> {};
+        WebDSL web = new WebDSL(page, logger);
+
+        Locator match = Mockito.mock(Locator.class);
+        Mockito.when(match.first()).thenReturn(match);
+        Mockito.doNothing().when(match).waitFor(Mockito.any());
+
+        String expected = "text=/共\\s*\\d+\\s*条/";
+        Mockito.when(page.locator(Mockito.anyString())).thenAnswer(invocation -> {
+            String selector = invocation.getArgument(0);
+            Assertions.assertEquals(expected, selector);
+            return match;
+        });
+
+        web.waitFor("text=共\\d+条");
+    }
+
+    @Test
     public void clickButton_shouldEscapeQuotesAndPreferRoleButton() {
         Page page = Mockito.mock(Page.class);
         Consumer<String> logger = s -> {};
