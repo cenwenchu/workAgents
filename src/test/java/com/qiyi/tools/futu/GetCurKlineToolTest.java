@@ -4,8 +4,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotCommon;
 import com.futu.openapi.pb.QotGetKL;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -21,6 +22,9 @@ public class GetCurKlineToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private FutuOpenD futuOpenD;
 
@@ -45,7 +49,7 @@ public class GetCurKlineToolTest {
     @Test
     public void testExecuteMissingCode() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: code is required", result);
     }
 
@@ -56,7 +60,7 @@ public class GetCurKlineToolTest {
 
         doReturn(false).when(futuOpenD).ensureSubscription(any(QotCommon.Security.class), any(QotCommon.SubType.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Subscription Failed", result);
     }
 
@@ -96,7 +100,7 @@ public class GetCurKlineToolTest {
 
         doReturn(response).when(futuOpenD).sendQotRequest(anyInt(), eq(QotGetKL.Response.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("K线数据 (前1条)"));
         assertTrue(result.contains("收: 305.0"));
@@ -117,7 +121,7 @@ public class GetCurKlineToolTest {
 
         doReturn(response).when(futuOpenD).sendQotRequest(anyInt(), eq(QotGetKL.Response.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertEquals("Error: Some API Error", result);
     }

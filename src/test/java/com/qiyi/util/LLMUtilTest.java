@@ -47,68 +47,68 @@ public class LLMUtilTest {
     }
 
     public void testAnalyzeImageWithAliyun() {
-        System.out.println("=== Testing analyzeImageWithAliyun ===");
+        AppLog.info("=== Testing analyzeImageWithAliyun ===");
         String imagePath = "/Users/cenwenchu/Desktop/1.png";
         String userPrompt = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\\\"列名:列内容（去掉回车换行）\\\"，然后用\\\"｜\\\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
         String prompt = "针对图片的情况，把下面这段用户需求，分解为多个可执行的步骤，最终会用于大模型生成代码，只需要拆分出具体步骤。用户需求为：" + userPrompt;
         long startTime = System.currentTimeMillis();
         String response = LLMUtil.analyzeImageWithAliyun(new File(imagePath), prompt);
         long endTime = System.currentTimeMillis();
-        System.out.println("Execution time: " + (endTime - startTime) + "ms");
-        System.out.println("Response: " + response);
+        AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+        AppLog.info("Response: " + response);
         if (response.isEmpty()) {
-            System.err.println("Response is empty. Make sure Ollama is running and model '" + VL_MODEL_NAME + "' is available.");
+            AppLog.error("Response is empty. Make sure Ollama is running and model '" + VL_MODEL_NAME + "' is available.");
         }
     }
 
     @Test
     public void testChatWithOllamaTranslation() {
         Assumptions.assumeTrue(shouldRunOllamaTests());
-        System.out.println("=== Testing chatWithOllamaTranslation ===");
+        AppLog.info("=== Testing chatWithOllamaTranslation ===");
         String sourceText = "你好，我很高兴到杭州，希望我们有个美好的假期";
         String prompt = "Translate the following segment into <" + HunyuanLanguage.JAPANESE.getCode() + ">, without additional explanation. \n\n " + sourceText;
         
         long startTime = System.currentTimeMillis();
         String response = LLMUtil.chatWithOllama(prompt, TRANSLATION_MODEL_NAME, null, false, resolveOllamaHost());
         long endTime = System.currentTimeMillis();
-        System.out.println("Execution time: " + (endTime - startTime) + "ms");
-        System.out.println("Response: " + response);
+        AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+        AppLog.info("Response: " + response);
         if (response.isEmpty()) {
-            System.err.println("Response is empty. Make sure Ollama is running and model '" + TRANSLATION_MODEL_NAME + "' is available.");
+            AppLog.error("Response is empty. Make sure Ollama is running and model '" + TRANSLATION_MODEL_NAME + "' is available.");
         }
     }
 
     @Test
     public void testChatWithOllama() {
         Assumptions.assumeTrue(shouldRunOllamaTests());
-        System.out.println("=== Testing chatWithOllama ===");
+        AppLog.info("=== Testing chatWithOllama ===");
         String prompt = "请你把如下的句子里面提炼出核心的时间，地点，人物，事情：明天小王要去上海参加国际绘画展";
         // Assuming the third argument is chatHistory, passing null or empty string
         long startTime = System.currentTimeMillis();
         String response = LLMUtil.chatWithOllama(prompt, MODEL_NAME, null,false, resolveOllamaHost());
         long endTime = System.currentTimeMillis();
-        System.out.println("Execution time: " + (endTime - startTime) + "ms");
-        System.out.println("No Thinking Response: " + response);    
+        AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+        AppLog.info("No Thinking Response: " + response);    
 
         
         if (response.isEmpty()) {
-            System.err.println("Response is empty. Make sure Ollama is running and model '" + MODEL_NAME + "' is available.");
+            AppLog.error("Response is empty. Make sure Ollama is running and model '" + MODEL_NAME + "' is available.");
         }
 
         startTime = System.currentTimeMillis();
         response = LLMUtil.chatWithOllama(prompt, MODEL_NAME, null,true, resolveOllamaHost());
         endTime = System.currentTimeMillis();
-        System.out.println("Execution time: " + (endTime - startTime) + "ms");
-        System.out.println("Thinking Response: " + response);
+        AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+        AppLog.info("Thinking Response: " + response);
         if (response.isEmpty()) {
-            System.err.println("Response is empty. Make sure Ollama is running and model '" + MODEL_NAME + "' is available.");
+            AppLog.error("Response is empty. Make sure Ollama is running and model '" + MODEL_NAME + "' is available.");
         }
     }
 
     @Test
     public void testChatWithOllamaStreaming() {
         Assumptions.assumeTrue(shouldRunOllamaTests());
-        System.out.println("=== Testing chatWithOllamaStreaming ===");
+        AppLog.info("=== Testing chatWithOllamaStreaming ===");
         String prompt = "简单说一下中国长城的历史";
         StringBuilder contentBuilder = new StringBuilder();
         StringBuilder thiinkContentBuilder = new StringBuilder();
@@ -133,15 +133,15 @@ public class LLMUtilTest {
                 try {
                     Thread.sleep(200);
                 } catch (InterruptedException e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
             long endTime = System.currentTimeMillis();
-            System.out.println("Execution time: " + (endTime - startTime) + "ms");
-            System.out.println("\nFull Response from handler: " + contentBuilder.toString());
+            AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+            AppLog.info("\nFull Response from handler: " + contentBuilder.toString());
                                     
         } else {
-            System.out.println("Response is null");
+            AppLog.info("Response is null");
         }
 
         //contentBuilder 清理一下
@@ -172,16 +172,16 @@ public class LLMUtilTest {
                 try {
                     Thread.sleep(200);
                 } catch (InterruptedException e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
             long endTime = System.currentTimeMillis();
-            System.out.println("Execution time: " + (endTime - startTime) + "ms");
-            System.out.println("\nFull Response from handler: " + contentBuilder.toString());
-            System.out.println("\nFull ThinkResponse from handler: " + thiinkContentBuilder.toString());
+            AppLog.info("Execution time: " + (endTime - startTime) + "ms");
+            AppLog.info("\nFull Response from handler: " + contentBuilder.toString());
+            AppLog.info("\nFull ThinkResponse from handler: " + thiinkContentBuilder.toString());
                                     
         } else {
-            System.out.println("Think Response is null");
+            AppLog.info("Think Response is null");
         }
         
     }
@@ -190,7 +190,7 @@ public class LLMUtilTest {
     @Test
     public void testChatWithOllamaImage() {
         Assumptions.assumeTrue(shouldRunOllamaTests());
-        System.out.println("=== Testing chatWithOllamaImage ===");
+        AppLog.info("=== Testing chatWithOllamaImage ===");
         String prompt = "抽取一下信息";
         // Example image URL (Placeholder)
         String imageUrl = "/Users/cenwenchu/Desktop/2.png";
@@ -201,24 +201,24 @@ public class LLMUtilTest {
         long startTime = System.currentTimeMillis();
         OllamaChatResult response = LLMUtil.chatWithOllamaImage(prompt, VL_MODEL_NAME, null, false, images, resolveOllamaHost());
         long endTime = System.currentTimeMillis();
-        System.out.println("Execution time: " + (endTime - startTime) + "ms");
+        AppLog.info("Execution time: " + (endTime - startTime) + "ms");
         
          if (response != null) {
-             System.out.println("HTTP Status: " + response.getHttpStatusCode());
+             AppLog.info("HTTP Status: " + response.getHttpStatusCode());
              if (response.getResponseModel() != null) {
                  
                  if (response.getResponseModel().getMessage() != null) {
-                    System.out.println(VL_MODEL_NAME + " Response Content: " + response.getResponseModel().getMessage().getContent());
+                    AppLog.info(VL_MODEL_NAME + " Response Content: " + response.getResponseModel().getMessage().getContent());
                  } else {
-                    System.err.println("Message is null");
+                    AppLog.error("Message is null");
                  }
              } else {
-                 System.err.println("ResponseModel is null");
+                 AppLog.error("ResponseModel is null");
              }
         }
         else
         {
-             System.err.println("Response object is null. Make sure Ollama is running and model '" + VL_MODEL_NAME + "' is available.");
+             AppLog.error("Response object is null. Make sure Ollama is running and model '" + VL_MODEL_NAME + "' is available.");
         }
     }
 }

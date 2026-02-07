@@ -1,9 +1,10 @@
 package com.qiyi.tools.dingtalk;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -25,7 +26,7 @@ public class CreateEventToolTest {
     private ToolContext context;
     
     @Mock
-    private ToolContext senderContext;
+    private ToolMessenger messenger;
 
     private CreateEventTool tool;
 
@@ -34,9 +35,8 @@ public class CreateEventToolTest {
         MockitoAnnotations.openMocks(this);
         tool = spy(new CreateEventTool());
         
-        when(context.getSenderId()).thenReturn("sender1");
-        when(context.getAtUserIds()).thenReturn(new ArrayList<>());
-        when(context.withAtUserIds(anyList())).thenReturn(senderContext);
+        when(context.getUserId()).thenReturn("sender1");
+        when(messenger.getMentionedUserIds()).thenReturn(new ArrayList<>());
         
         // Mock protected methods
         doReturn("unionId_sender1").when(tool).getUnionIdByUserId("sender1");
@@ -56,7 +56,7 @@ public class CreateEventToolTest {
         params.put("summary", "Meeting");
         // missing startTime and endTime
         
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: No attendees", result); // Fail because no attendees first
         
         // Add attendees
@@ -69,7 +69,7 @@ public class CreateEventToolTest {
             doReturn(Collections.singletonList(dept)).when(tool).getAllDepartments();
         } catch (Exception e) {}
         
-        result = tool.execute(params, context);
+        result = tool.execute(params, context, messenger);
         assertEquals("Error: Missing time", result);
     }
 
@@ -97,7 +97,7 @@ public class CreateEventToolTest {
         doReturn("unionId_sender1").when(tool).getUnionIdByUserId("sender1");
         doReturn("unionId_user1").when(tool).getUnionIdByUserId("user1");
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("日程创建成功"), "Result should contain success message. Actual: " + result);
         assertTrue(result.contains("EventID: eventId123"), "Result should contain EventID. Actual: " + result);

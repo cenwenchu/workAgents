@@ -2,6 +2,7 @@ package com.qiyi.tools.example;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -17,6 +18,9 @@ public class HelloWorldToolTest {
 
     @Mock
     private ToolContext context;
+
+    @Mock
+    private ToolMessenger messenger;
 
     private HelloWorldTool tool;
 
@@ -36,11 +40,11 @@ public class HelloWorldToolTest {
         JSONObject params = new JSONObject();
         params.put("name", "Tester");
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
-        verify(context).sendText("Hello, Tester! 欢迎来到 WorkAgents 世界。");
+        verify(messenger).sendText("Hello, Tester! 欢迎来到 WorkAgents 世界。");
         // Verify that the guide is also sent
-        verify(context).sendText(contains("这是一个教学示例"));
+        verify(messenger).sendText(contains("这是一个教学示例"));
         
         assertTrue(result.contains("Hello, Tester!"));
     }
@@ -49,9 +53,9 @@ public class HelloWorldToolTest {
     public void testExecuteWithoutParam() {
         JSONObject params = new JSONObject();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
-        verify(context).sendText("Hello, 开发者! 欢迎来到 WorkAgents 世界。");
+        verify(messenger).sendText("Hello, 开发者! 欢迎来到 WorkAgents 世界。");
         assertTrue(result.contains("Hello, 开发者!"));
     }
 }

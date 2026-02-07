@@ -3,8 +3,10 @@ package com.qiyi.tools.agent;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
-import com.qiyi.tools.ToolRegistry;
+import com.qiyi.tools.ToolManager;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.LLMUtil;
+import com.qiyi.util.AppLog;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -27,27 +29,19 @@ public class ListCapabilitiesTool implements Tool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         String result = getCapabilities();
         
-        // Send message to user if senderId is present (not pre-warming)
-        if (context != null && context.getSenderId() != null && !context.getSenderId().isEmpty()) {
+        if (messenger != null) {
             try {
-                System.out.println("ListCapabilitiesTool: Sending capabilities to " + context.getSenderId());
-                // Use Markdown for better formatting
-                context.sendMarkdown("Agent 能力列表", result);
+                messenger.sendMarkdown("Agent 能力列表", result);
             } catch (Exception e) {
-                System.err.println("ListCapabilitiesTool: Failed to send message: " + e.getMessage());
-                e.printStackTrace();
-                // Fallback to text
+                AppLog.error("ListCapabilitiesTool: Failed to send message: " + e.getMessage());
+                AppLog.error(e);
                 try {
-                    context.sendText(result);
-                } catch (Exception ex) {
-                    ex.printStackTrace();
-                }
+                    messenger.sendText(result);
+                } catch (Exception ignored) {}
             }
-        } else {
-             System.out.println("ListCapabilitiesTool: No senderId provided, skipping message send.");
         }
         
         return result;
@@ -75,8 +69,7 @@ public class ListCapabilitiesTool implements Tool {
         for (Map.Entry<String, List<Tool>> entry : toolsByCategory.entrySet()) {
             toolListBuilder.append("Category: ").append(entry.getKey()).append("\n");
             for (Tool tool : entry.getValue()) {
-                toolListBuilder.append("  - Tool Name: ").append(tool.getName()).append("\n");
-                toolListBuilder.append("    Description: ").append(tool.getDescription()).append("\n");
+                toolListBuilder.append("  - Schema: ").append(ToolManager.toToolSchema(tool).toJSONString()).append("\n");
             }
             toolListBuilder.append("\n");
         }
@@ -102,7 +95,7 @@ public class ListCapabilitiesTool implements Tool {
         try {
             cachedCapabilities = llmChat(prompt);
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             // Fallback to raw list if LLM fails
             cachedCapabilities = "无法生成智能介绍，以下是原始工具列表：\n" + toolListBuilder.toString();
         }
@@ -111,11 +104,11 @@ public class ListCapabilitiesTool implements Tool {
     }
 
     protected Collection<Tool> getAllTools() {
-        return ToolRegistry.getAll();
+        return ToolManager.getAll();
     }
     
     protected String llmChat(String prompt) {
-        return LLMUtil.chatWithDeepSeek(prompt);
+        return LLMUtil.chat(prompt);
     }
     
     private String getCategoryFromPackage(String packageName) {

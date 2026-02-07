@@ -2,100 +2,102 @@ package com.qiyi.agent;
 
 import java.util.Arrays;
 import java.util.List;
+import com.qiyi.util.AppLog;
 
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
-import com.qiyi.util.DingTalkUtil;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkConfig;
+import com.qiyi.service.dingtalk.DingTalkService;
+import com.qiyi.tools.TaskProcessor;
+import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
+import com.qiyi.tools.context.ConsoleToolContext;
 
-public class DingTalkAgent {
+/**
+ * 钉钉入口 Agent：
+ * <ul>
+ *     <li>启动 DingTalkService（机器人回调消费）</li>
+ *     <li>通过 RobotMsgCallbackConsumer 接收消息并交给 TaskProcessor 规划与执行</li>
+ * </ul>
+ */
+public class DingTalkAgent extends AbstractAgent {
+    private final ToolContext chatContext;
+    private DingTalkService dingTalkService;
 
+    public DingTalkAgent() {
+        this.chatContext = new ConsoleToolContext();
+    }
 
     public static void main(String[] args) throws Exception {
+        new DingTalkAgent().start();
+    }
 
-        java.io.File lockFile = new java.io.File(System.getProperty("java.io.tmpdir"), "DingTalkAgent.lock");
-        java.io.RandomAccessFile raf = new java.io.RandomAccessFile(lockFile, "rw");
-        java.nio.channels.FileChannel channel = raf.getChannel();
-        java.nio.channels.FileLock acquiredLock = null;
-        try {
-            acquiredLock = channel.tryLock();
-        } catch (java.nio.channels.OverlappingFileLockException e) {
-            acquiredLock = null;
-        }
-        if (acquiredLock == null) {
-            System.err.println("DingTalkAgent 已在运行，禁止重复启动");
-            raf.close();
-            return;
-        }
-        final java.nio.channels.FileLock lockRef = acquiredLock;
-        final java.nio.channels.FileChannel channelRef = channel;
-        final java.io.RandomAccessFile rafRef = raf;
-        final java.io.File lockFileRef = lockFile;
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                lockRef.release();
-                channelRef.close();
-                rafRef.close();
-                lockFileRef.delete();
-            } catch (Exception ignored) {}
-        }));
-
-        //启动机器人监听
+    @Override
+    protected void doStart() {
         com.qiyi.tools.ToolManager.init();
-        DingTalkUtil.startRobotMsgCallbackConsumer();
+        this.dingTalkService = DingTalkService.fromAppConfig();
+        DingTalkConfig dingTalkConfig = this.dingTalkService.getConfig();
+        this.dingTalkService.startRobotMsgCallbackConsumer();
+        AppLog.info("[agent] DingTalk robot callback consumer started");
 
-        // 获取所有部门列表
-        List<DingTalkDepartment> allDepartments = DingTalkUtil.getAllDepartments(true,true);
-        System.out.println("获取到部门总数: " + allDepartments.size());
-        for (DingTalkDepartment dept : allDepartments) {
-            System.out.println("部门: " + dept.getName() + ", ID: " + dept.getDeptId() + ", 用户数量: " + dept.getUserList().size());
-
-            for(DingTalkUser user : dept.getUserList())
-            {
-                System.out.println("用户: " + user.getName() + ", ID: " + user.getUserid());
+        List<DingTalkDepartment> allDepartments = null;
+        try {
+            allDepartments = this.dingTalkService.getAllDepartments(true, true);
+            int deptCount = allDepartments == null ? 0 : allDepartments.size();
+            int userCount = 0;
+            if (allDepartments != null) {
+                for (DingTalkDepartment dept : allDepartments) {
+                    if (dept != null && dept.getUserList() != null) {
+                        userCount += dept.getUserList().size();
+                    }
+                }
             }
+            AppLog.info("[agent] DingTalk org loaded, deptCount=" + deptCount + ", userCount=" + userCount);
+        } catch (Exception e) {
+            AppLog.error(e);
         }
 
-        // 使用配置的管理员用户列表替代硬编码用户
-        if (DingTalkUtil.PODCAST_ADMIN_USERS != null && !DingTalkUtil.PODCAST_ADMIN_USERS.isEmpty()) {
-            for (String adminUserId : DingTalkUtil.PODCAST_ADMIN_USERS) {
+        if (dingTalkConfig.getPodcastAdminUsers() != null && !dingTalkConfig.getPodcastAdminUsers().isEmpty()) {
+            for (String adminUserId : dingTalkConfig.getPodcastAdminUsers()) {
                 DingTalkUser targetUser = null;
-                // 尝试从已加载的部门列表中查找用户详情以便显示名称
-                for (DingTalkDepartment dept : allDepartments) {
-                    if (dept.getUserList() != null) {
-                        for (DingTalkUser u : dept.getUserList()) {
-                            if (u.getUserid().equals(adminUserId)) {
-                                targetUser = u;
-                                break;
+                if (allDepartments != null) {
+                    for (DingTalkDepartment dept : allDepartments) {
+                        if (dept.getUserList() != null) {
+                            for (DingTalkUser u : dept.getUserList()) {
+                                if (u.getUserid().equals(adminUserId)) {
+                                    targetUser = u;
+                                    break;
+                                }
                             }
                         }
+                        if (targetUser != null) break;
                     }
-                    if (targetUser != null) break;
                 }
 
                 if (targetUser != null) {
-                    System.out.println("用户: " + targetUser.getName() + ", ID: " + targetUser.getUserid());
+                    AppLog.info("[agent] podcast admin resolved: " + targetUser.getName() + " (" + targetUser.getUserid() + ")");
                 } else {
-                    System.out.println("用户ID: " + adminUserId + " (未在部门列表中找到详情)");
+                    AppLog.warn("[agent] podcast admin userId configured but not found in org cache: " + adminUserId);
                 }
 
-                // 0.发送文本给单用户
-                DingTalkUtil.sendTextMessageToEmployees(Arrays.asList(adminUserId), "新的一天，看看我帮啥忙～");
+                try {
+                    this.dingTalkService.sendTextMessageToEmployees(Arrays.asList(adminUserId), "新的一天，看看我帮啥忙～");
+                } catch (Exception e) {
+                    AppLog.error(e);
+                }
             }
         } else {
-            System.out.println("未配置 podcast.admin.users，请在 podcast.cfg 中配置");
+            AppLog.warn("未配置 podcast.admin.users，请在 podcast.cfg 中配置");
         }
 
-        //交互的读取控制台消息，来判断是否要暂停机器人消息回调
-        // DingTalkUtil.stopRobotMsgCallbackConsumer();
-
-        System.out.println("\n机器人监听已启动。在控制台输入 'exit' 并回车以停止程序...");
+        AppLog.info("\n机器人监听已启动。在控制台输入 'exit' 并回车以停止程序...");
         java.util.Scanner scanner = new java.util.Scanner(System.in);
-        while (true) {
+        while (isRunning()) {
             if (scanner.hasNextLine()) {
                 String input = scanner.nextLine();
                 if ("exit".equalsIgnoreCase(input.trim())) {
-                    DingTalkUtil.stopRobotMsgCallbackConsumer();
-                    System.out.println("程序已退出。");
+                    stop();
+                    AppLog.info("程序已退出。");
                     break;
                 }
             }
@@ -107,7 +109,84 @@ public class DingTalkAgent {
             }
         }
         scanner.close();
-        System.exit(0);
+    }
+
+    @Override
+    protected void doStop() {
+        if (this.dingTalkService != null) {
+            try {
+                this.dingTalkService.stopRobotMsgCallbackConsumer();
+            } catch (Exception e) {
+                AppLog.error(e);
+            }
+        }
+    }
+
+    @Override
+    public String chat(String userInput) {
+        if (userInput == null) return "";
+        String input = userInput.trim();
+        if (input.isEmpty()) return "";
+        CapturingMessenger messenger = new CapturingMessenger();
+        TaskProcessor.process(input, chatContext, messenger);
+        return messenger.getCaptured();
+    }
+
+    private static final class CapturingMessenger implements ToolMessenger {
+        private final StringBuilder captured = new StringBuilder();
+        private List<String> mentionedUserIds = java.util.Collections.emptyList();
+
+        @Override
+        public List<String> getMentionedUserIds() {
+            return mentionedUserIds;
+        }
+
+        @Override
+        public ToolMessenger withMentionedUserIds(List<String> mentionedUserIds) {
+            this.mentionedUserIds = mentionedUserIds == null ? java.util.Collections.emptyList() : mentionedUserIds;
+            return this;
+        }
+
+        @Override
+        public void sendText(String content) {
+            if (content != null) {
+                captured.append(content).append("\n");
+            }
+            AppLog.info("[DingTalkAgent] Text: " + content);
+        }
+
+        @Override
+        public void sendMarkdown(String title, String content) {
+            if (title != null) {
+                captured.append(title).append("\n");
+            }
+            if (content != null) {
+                captured.append(content).append("\n");
+            }
+            AppLog.info("[DingTalkAgent] Markdown Title: " + title);
+            AppLog.info("[DingTalkAgent] Content: \n" + content);
+        }
+
+        @Override
+        public void sendImage(String imageUrl) {
+            if (imageUrl != null) {
+                captured.append(imageUrl).append("\n");
+            }
+            AppLog.info("[DingTalkAgent] Image: " + imageUrl);
+        }
+
+        @Override
+        public void sendImage(java.io.File imageFile) {
+            String path = imageFile == null ? null : imageFile.getAbsolutePath();
+            if (path != null) {
+                captured.append(path).append("\n");
+            }
+            AppLog.info("[DingTalkAgent] Local Image: " + path);
+        }
+
+        public String getCaptured() {
+            return captured.toString().trim();
+        }
     }
     
 }

@@ -2,13 +2,21 @@ package com.qiyi.tools.futu;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.pb.QotGetUserSecurityGroup;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.component.ComponentId;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
 
+/**
+ * 获取用户的自选股分组列表（富途）。
+ *
+ * <p>用于在后续查询中选择 groupName，例如 get_user_security / get_group_stock_quotes。</p>
+ */
 public class GetUserSecurityGroupTool implements Tool {
     @Override
     public String getName() {
@@ -20,12 +28,17 @@ public class GetUserSecurityGroupTool implements Tool {
         return "功能：获取用户的自选股分组列表。参数：groupType（整数，选填，分组类型，默认全部）。返回：分组名称和类型列表。";
     }
 
+    @Override
+    public List<ComponentId> requiredComponents() {
+        return List.of(ComponentId.FUTU);
+    }
+
     protected FutuOpenD getFutuOpenD() {
         return FutuOpenD.getInstance();
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         try {
             FutuOpenD openD = getFutuOpenD();
             
@@ -61,28 +74,28 @@ public class GetUserSecurityGroupTool implements Tool {
                 
                 String result = sb.toString();
                 try {
-                    context.sendText(result);
+                    if (messenger != null) messenger.sendText(result);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
                 return result;
             } else {
                 String errorMsg = "获取自选股分组失败: " + response.getRetMsg();
                 try {
-                    context.sendText(errorMsg);
+                    if (messenger != null) messenger.sendText(errorMsg);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
                 return errorMsg;
             }
             
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                context.sendText("获取自选股分组发生异常: " + e.getMessage());
+                if (messenger != null) messenger.sendText("获取自选股分组发生异常: " + e.getMessage());
             } catch (Exception ex) {
-                ex.printStackTrace();
+                AppLog.error(ex);
             }
             return exceptionMsg;
         }

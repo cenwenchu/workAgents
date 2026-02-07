@@ -1,11 +1,14 @@
 package com.qiyi.tools.dingtalk;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.util.DingTalkUtil;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkService;
+import com.qiyi.component.ComponentId;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -14,7 +17,14 @@ import java.util.HashMap;
 import java.util.Collection;
 import java.util.Collections;
 
+/**
+ * 钉钉消息发送工具。
+ *
+ * <p>规划补参：从用户输入中提取收件人（names/departments）与默认 content={{PREV_RESULT}} 等常见模式。</p>
+ */
 public class SendMessageTool implements Tool {
+    private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
+
     @Override
     public String getName() {
         return "send_message";
@@ -25,21 +35,74 @@ public class SendMessageTool implements Tool {
         return "Send direct DingTalk text message to specific users. Parameters: content (string, mandatory). Choose ONE of: departments (string/List, names or IDs) OR names (string/List). If both provided, departments take precedence.";
     }
 
-    protected List<DingTalkDepartment> getAllDepartments() throws Exception {
-        return DingTalkUtil.getAllDepartments(true, true);
-    }
+    @Override
+    public void enrichPlannedTask(String userText, JSONObject plannedTask) {
+        if (plannedTask == null) return;
+        JSONObject params = plannedTask.getJSONObject("parameters");
+        if (params == null) {
+            params = new JSONObject();
+            plannedTask.put("parameters", params);
+        }
 
-    protected void sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
-        DingTalkUtil.sendTextMessageToEmployees(userIds, content);
+        boolean hasRecipients = params.containsKey("userIds") || params.containsKey("names") || params.containsKey("departments");
+        if (!hasRecipients) {
+            String recipientName = tryExtractRecipientName(userText);
+            if (recipientName != null) {
+                params.put("names", recipientName);
+            }
+        }
+
+        String content = params.getString("content");
+        if ((content == null || content.trim().isEmpty()) && wantsPrevResultToBeSent(userText)) {
+            params.put("content", "{{PREV_RESULT}}");
+        }
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
-        String senderId = context.getSenderId();
-        List<String> atUserIds = context.getAtUserIds();
-        
-        // Use a context that only notifies the sender to match original behavior
-        ToolContext senderContext = context.withAtUserIds(Collections.emptyList());
+    public List<ComponentId> requiredComponents() {
+        return List.of(ComponentId.DINGTALK);
+    }
+
+    protected List<DingTalkDepartment> getAllDepartments() throws Exception {
+        return DING_TALK_SERVICE.getAllDepartments(true, true);
+    }
+
+    protected void sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
+        DING_TALK_SERVICE.sendTextMessageToEmployees(userIds, content);
+    }
+
+    private static String tryExtractRecipientName(String text) {
+        if (text == null) return null;
+        String v = text.trim();
+        if (v.isEmpty()) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:告诉|通知|发给)\\s*([^，。,\\s]{1,16})")
+                .matcher(v);
+        if (m.find()) {
+            String name = m.group(1);
+            if (name == null) return null;
+            String n = name.trim();
+            return n.isEmpty() ? null : n;
+        }
+        return null;
+    }
+
+    private static boolean wantsPrevResultToBeSent(String text) {
+        if (text == null) return false;
+        String v = text.trim();
+        if (v.isEmpty()) return false;
+        if (v.contains("{{PREV_RESULT}}")) return true;
+        boolean hasTell = v.contains("告诉") || v.contains("通知") || v.contains("发给");
+        boolean hasResult = v.contains("结果") || v.contains("查询结果") || v.contains("把结果");
+        return hasTell && hasResult;
+    }
+
+    @Override
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
+        String senderId = context != null ? context.getUserId() : null;
+        List<String> mentionedUserIds = messenger != null ? messenger.getMentionedUserIds() : null;
+
+        ToolMessenger senderMessenger = messenger != null ? messenger.withMentionedUserIds(Collections.emptyList()) : null;
 
         String content = params != null ? params.getString("content") : null;
         List<String> recipients = new ArrayList<>();
@@ -101,7 +164,7 @@ public class SendMessageTool implements Tool {
                             usedDepartments = true;
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        AppLog.error(e);
                     }
                 }
             }
@@ -171,14 +234,14 @@ public class SendMessageTool implements Tool {
                             }
                         }
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        AppLog.error(e);
                     }
                 }
             }
         }
 
-        if (!usedDepartments && atUserIds != null && !atUserIds.isEmpty()) {
-            for (String uid : atUserIds) {
+        if (!usedDepartments && mentionedUserIds != null && !mentionedUserIds.isEmpty()) {
+            for (String uid : mentionedUserIds) {
                 if (!recipients.contains(uid)) {
                     recipients.add(uid);
                 }
@@ -190,18 +253,18 @@ public class SendMessageTool implements Tool {
         
         if (content == null || content.trim().isEmpty()) {
             try {
-                senderContext.sendText("未提供消息内容，未执行发送。");
+                if (senderMessenger != null) senderMessenger.sendText("未提供消息内容，未执行发送。");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             return "Error: Empty content";
         }
 
         if (!notFoundDepartments.isEmpty()) {
             try {
-                senderContext.sendText("未找到以下部门: " + String.join("，", notFoundDepartments) + "。请确认部门名称或ID是否正确。");
+                if (senderMessenger != null) senderMessenger.sendText("未找到以下部门: " + String.join("，", notFoundDepartments) + "。请确认部门名称或ID是否正确。");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             if (recipients.isEmpty()) {
                 return "Error: Dept not found";
@@ -210,9 +273,9 @@ public class SendMessageTool implements Tool {
 
         if (!notFoundNames.isEmpty()) {
             try {
-                senderContext.sendText("未找到以下用户: " + String.join("，", notFoundNames) + "。请确认姓名是否正确。");
+                if (senderMessenger != null) senderMessenger.sendText("未找到以下用户: " + String.join("，", notFoundNames) + "。请确认姓名是否正确。");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             if (recipients.isEmpty()) {
                 return "Error: Name not found";
@@ -221,9 +284,9 @@ public class SendMessageTool implements Tool {
 
         if (recipients.isEmpty()) {
             try {
-                senderContext.sendText("未指定有效的接收人（部门或用户），未执行发送。");
+                if (senderMessenger != null) senderMessenger.sendText("未指定有效的接收人（部门或用户），未执行发送。");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             return "Error: No recipients";
         }
@@ -244,20 +307,20 @@ public class SendMessageTool implements Tool {
                     senderName = idNameMap.get(senderId);
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             String finalContent = (senderName != null && !senderName.trim().isEmpty())
                     ? ("【消息发起人：" + senderName + "】" + content)
                     : ("【消息发起人：" + (senderId != null ? senderId : "未知") + "】" + content);
             sendTextMessageToEmployees(recipients, finalContent);
-            senderContext.sendText("已向 " + recipients.size() + " 位用户发送消息");
+            if (senderMessenger != null) senderMessenger.sendText("已向 " + recipients.size() + " 位用户发送消息");
             return "Message Sent to " + recipients.size() + " users";
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             try {
-                senderContext.sendText("发送消息失败: " + e.getMessage());
+                if (senderMessenger != null) senderMessenger.sendText("发送消息失败: " + e.getMessage());
             } catch (Exception ex) {
-                ex.printStackTrace();
+                AppLog.error(ex);
             }
             return "Error: " + e.getMessage();
         }

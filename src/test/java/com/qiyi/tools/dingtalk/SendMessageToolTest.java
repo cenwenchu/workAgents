@@ -1,9 +1,10 @@
 package com.qiyi.tools.dingtalk;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -25,7 +26,10 @@ public class SendMessageToolTest {
     private ToolContext context;
     
     @Mock
-    private ToolContext senderContext;
+    private ToolMessenger messenger;
+
+    @Mock
+    private ToolMessenger senderMessenger;
 
     private SendMessageTool tool;
 
@@ -34,9 +38,9 @@ public class SendMessageToolTest {
         MockitoAnnotations.openMocks(this);
         tool = spy(new SendMessageTool());
         
-        when(context.getSenderId()).thenReturn("sender1");
-        when(context.getAtUserIds()).thenReturn(new ArrayList<>());
-        when(context.withAtUserIds(anyList())).thenReturn(senderContext);
+        when(context.getUserId()).thenReturn("sender1");
+        when(messenger.getMentionedUserIds()).thenReturn(new ArrayList<>());
+        when(messenger.withMentionedUserIds(anyList())).thenReturn(senderMessenger);
         
         // Mock protected methods
         doNothing().when(tool).sendTextMessageToEmployees(anyList(), anyString());
@@ -50,9 +54,9 @@ public class SendMessageToolTest {
     @Test
     public void testExecuteEmptyContent() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: Empty content", result);
-        verify(senderContext).sendText("未提供消息内容，未执行发送。");
+        verify(senderMessenger).sendText("未提供消息内容，未执行发送。");
     }
 
     @Test
@@ -71,7 +75,7 @@ public class SendMessageToolTest {
 
         doReturn(Collections.singletonList(dept)).when(tool).getAllDepartments();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("Message Sent to 1 users"));
         verify(tool).sendTextMessageToEmployees(argThat(list -> list.contains("user1")), contains("Hello"));
@@ -93,7 +97,7 @@ public class SendMessageToolTest {
 
         doReturn(Collections.singletonList(dept)).when(tool).getAllDepartments();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("Message Sent to 1 users"), "Result should contain success message. Actual: " + result);
         verify(tool).sendTextMessageToEmployees(argThat(list -> list.contains("user1")), contains("Hello"));

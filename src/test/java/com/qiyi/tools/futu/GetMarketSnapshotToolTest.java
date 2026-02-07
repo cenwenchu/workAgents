@@ -4,8 +4,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotCommon;
 import com.futu.openapi.pb.QotGetSecuritySnapshot;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -22,6 +23,9 @@ public class GetMarketSnapshotToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private FutuOpenD futuOpenD;
 
@@ -46,7 +50,7 @@ public class GetMarketSnapshotToolTest {
     @Test
     public void testExecuteMissingCode() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: code is required", result);
     }
 
@@ -97,7 +101,7 @@ public class GetMarketSnapshotToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetSecuritySnapshot.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("00700"), "Result should contain stock code. Actual: " + result);
         assertTrue(result.contains("当前价: 300.0"), "Result should contain current price. Actual: " + result);
@@ -116,7 +120,7 @@ public class GetMarketSnapshotToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetSecuritySnapshot.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: Snapshot failed", result);
     }
 }

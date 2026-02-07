@@ -1,15 +1,23 @@
 package com.qiyi.tools.futu;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.component.ComponentId;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.futu.openapi.pb.QotGetKL;
 import com.futu.openapi.pb.QotCommon;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
 
+/**
+ * 获取证券 K 线数据（富途）。
+ *
+ * <p>规划补参：当 code 缺失时，从 userText 中提取如 HK.00700 / US.AAPL 等证券代码。</p>
+ */
 public class GetCurKlineTool implements Tool {
     @Override
     public String getName() {
@@ -21,12 +29,54 @@ public class GetCurKlineTool implements Tool {
         return "功能：获取指定证券的最新 K 线数据。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）；klType（整数，选填，K线类型，默认日线。常用值：1=1分钟，2=日线，3=周线，4=月线）；reqNum（整数，选填，请求数量，默认10）。返回：包含所请求数量的K线数据（时间、开高低收、成交量等）的响应字符串。";
     }
 
+    @Override
+    public void enrichPlannedTask(String userText, JSONObject plannedTask) {
+        if (plannedTask == null) return;
+        JSONObject params = plannedTask.getJSONObject("parameters");
+        if (params == null) {
+            params = new JSONObject();
+            plannedTask.put("parameters", params);
+        }
+        String code = params.getString("code");
+        if (code == null || code.trim().isEmpty()) {
+            String extracted = tryExtractStockCode(userText);
+            if (extracted != null) {
+                params.put("code", extracted);
+            }
+        }
+    }
+
+    @Override
+    public List<ComponentId> requiredComponents() {
+        return List.of(ComponentId.FUTU);
+    }
+
     protected FutuOpenD getFutuOpenD() {
         return FutuOpenD.getInstance();
     }
 
+    private static String tryExtractStockCode(String text) {
+        if (text == null) return null;
+        String v = text.trim();
+        if (v.isEmpty()) return null;
+
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\\b(HK|US|SH|SZ)\\.([A-Za-z0-9]{1,10})\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(v);
+        if (m.find()) {
+            return m.group(1).toUpperCase() + "." + m.group(2).toUpperCase();
+        }
+
+        if (v.contains("腾讯")) return "HK.00700";
+        if (v.contains("茅台") || v.contains("贵州茅台")) return "SH.600519";
+        if (v.contains("苹果")) return "US.AAPL";
+        if (v.contains("特斯拉")) return "US.TSLA";
+
+        return null;
+    }
+
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         String code = params.getString("code");
         if (code == null) return "Error: code is required";
         
@@ -107,36 +157,36 @@ public class GetCurKlineTool implements Tool {
                  if (response.getS2C().getKlListCount() == 0) {
                      String msg = "未查询到K线数据。";
                      try {
-                         context.sendText(msg);
+                         if (messenger != null) messenger.sendText(msg);
                      } catch (Exception e) {
-                         e.printStackTrace();
+                         AppLog.error(e);
                      }
                      return msg;
                  }
                  String result = sb.toString();
                  try {
-                     context.sendText("K线数据查询结果:\n" + result);
+                     if (messenger != null) messenger.sendText("K线数据查询结果:\n" + result);
                  } catch (Exception e) {
-                     e.printStackTrace();
+                     AppLog.error(e);
                  }
                  return result;
             } else {
                  String errorMsg = "Error: " + response.getRetMsg();
                  try {
-                     context.sendText("查询K线数据失败: " + response.getRetMsg());
+                     if (messenger != null) messenger.sendText("查询K线数据失败: " + response.getRetMsg());
                  } catch (Exception e) {
-                     e.printStackTrace();
+                     AppLog.error(e);
                  }
                  return errorMsg;
             }
             
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             String exceptionMsg = "Exception: " + e.getMessage();
             try {
-                context.sendText("查询K线数据发生异常: " + e.getMessage());
+                if (messenger != null) messenger.sendText("查询K线数据发生异常: " + e.getMessage());
             } catch (Exception ex) {
-                ex.printStackTrace();
+                AppLog.error(ex);
             }
             return exceptionMsg;
         }

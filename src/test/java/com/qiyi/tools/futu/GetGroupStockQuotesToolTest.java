@@ -5,8 +5,9 @@ import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotCommon;
 import com.futu.openapi.pb.QotGetBasicQot;
 import com.futu.openapi.pb.QotGetUserSecurity;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -25,6 +26,9 @@ public class GetGroupStockQuotesToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private FutuOpenD futuOpenD;
 
@@ -49,14 +53,10 @@ public class GetGroupStockQuotesToolTest {
     @Test
     public void testExecuteMissingGroupName() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertEquals("Error: groupName is required", result);
-        try {
-            verify(context, never()).sendText(anyString());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        verify(messenger, never()).sendText(anyString());
     }
 
     @Test
@@ -128,7 +128,7 @@ public class GetGroupStockQuotesToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetBasicQot.Response.class)))
                 .thenReturn(quoteResp);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("HK.00700"));
         assertTrue(result.contains("现价: 300.0"));
@@ -147,7 +147,8 @@ public class GetGroupStockQuotesToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetUserSecurity.Response.class)))
                 .thenReturn(securityResp);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertTrue(result.contains("获取自选股列表失败: Failed to get security list"));
+        verify(messenger).sendText(contains("获取自选股列表失败"));
     }
 }

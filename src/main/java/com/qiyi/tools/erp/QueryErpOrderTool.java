@@ -11,9 +11,16 @@ import com.microsoft.playwright.APIRequestContext;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
 import java.util.Collections;
+import com.qiyi.util.AppLog;
 
+/**
+ * ERP 订单查询工具。
+ *
+ * <p>规划补参：从用户输入中抽取订单号，写入 parameters.orderId。</p>
+ */
 public class QueryErpOrderTool extends ErpBaseTool {
     private static final String ERP_ORDER_PAGE_URL = "https://sc.scm121.com/tradeManage/tower/distribute";
     private static final String API_URL = "https://innerapi.scm121.com/api/inner/order/list";
@@ -29,33 +36,42 @@ public class QueryErpOrderTool extends ErpBaseTool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public void enrichPlannedTask(String userText, JSONObject plannedTask) {
+        if (plannedTask == null) return;
+        JSONObject params = plannedTask.getJSONObject("parameters");
+        if (params == null) {
+            params = new JSONObject();
+            plannedTask.put("parameters", params);
+        }
+        String orderId = params.getString("orderId");
+        if (orderId == null || orderId.trim().isEmpty()) {
+            String extracted = tryExtractOrderId(userText);
+            if (extracted != null) {
+                params.put("orderId", extracted);
+            }
+        }
+    }
+
+    @Override
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         String orderId = params != null ? params.getString("orderId") : null;
         if (orderId == null || orderId.isEmpty()) {
-            try {
-                context.sendText("ERP订单查询缺少必填参数：订单号 (orderId)");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, "ERP订单查询缺少必填参数：订单号 (orderId)");
             return "Error: Missing orderId";
         }
 
         if (!TOOL_LOCK.tryLock()) {
-            try {
-                context.sendText("ERP查询任务正在执行中，请稍后再试。");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, "ERP查询任务正在执行中，请稍后再试。");
             return "Error: Task locked";
         }
 
         PlayWrightUtil.Connection connection = null;
         try {
-            context.sendText("开始执行ERP订单查询任务...");
+            sendTextSafe(messenger, "开始执行ERP订单查询任务...");
 
             connection = connectToBrowser();
             if (connection == null) {
-                context.sendText("无法连接到浏览器，任务终止");
+                sendTextSafe(messenger, "无法连接到浏览器，任务终止");
                 return "Error: Browser connection failed";
             }
 
@@ -69,24 +85,20 @@ public class QueryErpOrderTool extends ErpBaseTool {
             Page page = browserContext.newPage();
             try {
                 // 1. Check Login using base class method
-                if (!ensureLogin(page, ERP_ORDER_PAGE_URL, context)) {
+                if (!ensureLogin(page, ERP_ORDER_PAGE_URL, messenger)) {
                     return "Error: Login failed";
                 }
 
                 // 2. Fetch Data
-                return fetchData(page, context, orderId);
+                return fetchData(page, messenger, orderId);
 
             } finally {
                 page.close();
             }
 
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("任务执行异常: " + e.getMessage());
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            AppLog.error(e);
+            sendTextSafe(messenger, "任务执行异常: " + e.getMessage());
             return "Error: " + e.getMessage();
         } finally {
             disconnectBrowser(connection);
@@ -114,7 +126,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
         }
     }
 
-    private String fetchData(Page page, ToolContext context, String orderId) {
+    private String fetchData(Page page, ToolMessenger messenger, String orderId) {
         try {
             // Construct payload
             JSONObject payload = new JSONObject();
@@ -144,24 +156,35 @@ public class QueryErpOrderTool extends ErpBaseTool {
             try {
                 bodyJson = JSONObject.parseObject(body);
             } catch (Exception e) {
-                try {
-                    context.sendText("接口返回非JSON数据 (Status " + status + "):\n" + body);
-                } catch (Exception ex) { ex.printStackTrace(); }
+                sendTextSafe(messenger, "接口返回非JSON数据 (Status " + status + "):\n" + body);
                 return "Error: Non-JSON response (Status " + status + ")";
             }
 
-            return handleApiResponse(context, status, bodyJson);
+            return handleApiResponse(messenger, status, bodyJson);
 
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("获取数据失败: " + e.getMessage());
-            } catch (Exception ex) { ex.printStackTrace(); }
+            AppLog.error(e);
+            sendTextSafe(messenger, "获取数据失败: " + e.getMessage());
             return "Error: " + e.getMessage();
         }
     }
 
-    private String handleApiResponse(ToolContext context, int status, JSONObject bodyJson) {
+    private static String tryExtractOrderId(String text) {
+        if (text == null) return null;
+        String v = text.trim();
+        if (v.isEmpty()) return null;
+        java.util.regex.Matcher m1 = java.util.regex.Pattern
+                .compile("(?i)orderId\\s*[:=]\\s*([0-9]{5,})")
+                .matcher(v);
+        if (m1.find()) return m1.group(1);
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("(?:订单|order)\\s*#?\\s*([0-9]{5,})", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(v);
+        if (m2.find()) return m2.group(1);
+        return null;
+    }
+
+    private String handleApiResponse(ToolMessenger messenger, int status, JSONObject bodyJson) {
         try {
             if (status == 200) {
                 boolean success = bodyJson.getBooleanValue("success");
@@ -174,7 +197,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
                         if (data instanceof JSONArray) {
                             JSONArray dataArray = (JSONArray) data;
                             if (dataArray.isEmpty()) {
-                                context.sendText("查询成功，但未找到匹配的订单记录 (data is empty)。");
+                                sendTextSafe(messenger, "查询成功，但未找到匹配的订单记录 (data is empty)。");
                                 return "No records found";
                             }
                             count = dataArray.size();
@@ -191,7 +214,7 @@ public class QueryErpOrderTool extends ErpBaseTool {
                              if (displayData.length() > 2000) {
                                   displayData = displayData.substring(0, 2000) + "\n...(truncated)";
                              }
-                             context.sendText("查询成功 (未知数据结构):\n" + displayData);
+                             sendTextSafe(messenger, "查询成功 (未知数据结构):\n" + displayData);
                              return "Unknown data structure: " + displayData;
                         }
 
@@ -201,32 +224,38 @@ public class QueryErpOrderTool extends ErpBaseTool {
                              finalOutput = finalOutput.substring(0, 3500) + "\n...(内容过长已截断)";
                         }
                         
-                        context.sendText("查询成功，找到 " + count + " 条记录:\n" + finalOutput);
+                        sendTextSafe(messenger, "查询成功，找到 " + count + " 条记录:\n" + finalOutput);
                         return finalOutput;
 
                     } else {
-                        context.sendText("查询成功，但返回数据为空 (data is null)。");
+                        sendTextSafe(messenger, "查询成功，但返回数据为空 (data is null)。");
                         return "Data is null";
                     }
                 } else {
                     String msg = bodyJson.getString("message");
                     if ("empty token".equals(msg)) {
-                        context.sendText("查询失败: 认证Token丢失 (empty token)。\n建议：请在浏览器中刷新页面或重新登录。");
+                        sendTextSafe(messenger, "查询失败: 认证Token丢失 (empty token)。\n建议：请在浏览器中刷新页面或重新登录。");
                     } else {
-                        context.sendText("查询失败 (Business Error): " + msg);
+                        sendTextSafe(messenger, "查询失败 (Business Error): " + msg);
                     }
                     return "Error: " + msg;
                 }
             } else {
-                context.sendText("接口调用失败 (Status " + status + "):\n" + bodyJson.toJSONString());
+                sendTextSafe(messenger, "接口调用失败 (Status " + status + "):\n" + bodyJson.toJSONString());
                 return "Error: Status " + status;
             }
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("处理响应结果失败: " + e.getMessage());
-            } catch (Exception ex) { ex.printStackTrace(); }
+            AppLog.error(e);
+            sendTextSafe(messenger, "处理响应结果失败: " + e.getMessage());
             return "Error: " + e.getMessage();
+        }
+    }
+
+    private void sendTextSafe(ToolMessenger messenger, String content) {
+        if (messenger == null) return;
+        try {
+            messenger.sendText(content);
+        } catch (Exception ignored) {
         }
     }
 

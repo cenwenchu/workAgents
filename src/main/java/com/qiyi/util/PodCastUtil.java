@@ -21,8 +21,8 @@ import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
 import com.qiyi.config.AppConfig;
-import com.qiyi.podcast.PodCastItem;
-import com.qiyi.wechat.WechatArticle;
+import com.qiyi.service.podcast.PodCastItem;
+import com.qiyi.service.wechat.WechatArticle;
 
 public class PodCastUtil {
 
@@ -99,25 +99,33 @@ public class PodCastUtil {
     }
 
     /**
-     * 暂停程序等待用户在浏览器中手动完成登录
+     * 等待用户在浏览器中手动完成登录（不阻塞控制台输入）。
+     *
+     * <p>实现方式：周期性检查页面是否出现登录态元素；登录完成后自动继续。</p>
      * 
      * @param page Playwright 页面对象
      */
     public static void waitForManualLogin(Page page) {
-        System.out.println("请在浏览器中手动登录，登录后按 Enter 键继续...");
-        
+        AppLog.info("请在浏览器中手动登录，登录完成后将自动继续...");
+
+        while (page != null && !page.isClosed() && !isLoggedIn(page)) {
+            try {
+                page.waitForTimeout(1000);
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (page == null || page.isClosed()) {
+            return;
+        }
+
         try {
-            // 等待用户手动操作
-            System.in.read();
-            
-            // 等待页面稳定
             page.waitForLoadState(
                     LoadState.NETWORKIDLE,
                     new Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
             );
-            
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
         }
     }
 
@@ -129,17 +137,17 @@ public class PodCastUtil {
     public static void killChromeProcess(int port) {
         //  先杀死占用 9222 端口的进程等待一段时间，确保进程已完全终止
         try {
-            System.out.println("正在杀死占用 " + port + " 端口的进程...");
+            AppLog.info("正在杀死占用 " + port + " 端口的进程...");
             // 只杀死处于 LISTEN 状态的进程（即 Chrome 服务端），避免误杀连接到该端口的客户端（即本 Java 进程）
             String cmd = "lsof -n -i:" + port + " | grep LISTEN | awk '{print $2}' | xargs kill -9";
             Process killProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", cmd});
             killProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-            System.out.println("已杀死占用 " + port + " 端口的进程");
+            AppLog.info("已杀死占用 " + port + " 端口的进程");
             
             Thread.sleep(1000);
         } catch (Exception ex) {
             // TODO Auto-generated catch block
-            ex.printStackTrace();
+            AppLog.error(ex);
         }
     }
 
@@ -148,7 +156,7 @@ public class PodCastUtil {
      */
     public static void minimizeChromeWindow() {
         try {
-            System.out.println("正在最小化 Chrome 窗口...");
+            AppLog.info("正在最小化 Chrome 窗口...");
             String[] script = {
                 "osascript",
                 "-e",
@@ -156,7 +164,7 @@ public class PodCastUtil {
             };
             Runtime.getRuntime().exec(script);
         } catch (Exception e) {
-            System.err.println("最小化 Chrome 窗口失败: " + e.getMessage());
+            AppLog.error("最小化 Chrome 窗口失败: " + e.getMessage());
         }
     }
 
@@ -169,13 +177,13 @@ public class PodCastUtil {
      */
     public static void startChromeBrowser(int port) throws IOException, InterruptedException {
         // 启动 Chrome 浏览器
-        System.out.println("正在启动 Chrome 浏览器 (Port: " + port + ")...");
+        AppLog.info("正在启动 Chrome 浏览器 (Port: " + port + ")...");
         // 使用用户目录下的持久化路径，防止重启或清理导致数据丢失
         String userDataDir = System.getProperty("user.home") + "/chrome-debug-profile";
         String command = "nohup /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=" + port + " --user-data-dir=\"" + userDataDir + "\" > /tmp/chrome-debug.log 2>&1 &";
         Process chromeProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", command});
         chromeProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-        System.out.println("Chrome 浏览器已启动，User Data Dir: " + userDataDir);
+        AppLog.info("Chrome 浏览器已启动，User Data Dir: " + userDataDir);
         
         // 等待 Chrome 完全启动
         Thread.sleep(3000);
@@ -209,19 +217,19 @@ public class PodCastUtil {
                 if (currentHeight.intValue() == lastHeight) {
                     stableCount++;
                     if (stableCount >= 10) { // 连续10次高度不变
-                        //System.out.println("页面高度已稳定: " + currentHeight);
+                        //AppLog.info("页面高度已稳定: " + currentHeight);
                         return;
                     }
                 } else {
                     stableCount = 0;
                     lastHeight = currentHeight.intValue();
-                    //System.out.println("检测到高度变化: " + currentHeight);
+                    //AppLog.info("检测到高度变化: " + currentHeight);
                 }
             
                 Thread.sleep(500); // 每.5秒检查一次
             }   
         
-            System.out.println("等待超时，当前高度: " + 
+            AppLog.info("等待超时，当前高度: " + 
                 page.evaluate("document.documentElement.scrollHeight"));
         }   
 
@@ -272,8 +280,8 @@ public class PodCastUtil {
                 podCastNames.add(line.trim());
             }
         } catch (IOException e) {
-            System.err.println("读取播客列表文件失败: " + e.getMessage());
-            e.printStackTrace();
+            AppLog.error("读取播客列表文件失败: " + e.getMessage());
+            AppLog.error(e);
         }
         return podCastNames.toArray(new String[0]);
     }
@@ -297,10 +305,10 @@ public class PodCastUtil {
 
             // Write list to file with pretty printing
             mapper.writerWithDefaultPrettyPrinter().writeValue(file, itemList);
-            System.out.println("成功将 " + itemList.size() + " 个 PodcastItem 写入文件: " + filePath);
+            AppLog.info("成功将 " + itemList.size() + " 个 PodcastItem 写入文件: " + filePath);
         } catch (IOException e) {
-            System.err.println("写入文件失败: " + e.getMessage());
-            e.printStackTrace();
+            AppLog.error("写入文件失败: " + e.getMessage());
+            AppLog.error(e);
         }
     }
 
@@ -322,10 +330,10 @@ public class PodCastUtil {
         try {
             // Read list from file
             itemList = mapper.readValue(file, new TypeReference<List<PodCastItem>>(){});
-            System.out.println("成功从文件读取 " + itemList.size() + " 个 PodcastItem");
+            AppLog.info("成功从文件读取 " + itemList.size() + " 个 PodcastItem");
         } catch (IOException e) {
-            System.err.println("读取文件失败: " + e.getMessage());
-            e.printStackTrace();
+            AppLog.error("读取文件失败: " + e.getMessage());
+            AppLog.error(e);
         }
         return itemList;
     }
@@ -349,7 +357,7 @@ public class PodCastUtil {
         String content = LLMUtil.generateContentWithDeepSeekByFile(new java.io.File(podcastFilePath),promptString,true);
 
 
-        //System.out.println(content);
+        //AppLog.info(content);
 
         WechatArticle article =  parseFromString(content);
         article.setAuthor("Curcuma");
@@ -406,8 +414,8 @@ public class PodCastUtil {
             article.setContent(article.getContent().replace("*", ""));
             
         } catch (Exception e) {
-            System.err.println("解析文章时出错: " + e.getMessage());
-            e.printStackTrace();
+            AppLog.error("解析文章时出错: " + e.getMessage());
+            AppLog.error(e);
         }
         return article;
     }
@@ -436,28 +444,28 @@ public class PodCastUtil {
         }
         
         if (article.getTitle() == null || article.getTitle().isEmpty()) {
-            System.err.println("文章标题为空");
+            AppLog.error("文章标题为空");
             return false;
         }
         
         if (article.getSummary() == null || article.getSummary().isEmpty()) {
-            System.err.println("文章摘要为空");
+            AppLog.error("文章摘要为空");
             return false;
         }
         
         if (article.getCategory() == null || article.getCategory().isEmpty()) {
-            System.err.println("文章分类为空");
+            AppLog.error("文章分类为空");
             return false;
         }
         
         if (article.getContent() == null || article.getContent().isEmpty()) {
-            System.err.println("文章内容为空");
+            AppLog.error("文章内容为空");
             return false;
         }
         
         // 验证摘要长度
         if (article.getSummary().length() > 200) {
-            System.err.println("文章摘要超过限制: " + article.getSummary().length() + "字");
+            AppLog.error("文章摘要超过限制: " + article.getSummary().length() + "字");
             return false;
         }
         

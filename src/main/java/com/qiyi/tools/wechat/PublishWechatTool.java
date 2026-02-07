@@ -2,11 +2,13 @@ package com.qiyi.tools.wechat;
 
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.config.AppConfig;
-import com.qiyi.podcast.service.PodCastPostToWechat;
+import com.qiyi.service.podcast.service.PodCastPostToWechat;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
 import com.qiyi.util.PodCastUtil;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -18,6 +20,11 @@ import java.nio.file.StandardCopyOption;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * 微信公众号发布工具：把播客摘要文件批量发布到公众号后台（草稿/发表）。
+ *
+ * <p>执行流程：准备待发布文件 → 连接浏览器 → 校验微信登录 → 逐篇发布 → 归档已发布文件。</p>
+ */
 public class PublishWechatTool implements Tool {
     private static final ReentrantLock PUBLISH_LOCK = new ReentrantLock();
 
@@ -41,60 +48,52 @@ public class PublishWechatTool implements Tool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         boolean isDraft = params != null && params.containsKey("isDraft") ? params.getBooleanValue("isDraft") : PUBLISH_IS_DRAFT;
 
         if (!PUBLISH_LOCK.tryLock()) {
-            try {
-                context.sendText("当前已有发布任务正在执行，请稍后再试。");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, "当前已有发布任务正在执行，请稍后再试。");
             return "Task locked";
         }
 
         try {
             String publishDirStr = getPodcastPublishDir();
             if (publishDirStr == null || publishDirStr.isEmpty()) {
-                context.sendText("发布目录未配置，请检查 podcast.cfg");
+                sendTextSafe(messenger, "发布目录未配置，请检查 podcast.cfg");
                 return "Config Error";
             }
 
-            context.sendText("开始执行发布任务...");
+            sendTextSafe(messenger, "开始执行发布任务...");
 
             // 1. 准备发布文件
-            stageFilesForPublishing(context);
+            stageFilesForPublishing(messenger);
 
             PlayWrightUtil.Connection connection = connectToBrowser();
             if (connection == null){
-                context.sendText("无法连接到浏览器，任务终止");
+                sendTextSafe(messenger, "无法连接到浏览器，任务终止");
                 return "Browser Error";
             }
 
             String publishResult = "";
             try {
                 // 2. 检查微信登录状态
-                if (!checkWechatLogin(connection, context)) {
+                if (!checkWechatLogin(connection, messenger)) {
                     return "Login Failed";
                 }
 
                 // 3. 执行发布文件处理
-                publishResult = processPublishFiles(connection, context, isDraft);
+                publishResult = processPublishFiles(connection, messenger, isDraft);
 
             } finally {
                 disconnectBrowser(connection);
             }
 
-            context.sendText("所有发布任务执行完毕");
+            sendTextSafe(messenger, "所有发布任务执行完毕");
             return "Publish Completed: " + publishResult;
 
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("发布任务执行异常: " + e.getMessage());
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            AppLog.error(e);
+            sendTextSafe(messenger, "发布任务执行异常: " + e.getMessage());
             return "Error: " + e.getMessage();
         } finally {
             PUBLISH_LOCK.unlock();
@@ -121,14 +120,14 @@ public class PublishWechatTool implements Tool {
         return PlayWrightUtil.connectAndAutomate();
     }
 
-    protected void stageFilesForPublishing(ToolContext context) {
+    protected void stageFilesForPublishing(ToolMessenger messenger) {
         String summaryDirStr = getPodcastSummaryDir();
         String publishDirStr = getPodcastPublishDir();
         String publishedDirStr = getPodcastPublishedDir();
         int batchSize = getPodcastPublishBatchSize();
 
         if (summaryDirStr == null || publishDirStr == null || publishedDirStr == null) {
-            System.err.println("目录配置不完整，无法执行文件准备");
+            AppLog.error("目录配置不完整，无法执行文件准备");
             return;
         }
 
@@ -137,7 +136,7 @@ public class PublishWechatTool implements Tool {
         Path publishedDir = Paths.get(publishedDirStr);
 
         if (!Files.exists(summaryDir)) {
-            System.err.println("Summary 目录不存在: " + summaryDirStr);
+            AppLog.error("Summary 目录不存在: " + summaryDirStr);
             return;
         }
 
@@ -159,7 +158,7 @@ public class PublishWechatTool implements Tool {
                     .count();
 
             if (currentPendingCount >= batchSize) {
-                System.out.println("发布目录已有 " + currentPendingCount + " 个文件，达到或超过批次大小 " + batchSize + "，不再补充新文件");
+                AppLog.info("发布目录已有 " + currentPendingCount + " 个文件，达到或超过批次大小 " + batchSize + "，不再补充新文件");
                 return;
             }
 
@@ -170,7 +169,6 @@ public class PublishWechatTool implements Tool {
                     .filter(p -> Files.isRegularFile(p) && !p.getFileName().toString().startsWith("."))
                     .collect(Collectors.toList());
             
-            // Note: In DingTalkUtil, logic was slightly truncated in reading but I can infer logic.
             // It filters out published files.
             // Let's implement robust logic: check if in publishedDir or publishDir.
             
@@ -187,7 +185,6 @@ public class PublishWechatTool implements Tool {
             }
             
             if (toCopy.isEmpty()) {
-                // DingTalkUtil.sendTextMessageToEmployees(notifyUsers, "没有需要发布的新文件");
                 return;
             }
 
@@ -197,19 +194,15 @@ public class PublishWechatTool implements Tool {
                 count++;
             }
             
-            context.sendText("已准备 " + count + " 个新文件到发布目录");
+            sendTextSafe(messenger, "已准备 " + count + " 个新文件到发布目录");
 
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("准备发布文件时出错: " + e.getMessage());
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            AppLog.error(e);
+            sendTextSafe(messenger, "准备发布文件时出错: " + e.getMessage());
         }
     }
 
-    protected boolean checkWechatLogin(PlayWrightUtil.Connection connection, ToolContext context) {
+    protected boolean checkWechatLogin(PlayWrightUtil.Connection connection, ToolMessenger messenger) {
         try {
             com.microsoft.playwright.BrowserContext browserContext = connection.browser.contexts().isEmpty() ? 
                     connection.browser.newContext() : connection.browser.contexts().get(0);
@@ -223,7 +216,7 @@ public class PublishWechatTool implements Tool {
                         new com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs())
                 );
                 if (!isWechatLoggedIn(checkPage)) {
-                    context.sendText("检测到微信公众号未登录，请及时在服务器浏览器完成扫码登录，任务将继续执行等待。");
+                    sendTextSafe(messenger, "检测到微信公众号未登录，请及时在服务器浏览器完成扫码登录，任务将继续执行等待。");
                     
                     // 尝试截图并发送
                     try {
@@ -242,14 +235,14 @@ public class PublishWechatTool implements Tool {
                             checkPage.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions().setPath(screenshotPath));
                         }
                         
-                        context.sendText("微信公众号未登录，请扫描下方二维码进行登录： --" + System.currentTimeMillis());
-                        context.sendImage(screenshotPath.toFile());
+                        sendTextSafe(messenger, "微信公众号未登录，请扫描下方二维码进行登录： --" + System.currentTimeMillis());
+                        if (messenger != null) messenger.sendImage(screenshotPath.toFile());
                         
                         // 上传成功后删除本地文件
                         screenshotPath.toFile().delete();
                     } catch (Exception e) {
-                        System.err.println("Failed to capture and send screenshot: " + e.getMessage());
-                        e.printStackTrace();
+                        AppLog.error("Failed to capture and send screenshot: " + e.getMessage());
+                        AppLog.error(e);
                     }
                     
                     // 阻塞等待用户扫码登录
@@ -259,7 +252,7 @@ public class PublishWechatTool implements Tool {
                     
                     while (!isLogged) {
                         if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                            context.sendText("微信登录超时，任务终止。");
+                            sendTextSafe(messenger, "微信登录超时，任务终止。");
                             return false;
                         }
                         
@@ -267,13 +260,13 @@ public class PublishWechatTool implements Tool {
                             Thread.sleep(3000);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
-                            context.sendText("等待登录被中断，任务终止。");
+                            sendTextSafe(messenger, "等待登录被中断，任务终止。");
                             return false;
                         }
                         isLogged = isWechatLoggedIn(checkPage);
                     }
                     
-                    context.sendText("微信登录成功，继续执行任务。");
+                    sendTextSafe(messenger, "微信登录成功，继续执行任务。");
                 }
                 return true;
             } finally {
@@ -282,7 +275,7 @@ public class PublishWechatTool implements Tool {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return false;
         }
     }
@@ -295,7 +288,7 @@ public class PublishWechatTool implements Tool {
         return new PodCastPostToWechat(browser);
     }
 
-    protected String processPublishFiles(PlayWrightUtil.Connection connection, ToolContext context, boolean isDraft) {
+    protected String processPublishFiles(PlayWrightUtil.Connection connection, ToolMessenger messenger, boolean isDraft) {
         StringBuilder executionResult = new StringBuilder();
         try {
              PodCastPostToWechat task = createPodCastPostToWechat(connection.browser);
@@ -303,7 +296,7 @@ public class PublishWechatTool implements Tool {
              Path publishDirPath = Paths.get(publishDirStr);
              
              if (!Files.exists(publishDirPath) || !Files.isDirectory(publishDirPath)) {
-                 context.sendText("发布目录不存在或无效: " + publishDirStr);
+                 sendTextSafe(messenger, "发布目录不存在或无效: " + publishDirStr);
                  return "Error: Invalid publish directory";
              }
 
@@ -313,7 +306,7 @@ public class PublishWechatTool implements Tool {
                         .collect(Collectors.toList());
              
              if (podcastFilePaths.isEmpty()) {
-                 context.sendText("目录中没有找到待发布的文件: " + publishDirStr);
+                 sendTextSafe(messenger, "目录中没有找到待发布的文件: " + publishDirStr);
                  return "No files to publish";
              }
              
@@ -324,7 +317,7 @@ public class PublishWechatTool implements Tool {
                       executionResult.append(new java.io.File(podcastFilePath).getName()).append(": ").append(result);
 
                       if (result.startsWith(PodCastPostToWechat.SUCCESS_MSG)){
-                          context.sendText("文件 " + new java.io.File(podcastFilePath).getName() + "， " + result);
+                          sendTextSafe(messenger, "文件 " + new java.io.File(podcastFilePath).getName() + "， " + result);
 
                           // 移动文件到已发布目录
                           try {
@@ -337,34 +330,38 @@ public class PublishWechatTool implements Tool {
                                   Path srcFile = Paths.get(podcastFilePath);
                                   Path destFile = publishedDir.resolve(srcFile.getFileName());
                                   Files.move(srcFile, destFile, StandardCopyOption.REPLACE_EXISTING);
-                                  System.out.println("Moved published file to: " + destFile);
+                                  AppLog.info("Moved published file to: " + destFile);
                               }
                           } catch (Exception moveEx) {
-                               System.err.println("Failed to move published file: " + moveEx.getMessage());
-                               moveEx.printStackTrace();
-                               context.sendText("文件已发布但移动到已发布目录失败: " + moveEx.getMessage());
+                               AppLog.error("Failed to move published file: " + moveEx.getMessage());
+                               AppLog.error(moveEx);
+                               sendTextSafe(messenger, "文件已发布但移动到已发布目录失败: " + moveEx.getMessage());
                           }
                       }
                       else
-                          context.sendText("文件 " + new java.io.File(podcastFilePath).getName() + "，发布失败: " + result);
+                          sendTextSafe(messenger, "文件 " + new java.io.File(podcastFilePath).getName() + "，发布失败: " + result);
                       
                   } catch (Exception e) {
-                      context.sendText("文件 " + new java.io.File(podcastFilePath).getName() + " 发布失败: " + e.getMessage());
-                      e.printStackTrace();
+                      sendTextSafe(messenger, "文件 " + new java.io.File(podcastFilePath).getName() + " 发布失败: " + e.getMessage());
+                      AppLog.error(e);
                       if (executionResult.length() > 0) executionResult.append("\n");
                       executionResult.append(new java.io.File(podcastFilePath).getName()).append(": Error - ").append(e.getMessage());
                   }
              }
          }
          catch (Exception e) {
-             e.printStackTrace();
-             try {
-                context.sendText("处理发布文件时出错: " + e.getMessage());
-             } catch (Exception ex) {
-                 ex.printStackTrace();
-             }
+             AppLog.error(e);
+             sendTextSafe(messenger, "处理发布文件时出错: " + e.getMessage());
              return "Error processing files: " + e.getMessage();
          }
          return executionResult.toString();
+    }
+
+    private void sendTextSafe(ToolMessenger messenger, String content) {
+        if (messenger == null) return;
+        try {
+            messenger.sendText(content);
+        } catch (Exception ignored) {
+        }
     }
 }

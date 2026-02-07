@@ -1,7 +1,7 @@
 package com.qiyi.tools.android;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.android.AndroidDeviceManager;
+import com.qiyi.service.android.AndroidDeviceManager;
 import com.qiyi.tools.Tool;
 import java.util.List;
 

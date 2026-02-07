@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,9 @@ public class PublishWechatToolTest {
     private ToolContext context;
 
     @Mock
+    private ToolMessenger messenger;
+
+    @Mock
     private Playwright playwright;
 
     @Mock
@@ -42,9 +46,9 @@ public class PublishWechatToolTest {
         doReturn(5).when(tool).getPodcastPublishBatchSize();
 
         // Mock helpers
-        doNothing().when(tool).stageFilesForPublishing(any());
-        doReturn(true).when(tool).checkWechatLogin(any(), any());
-        doReturn("Success").when(tool).processPublishFiles(any(), any(), anyBoolean());
+        doNothing().when(tool).stageFilesForPublishing(any(ToolMessenger.class));
+        doReturn(true).when(tool).checkWechatLogin(any(), any(ToolMessenger.class));
+        doReturn("Success").when(tool).processPublishFiles(any(), any(ToolMessenger.class), anyBoolean());
         doNothing().when(tool).disconnectBrowser(any());
     }
 
@@ -58,12 +62,12 @@ public class PublishWechatToolTest {
         JSONObject params = new JSONObject();
         params.put("isDraft", true);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
-        verify(tool).stageFilesForPublishing(context);
+        verify(tool).stageFilesForPublishing(messenger);
         verify(tool).connectToBrowser();
-        verify(tool).checkWechatLogin(eq(connection), eq(context));
-        verify(tool).processPublishFiles(eq(connection), eq(context), eq(true));
+        verify(tool).checkWechatLogin(eq(connection), eq(messenger));
+        verify(tool).processPublishFiles(eq(connection), eq(messenger), eq(true));
         verify(tool).disconnectBrowser(connection);
         assertTrue(result.contains("Publish Completed"));
     }
@@ -72,10 +76,10 @@ public class PublishWechatToolTest {
     public void testExecute_ConfigError() {
         doReturn(null).when(tool).getPodcastPublishDir();
 
-        String result = tool.execute(new JSONObject(), context);
+        String result = tool.execute(new JSONObject(), context, messenger);
 
         assertTrue(result.equals("Config Error"));
-        verify(context).sendText(contains("发布目录未配置"));
+        verify(messenger).sendText(contains("发布目录未配置"));
         verify(tool, never()).connectToBrowser();
     }
 
@@ -83,11 +87,11 @@ public class PublishWechatToolTest {
     public void testExecute_BrowserError() {
         doReturn(null).when(tool).connectToBrowser();
 
-        String result = tool.execute(new JSONObject(), context);
+        String result = tool.execute(new JSONObject(), context, messenger);
 
         assertTrue(result.equals("Browser Error"));
-        verify(context).sendText(contains("无法连接到浏览器"));
-        verify(tool, never()).checkWechatLogin(any(), any());
+        verify(messenger).sendText(contains("无法连接到浏览器"));
+        verify(tool, never()).checkWechatLogin(any(), any(ToolMessenger.class));
     }
 
     @Test
@@ -96,23 +100,23 @@ public class PublishWechatToolTest {
         connection.playwright = playwright;
         connection.browser = browser;
         doReturn(connection).when(tool).connectToBrowser();
-        doReturn(false).when(tool).checkWechatLogin(any(), any());
+        doReturn(false).when(tool).checkWechatLogin(any(), any(ToolMessenger.class));
 
-        String result = tool.execute(new JSONObject(), context);
+        String result = tool.execute(new JSONObject(), context, messenger);
 
         assertTrue(result.equals("Login Failed"));
         verify(tool).disconnectBrowser(connection);
-        verify(tool, never()).processPublishFiles(any(), any(), anyBoolean());
+        verify(tool, never()).processPublishFiles(any(), any(ToolMessenger.class), anyBoolean());
     }
 
     @Test
     public void testExecute_Exception() {
         doThrow(new RuntimeException("Test Exception")).when(tool).stageFilesForPublishing(any());
 
-        String result = tool.execute(new JSONObject(), context);
+        String result = tool.execute(new JSONObject(), context, messenger);
 
         assertTrue(result.startsWith("Error:"));
-        verify(context).sendText(contains("发布任务执行异常"));
+        verify(messenger).sendText(contains("发布任务执行异常"));
         // Ensure lock is released (implicit by function returning)
     }
 }

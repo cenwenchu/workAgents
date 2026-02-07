@@ -8,6 +8,11 @@ import java.io.File;
 import java.net.URL;
 import java.util.Date;
 
+/**
+ * 阿里云 OSS 上传工具。
+ *
+ * <p>用于把本地文件上传到 OSS 并返回短期可访问的预签名 URL，常用于图片/附件临时外链。</p>
+ */
 public class OSSUtil {
 
     public static String uploadFile(File file) {
@@ -22,7 +27,7 @@ public class OSSUtil {
         String bucketName = config.getAliyunOssBucketName();
 
         if (endpoint == null || accessKeyId == null || accessKeySecret == null || bucketName == null) {
-            System.err.println("Aliyun OSS configuration is missing.");
+            AppLog.error("Aliyun OSS configuration is missing.");
             return null;
         }
 
@@ -41,8 +46,8 @@ public class OSSUtil {
             
             return url.toString();
         } catch (Exception e) {
-            System.err.println("OSS Upload Error: " + e.getMessage());
-            e.printStackTrace();
+            AppLog.error("OSS Upload Error: " + e.getMessage());
+            AppLog.error(e);
             return null;
         } finally {
             if (ossClient != null) {

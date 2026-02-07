@@ -11,6 +11,7 @@ import com.futu.openapi.pb.QotGetBasicQot;
 import com.futu.openapi.pb.QotSub;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
+import com.qiyi.util.AppLog;
 
 public class Demo implements FTSPI_Qot, FTSPI_Conn {
     FTAPI_Conn_Qot qot = new FTAPI_Conn_Qot();
@@ -28,7 +29,7 @@ public class Demo implements FTSPI_Qot, FTSPI_Conn {
     @Override
     public void onInitConnect(FTAPI_Conn client, long errCode, String desc)
     {
-        System.out.printf("Qot onInitConnect: ret=%b desc=%s connID=%d\n", errCode, desc, client.getConnectID());
+        AppLog.info(String.format("Qot onInitConnect: ret=%b desc=%s connID=%d\n", errCode, desc, client.getConnectID()));
         if (errCode != 0)
             return;
 
@@ -43,17 +44,17 @@ public class Demo implements FTSPI_Qot, FTSPI_Conn {
                 .build();
         QotSub.Request req = QotSub.Request.newBuilder().setC2S(c2s).build();
         int seqNo = qot.sub(req);
-        System.out.printf("Send QotSub: %d\n", seqNo);
+        AppLog.info(String.format("Send QotSub: %d\n", seqNo));
     }
 
     @Override
     public void onDisconnect(FTAPI_Conn client, long errCode) {
-        System.out.printf("Qot onDisConnect: %d\n", errCode);
+        AppLog.info(String.format("Qot onDisConnect: %d\n", errCode));
     }
 
     @Override
     public void onReply_Sub(FTAPI_Conn client, int nSerialNo, QotSub.Response rsp) {
-        System.out.printf("Reply: QotSub: %d  %s\n", nSerialNo, rsp.toString());
+        AppLog.info(String.format("Reply: QotSub: %d  %s\n", nSerialNo, rsp.toString()));
 
         if (rsp.getRetType() != Common.RetType.RetType_Succeed_VALUE)
             return;
@@ -67,20 +68,20 @@ public class Demo implements FTSPI_Qot, FTSPI_Conn {
                 .build();
         QotGetBasicQot.Request req = QotGetBasicQot.Request.newBuilder().setC2S(c2s).build();
         int seqNo = qot.getBasicQot(req);
-        System.out.printf("Send QotGetBasicQot: %d\n", seqNo);
+        AppLog.info(String.format("Send QotGetBasicQot: %d\n", seqNo));
     }
 
     @Override
     public void onReply_GetBasicQot(FTAPI_Conn client, int nSerialNo, QotGetBasicQot.Response rsp) {
         if (rsp.getRetType() != 0) {
-            System.out.printf("QotGetBasicQot failed: %s\n", rsp.getRetMsg());
+            AppLog.info(String.format("QotGetBasicQot failed: %s\n", rsp.getRetMsg()));
         }
         else {
             try {
                 String json = JsonFormat.printer().print(rsp);
-                System.out.printf("Receive QotGetBasicQot: %s\n", json);
+                AppLog.info(String.format("Receive QotGetBasicQot: %s\n", json));
             } catch (InvalidProtocolBufferException e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
         }
     }

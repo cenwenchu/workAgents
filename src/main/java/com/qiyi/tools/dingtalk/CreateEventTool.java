@@ -1,10 +1,13 @@
 package com.qiyi.tools.dingtalk;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.util.DingTalkUtil;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkService;
+import com.qiyi.component.ComponentId;
 import com.qiyi.tools.Tool;
+import com.qiyi.tools.ToolMessenger;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -19,7 +22,14 @@ import java.time.format.DateTimeFormatter;
 import com.qiyi.tools.ToolContext;
 import java.util.Collections;
 
+/**
+ * 钉钉日程创建工具。
+ *
+ * <p>核心流程：解析入参 → 解析参会人（姓名/uid）→ 调用 DingTalkService 创建日程 → 通知发起人/被 @ 的人。</p>
+ */
 public class CreateEventTool implements Tool {
+    private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
+
     @Override
     public String getName() {
         return "create_event";
@@ -30,29 +40,31 @@ public class CreateEventTool implements Tool {
         return "Create a calendar event. Parameters: summary (string, mandatory), startTime (string, mandatory, yyyy-MM-dd HH:mm:ss), endTime (string, mandatory, yyyy-MM-dd HH:mm:ss), attendees (string/List, mandatory, names/userIds), description (string, optional), location (string, optional).";
     }
 
+    @Override
+    public List<ComponentId> requiredComponents() {
+        return List.of(ComponentId.DINGTALK);
+    }
+
     protected List<DingTalkDepartment> getAllDepartments() throws Exception {
-        return DingTalkUtil.getAllDepartments(true, true);
+        return DING_TALK_SERVICE.getAllDepartments(true, true);
     }
     
     protected String createCalendarEvent(String unionId, String summary, String description, String startTime, String endTime, String location, List<String> attendeeUserIds) throws Exception {
-        return DingTalkUtil.createCalendarEvent(unionId, summary, description, startTime, endTime, attendeeUserIds, location);
+        return DING_TALK_SERVICE.createCalendarEvent(unionId, summary, description, startTime, endTime, attendeeUserIds, location);
     }
 
     protected String getUnionIdByUserId(String userId) throws Exception {
-        return DingTalkUtil.getUnionIdByUserId(userId);
+        return DING_TALK_SERVICE.getUnionIdByUserId(userId);
     }
     
     protected void sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
-        DingTalkUtil.sendTextMessageToEmployees(userIds, content);
+        DING_TALK_SERVICE.sendTextMessageToEmployees(userIds, content);
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
-        String senderId = context.getSenderId();
-        List<String> atUserIds = context.getAtUserIds();
-        
-        // Use a context that only notifies the sender to match original behavior
-        ToolContext senderContext = context.withAtUserIds(Collections.emptyList());
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
+        String senderId = context != null ? context.getUserId() : null;
+        List<String> mentionedUserIds = messenger != null ? messenger.getMentionedUserIds() : Collections.emptyList();
 
         String summary = params.getString("summary");
         String startTimeStr = params.getString("startTime");
@@ -63,7 +75,7 @@ public class CreateEventTool implements Tool {
 
         List<String> notifyUsers = new ArrayList<>();
         if (senderId != null) notifyUsers.add(senderId);
-        if (atUserIds != null) notifyUsers.addAll(atUserIds);
+        if (mentionedUserIds != null) notifyUsers.addAll(mentionedUserIds);
 
         // 1. Resolve Attendees
         List<String> attendeeUserIds = new ArrayList<>();
@@ -135,42 +147,29 @@ public class CreateEventTool implements Tool {
                         }
                     }
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
         }
         
-        // Add atUserIds if any
-        if (atUserIds != null) {
-             for(String uid : atUserIds) {
-                 if(!attendeeUserIds.contains(uid)) attendeeUserIds.add(uid);
-             }
+        if (mentionedUserIds != null) {
+            for (String uid : mentionedUserIds) {
+                if (!attendeeUserIds.contains(uid)) attendeeUserIds.add(uid);
+            }
         }
 
         if (!notFoundNames.isEmpty()) {
-             try {
-                sendTextMessageToEmployees(notifyUsers, "创建日程警告: 未找到以下参与人: " + String.join("，", notFoundNames) + "。");
-             } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, notifyUsers, "创建日程警告: 未找到以下参与人: " + String.join("，", notFoundNames) + "。");
         }
 
         if (attendeeUserIds.isEmpty()) {
-            try {
-                sendTextMessageToEmployees(notifyUsers, "创建日程失败: 未指定有效的参与人。");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, notifyUsers, "创建日程失败: 未指定有效的参与人。");
             return "Error: No attendees";
         }
 
         // 2. Validate Time
         if (startTimeStr == null || endTimeStr == null) {
-             try {
-                sendTextMessageToEmployees(notifyUsers, "创建日程失败: 开始时间或结束时间缺失。");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, notifyUsers, "创建日程失败: 开始时间或结束时间缺失。");
             return "Error: Missing time";
         }
 
@@ -188,13 +187,7 @@ public class CreateEventTool implements Tool {
             isoStartTime = zonedStart.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
             isoEndTime = zonedEnd.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
         } catch (Exception e) {
-             // Fallback or rethrow
-             // throw new RuntimeException("时间格式解析错误，请确保使用 yyyy-MM-dd HH:mm:ss 格式。Input: " + startTimeStr + " / " + endTimeStr);
-             try {
-                sendTextMessageToEmployees(notifyUsers, "创建日程失败: 时间格式错误 (" + e.getMessage() + ")");
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            sendTextSafe(messenger, notifyUsers, "创建日程失败: 时间格式错误 (" + e.getMessage() + ")");
             return "Error: Time format";
         }
 
@@ -219,12 +212,12 @@ public class CreateEventTool implements Tool {
                     }
                 } catch (Exception e) {
                     failedConversionUsers.add(uid);
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
             
             if (!failedConversionUsers.isEmpty()) {
-                 sendTextMessageToEmployees(notifyUsers, "警告: 无法获取以下用户的 UnionId，将被忽略: " + String.join(", ", failedConversionUsers));
+                sendTextSafe(messenger, notifyUsers, "警告: 无法获取以下用户的 UnionId，将被忽略: " + String.join(", ", failedConversionUsers));
             }
 
             if (attendeeUnionIds.isEmpty() && !attendeeUserIds.isEmpty()) {
@@ -233,18 +226,29 @@ public class CreateEventTool implements Tool {
             
             String eventId = createCalendarEvent(unionId, summary, description, isoStartTime, isoEndTime, location, attendeeUnionIds);
             String successMsg = "日程创建成功！标题: " + summary + "，时间: " + startTimeStr + " - " + endTimeStr + "，参与人数: " + attendeeUnionIds.size();
-            sendTextMessageToEmployees(notifyUsers, successMsg);
+            sendTextSafe(messenger, notifyUsers, successMsg);
 
-            System.out.println("Event ID: " + eventId);
+            AppLog.info("Event ID: " + eventId);
             return successMsg + "，参与人: " + String.join(",", attendeeUserIds) + "，EventID: " + eventId;
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                sendTextMessageToEmployees(notifyUsers, "创建日程失败: " + e.getMessage());
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            AppLog.error(e);
+            sendTextSafe(messenger, notifyUsers, "创建日程失败: " + e.getMessage());
             return "Error: " + e.getMessage();
+        }
+    }
+
+    private void sendTextSafe(ToolMessenger messenger, List<String> notifyUsers, String content) {
+        if (messenger != null) {
+            try {
+                messenger.sendText(content);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        if (notifyUsers == null || notifyUsers.isEmpty()) return;
+        try {
+            sendTextMessageToEmployees(notifyUsers, content);
+        } catch (Exception ignored) {
         }
     }
 }

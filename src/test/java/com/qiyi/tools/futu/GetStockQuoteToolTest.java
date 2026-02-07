@@ -4,8 +4,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotCommon;
 import com.futu.openapi.pb.QotGetBasicQot;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -24,6 +25,9 @@ public class GetStockQuoteToolTest {
 
     @Mock
     private ToolContext context;
+
+    @Mock
+    private ToolMessenger messenger;
 
     @Mock
     private FutuOpenD futuOpenD;
@@ -49,14 +53,10 @@ public class GetStockQuoteToolTest {
     @Test
     public void testExecuteMissingCode() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertEquals("Error: code is required", result);
-        try {
-            verify(context, atLeastOnce()).sendText(anyString());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        verify(messenger, atLeastOnce()).sendText(anyString());
     }
 
     @Test
@@ -66,7 +66,7 @@ public class GetStockQuoteToolTest {
 
         doReturn(false).when(futuOpenD).ensureSubscription(any(QotCommon.Security.class), any(QotCommon.SubType.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Subscription Failed", result);
     }
 
@@ -112,7 +112,7 @@ public class GetStockQuoteToolTest {
 
         doReturn(response).when(futuOpenD).sendQotRequest(anyInt(), eq(QotGetBasicQot.Response.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("股票代码: 00700"));
         assertTrue(result.contains("当前价: 300.0"));
@@ -133,7 +133,7 @@ public class GetStockQuoteToolTest {
 
         doReturn(response).when(futuOpenD).sendQotRequest(anyInt(), eq(QotGetBasicQot.Response.class));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertEquals("Error: Some API Error", result);
     }
@@ -145,7 +145,7 @@ public class GetStockQuoteToolTest {
         
         doThrow(new RuntimeException("Unexpected error")).when(futuOpenD).ensureSubscription(any(QotCommon.Security.class), any(QotCommon.SubType.class));
         
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("Exception: Unexpected error"));
     }

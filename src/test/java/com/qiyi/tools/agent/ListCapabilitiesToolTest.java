@@ -3,6 +3,7 @@ package com.qiyi.tools.agent;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -20,6 +21,9 @@ public class ListCapabilitiesToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private Tool mockTool;
 
@@ -53,7 +57,7 @@ public class ListCapabilitiesToolTest {
     public void testExecuteWithoutQuery() {
         JSONObject params = new JSONObject();
         
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         verify(tool, times(1)).llmChat(anyString());
         assertEquals("LLM response", result);
@@ -64,7 +68,7 @@ public class ListCapabilitiesToolTest {
         JSONObject params = new JSONObject();
         params.put("query", "help me");
         
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         // Query is ignored in current implementation, just check result
         assertEquals("LLM response", result);

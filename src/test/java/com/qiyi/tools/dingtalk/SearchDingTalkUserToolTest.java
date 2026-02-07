@@ -1,9 +1,10 @@
 package com.qiyi.tools.dingtalk;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -22,6 +23,9 @@ public class SearchDingTalkUserToolTest {
     @Mock
     private ToolContext context;
 
+    @Mock
+    private ToolMessenger messenger;
+
     private SearchDingTalkUserTool tool;
 
     @BeforeEach
@@ -38,7 +42,7 @@ public class SearchDingTalkUserToolTest {
     @Test
     public void testExecuteMissingName() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("请输入要搜索的用户名关键词 (name)", result);
     }
 
@@ -55,9 +59,9 @@ public class SearchDingTalkUserToolTest {
 
         doReturn(depts).when(tool).getAllDepartments();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("未找到包含 'NonExistentUser' 的用户。", result);
-        verify(context).sendText(startsWith("未找到包含"));
+        verify(messenger).sendText(startsWith("未找到包含"));
     }
 
     @Test
@@ -73,13 +77,13 @@ public class SearchDingTalkUserToolTest {
 
         doReturn(depts).when(tool).getAllDepartments();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertTrue(result.contains("找到 1 位用户"));
         assertTrue(result.contains("姓名: Alice"));
         assertTrue(result.contains("UserId: user1"));
         assertTrue(result.contains("部门: DeptA"));
         
-        verify(context).sendText(contains("找到 1 位用户"));
+        verify(messenger).sendText(contains("找到 1 位用户"));
     }
     
     @Test
@@ -99,11 +103,11 @@ public class SearchDingTalkUserToolTest {
 
         doReturn(depts).when(tool).getAllDepartments();
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertTrue(result.contains("找到 2 位用户"));
         assertTrue(result.contains("TestUser1"));
         assertTrue(result.contains("TestUser2"));
         
-        verify(context).sendText(contains("找到 2 位用户"));
+        verify(messenger).sendText(contains("找到 2 位用户"));
     }
 }

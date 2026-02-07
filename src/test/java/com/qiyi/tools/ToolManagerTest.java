@@ -15,7 +15,8 @@ public class ToolManagerTest {
     @BeforeEach
     public void setUp() {
         // Register HelloWorldTool if not present (ToolManager.init() does this, but we want to be sure)
-        ToolRegistry.register(new HelloWorldTool());
+        ToolManager.clearForTests();
+        ToolManager.register(new HelloWorldTool());
     }
 
     @Test
@@ -29,12 +30,14 @@ public class ToolManagerTest {
         // If LLM was used (and config missing), it would print errors (but not throw).
         // If Direct Command is used, it should print "Directly executing tool: hello_world"
         
-        ToolManager.analyzeAndExecute("hello_world name=\"TestUser\"", new ConsoleToolContext());
+        ConsoleToolContext ctx = new ConsoleToolContext();
+        TaskProcessor.process("hello_world name=\"TestUser\"", ctx, ctx);
     }
     
     @Test
     public void testDirectCommandExecutionWithoutParams() {
-        ToolManager.analyzeAndExecute("hello_world", new ConsoleToolContext());
+        ConsoleToolContext ctx = new ConsoleToolContext();
+        TaskProcessor.process("hello_world", ctx, ctx);
     }
 
     @Test
@@ -42,18 +45,18 @@ public class ToolManagerTest {
         ConsoleToolContext context = new ConsoleToolContext();
 
         // 1. Direct Command: No args -> True
-        assertTrue(ToolManager.tryExecuteDirectCommand("hello_world", context), "Should execute direct command for 'hello_world'");
+        assertTrue(TaskProcessor.tryExecuteDirectCommand("hello_world", context, context), "Should execute direct command for 'hello_world'");
 
         // 2. Direct Command: With key=value -> True
-        assertTrue(ToolManager.tryExecuteDirectCommand("hello_world name=Test", context), "Should execute direct command for 'hello_world name=Test'");
+        assertTrue(TaskProcessor.tryExecuteDirectCommand("hello_world name=Test", context, context), "Should execute direct command for 'hello_world name=Test'");
 
         // 3. Fallback: Args present but no key=value -> False
-        assertFalse(ToolManager.tryExecuteDirectCommand("hello_world some random text", context), "Should fallback to LLM for 'hello_world some random text'");
+        assertFalse(TaskProcessor.tryExecuteDirectCommand("hello_world some random text", context, context), "Should fallback to LLM for 'hello_world some random text'");
 
         // 4. Fallback: Non-existent tool -> False
-        assertFalse(ToolManager.tryExecuteDirectCommand("non_existent_tool", context), "Should fallback to LLM for non-existent tool");
+        assertFalse(TaskProcessor.tryExecuteDirectCommand("non_existent_tool", context, context), "Should fallback to LLM for non-existent tool");
         
         // 5. Direct Command: Mixed args (contains key=value) -> True
-        assertTrue(ToolManager.tryExecuteDirectCommand("hello_world name=Test extra", context), "Should execute direct command if at least one key=value is found");
+        assertTrue(TaskProcessor.tryExecuteDirectCommand("hello_world name=Test extra", context, context), "Should execute direct command if at least one key=value is found");
     }
 }

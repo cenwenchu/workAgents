@@ -3,6 +3,7 @@ package com.qiyi.tools.podcast;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.agent.PodwiseAgent;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -20,6 +21,9 @@ public class DownloadPodcastToolTest {
 
     @Mock
     private ToolContext context;
+
+    @Mock
+    private ToolMessenger messenger;
 
     @Mock
     private PodwiseAgent podwiseAgent;
@@ -61,9 +65,9 @@ public class DownloadPodcastToolTest {
     @Test
     public void testExecuteDefault() throws Exception {
         JSONObject params = new JSONObject();
-        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class))).thenReturn(5);
+        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class), any(ToolMessenger.class))).thenReturn(5);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         verify(podwiseAgent).run(
                 DownloadPodcastTool.DOWNLOAD_MAX_PROCESS_COUNT,
@@ -71,10 +75,11 @@ public class DownloadPodcastToolTest {
                 DownloadPodcastTool.DOWNLOAD_MAX_DUPLICATE_PAGES,
                 DownloadPodcastTool.DOWNLOAD_DOWNLOAD_MAX_PROCESS_COUNT,
                 DownloadPodcastTool.DOWNLOAD_THREAD_POOL_SIZE,
-                context
+                context,
+                messenger
         );
         assertTrue(result.contains("5"));
-        verify(context, atLeastOnce()).sendText(anyString());
+        verify(messenger, atLeastOnce()).sendText(anyString());
     }
 
     @Test
@@ -86,22 +91,22 @@ public class DownloadPodcastToolTest {
         params.put("downloadMaxProcessCount", 2);
         params.put("threadPoolSize", 5);
 
-        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class))).thenReturn(10);
+        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class), any(ToolMessenger.class))).thenReturn(10);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
-        verify(podwiseAgent).run(10, 20, 3, 2, 5, context);
+        verify(podwiseAgent).run(10, 20, 3, 2, 5, context, messenger);
         assertTrue(result.contains("10"));
     }
 
     @Test
     public void testExecuteException() throws Exception {
         JSONObject params = new JSONObject();
-        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class))).thenThrow(new RuntimeException("Test Exception"));
+        when(podwiseAgent.run(anyInt(), anyInt(), anyInt(), anyInt(), anyInt(), any(ToolContext.class), any(ToolMessenger.class))).thenThrow(new RuntimeException("Test Exception"));
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("Error: Test Exception"));
-        verify(context).sendText(contains("异常"));
+        verify(messenger).sendText(contains("异常"));
     }
 }

@@ -1,20 +1,20 @@
 package com.qiyi.tools.android;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.android.AndroidDeviceManager;
-import com.qiyi.android.BaseMobileRPAProcessor;
+import com.qiyi.service.android.AndroidDeviceManager;
+import com.qiyi.service.android.BaseMobileRPAProcessor;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.LLMUtil;
 import io.github.pigmesh.ai.deepseek.core.chat.UserMessage;
+import com.qiyi.util.AppLog;
 
 import io.appium.java_client.android.AndroidDriver;
 import io.appium.java_client.android.nativekey.AndroidKey;
 import io.appium.java_client.AppiumBy;
 import io.appium.java_client.android.nativekey.KeyEvent;
 import io.appium.java_client.android.options.UiAutomator2Options;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.openqa.selenium.StaleElementReferenceException;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.Point;
@@ -49,7 +49,7 @@ import java.util.Set;
  */
 public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
-    private static Logger logger = LogManager.getLogger(TaobaoAppiumTool.class);
+    private ToolMessenger messenger;
 
     /**
      * 尝试翻页的最大次数
@@ -80,9 +80,10 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         //tool.initializeDriver(parmas, List.of("13000000000"));
         //tool.searchProductInShop("皮蛋瘦肉粥", List.of("13000000000"), "三米粥铺", true);
 
-        String result  = tool.execute(parmas, new com.qiyi.tools.context.ConsoleToolContext());
+        com.qiyi.tools.context.ConsoleToolContext ctx = new com.qiyi.tools.context.ConsoleToolContext();
+        String result  = tool.execute(parmas, ctx, ctx);
 
-        System.out.println(result);
+        AppLog.info(result);
     }
     
     /**
@@ -175,7 +176,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     }
 
     protected String llmChat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean stream) {
-        return LLMUtil.chatWithDeepSeek(messages, stream);
+        return LLMUtil.chat(messages, stream);
     }
 
     protected void sleep(long millis) {
@@ -194,7 +195,8 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
      * @return 执行结果
      */
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
+        this.messenger = messenger;
         String serial = null;
 
         try {
@@ -228,11 +230,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
             if (productName == null || productName.trim().isEmpty()) {
                 String msg = "未指定商品名称 (product_name)。请在指令中明确指定要搜索的商品。";
-                try {
-                    context.sendText(msg);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+                sendTextSafe(msg);
                 return msg;
             }
 
@@ -242,18 +240,18 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     serial = params.getString("serial");
                 }
                 
-                context.sendText("正在初始化 Appium Driver" + (serial != null ? " (目标设备: " + serial + ")" : "") + "...");
+                sendTextSafe("正在初始化 Appium Driver" + (serial != null ? " (目标设备: " + serial + ")" : "") + "...");
                 this.initDriver(serial, "http://127.0.0.1:4723");
             } catch (Exception e) {
-                 e.printStackTrace();
-                 return reportError(context, "Appium 连接或启动 App 失败: " + e.getMessage());
+                 AppLog.error(e);
+                 return reportError("Appium 连接或启动 App 失败: " + e.getMessage());
             }
 
-            context.sendText("Appium 连接成功，正在执行操作: " + operation + ", 搜索: " + productName);
+            sendTextSafe("Appium 连接成功，正在执行操作: " + operation + ", 搜索: " + productName);
 
             if ("buy".equals(operation)) {
                 if (targetShopName == null || targetShopName.trim().isEmpty()) {
-                     return reportError(context, "下单模式 (operation='buy') 必须指定 target_shop_name。");
+                     return reportError("下单模式 (operation='buy') 必须指定 target_shop_name。");
                 }
                 return executeBuyFlow(context, productName, productType, targetShopName);
             } else {
@@ -261,8 +259,8 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             }
 
         } catch (Throwable e) {
-            e.printStackTrace();
-            return reportError(context, "Appium 执行异常 (Throwable): " + e.getMessage());
+            AppLog.error(e);
+            return reportError("Appium 执行异常 (Throwable): " + e.getMessage());
         } finally {
             this.cleanup();
         }
@@ -280,14 +278,14 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
 
         if ("外卖商品".equals(productType)) {
             try {
-                System.out.println("Looking for (Type: " + productType + ")...");
+                AppLog.info("Looking for (Type: " + productType + ")...");
 
                 findElementAndWaitToClick("//android.widget.TextView[contains(@content-desc,\"闪购\")]", 5);
 
-                System.out.println("Clicked '闪购'");
+                AppLog.info("Clicked '闪购'");
             } catch (Exception e) {
-                System.out.println("Exception: " + e.getMessage());
-                System.out.println("Warning: '闪购' not found, proceeding to search directly...");
+                AppLog.info("Exception: " + e.getMessage());
+                AppLog.info("Warning: '闪购' not found, proceeding to search directly...");
             }
 
             // 0. Handle Marketing Popups
@@ -303,22 +301,22 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 inputField = findElementAndWaitToClick("//android.webkit.WebView[@text=\"闪购搜索\"]//android.widget.Button", 5);
 
                 if (inputField != null) {
-                    System.out.println("Found Input Field, sending text: " + productName);
+                    AppLog.info("Found Input Field, sending text: " + productName);
                     
                     // Use Clipboard + Paste to handle Chinese input
                     try {
                             ((AndroidDriver) driver).setClipboardText(productName);
                             sleep(500);
                             ((AndroidDriver) driver).pressKey(new KeyEvent(AndroidKey.PASTE));
-                            System.out.println("Pasted text from clipboard");
+                            AppLog.info("Pasted text from clipboard");
                     } catch (Exception e) {
-                            System.out.println("Clipboard paste failed, falling back to Actions: " + e.getMessage());
+                            AppLog.info("Clipboard paste failed, falling back to Actions: " + e.getMessage());
                             new Actions(driver).sendKeys(productName).perform();
                     }
 
 
                     // Press Enter to search
-                    System.out.println("Pressing Enter key...");
+                    AppLog.info("Pressing Enter key...");
                     driver.pressKey(new KeyEvent(AndroidKey.ENTER));
                     
                     // Hide keyboard
@@ -330,7 +328,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     }
                 }
             } catch (Exception e) {
-                System.out.println("Search flow error: " + e.getMessage());
+                AppLog.info("Search flow error: " + e.getMessage());
                 if (inputField == null) {
                     throw new Exception("未找到搜索框 (EditText)");
                 }
@@ -347,7 +345,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
      * @param context 工具上下文
      */
     private void handleMarketingPopups() {
-        System.out.println("Checking for marketing popups...");
+        AppLog.info("Checking for marketing popups...");
         try {
             // 定义常见的关闭按钮定位符
             // 注意：这些定位符是基于经验的通用猜测，可能需要根据实际 App 更新调整
@@ -381,7 +379,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                         if (!elements.isEmpty()) {
                             for(WebElement btn : elements) {
                                 if (btn.isDisplayed()) {
-                                    System.out.println("Found popup close button: " + locator.toString());
+                                    AppLog.info("Found popup close button: " + locator.toString());
                                     btn.click();
                                     found = true;
                                     break;
@@ -401,7 +399,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 }
             }
         } catch (Exception e) {
-            System.out.println("Error handling popups: " + e.getMessage());
+            AppLog.info("Error handling popups: " + e.getMessage());
             // 不抛出异常，以免阻断主流程
         }
     }
@@ -437,7 +435,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             List<WebElement> webElements = this.findElementsAndWait("//android.view.View[contains(@resource-id,\"shopItemCard\")]/android.view.View[1]", 2);
 
             if (webElements.isEmpty() && i > 0) {
-                System.out.println("No elements found on page " + (i + 1));
+                AppLog.info("No elements found on page " + (i + 1));
                 break; 
             }
 
@@ -456,17 +454,17 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 
                 rawShopData.append("店铺信息:").append("\n");
                 rawShopData.append(elementText).append("\n");
-                System.out.println(elementText);
+                AppLog.info(elementText);
             }
             
             // Scroll to load next page
             if (i < 4) {
-                System.out.println("Scrolling to next page...");
+                AppLog.info("Scrolling to next page...");
                 try {
                     this.scroll(0.5, Direction.UP, 0.8);
                     sleep(1000);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
         }
@@ -485,7 +483,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages = new ArrayList<>();
                 messages.add(UserMessage.builder().addText(prompt).build());
                 structuredData = llmChat(messages, false);
-                context.sendText("店铺列表整理结果：\n" + structuredData);
+                sendTextSafe("店铺列表整理结果：\n" + structuredData);
                 
                 // Parse shop names from structured data
                 String[] lines = structuredData.split("\n");
@@ -502,8 +500,8 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 }
 
             } catch (Exception e) {
-                 System.out.println("LLM Processing Failed: " + e.getMessage());
-                 context.sendText(rawShopData.toString());
+                 AppLog.info("LLM Processing Failed: " + e.getMessage());
+                 sendTextSafe(rawShopData.toString());
                  return rawShopData.toString(); // Fallback
             }
         } else {
@@ -542,7 +540,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             }
         }
         
-        context.sendText("最终汇总结果：\n" + detailedResult.toString());
+        sendTextSafe("最终汇总结果：\n" + detailedResult.toString());
         return detailedResult.toString();
     }
 
@@ -585,7 +583,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                          
                          // If element is in the bottom 20% of the screen, scroll up a bit
                          if (location.y > screenHeight * 0.8) {
-                             System.out.println("Target found but at bottom (" + location.y + "/" + screenHeight + "), scrolling up...");
+                             AppLog.info("Target found but at bottom (" + location.y + "/" + screenHeight + "), scrolling up...");
                              this.scroll(0.3, Direction.UP, 0.8);
                              Thread.sleep(1000);
                              
@@ -595,7 +593,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                              continue;
                          }
                      } catch (Exception e) {
-                         System.out.println("Error checking element location: " + e.getMessage());
+                         AppLog.info("Error checking element location: " + e.getMessage());
                      }
                     
                     return card;
@@ -607,7 +605,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     this.scroll(0.5, Direction.UP, 0.8);
                     Thread.sleep(1000);
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    AppLog.error(e);
                 }
             }
         }
@@ -623,7 +621,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
      */
     private String enterShopAndFetchDetail(ToolContext context, String shopName, String productName) {
         try {
-            System.out.println("Starting detail fetch for shop: " + shopName);
+            AppLog.info("Starting detail fetch for shop: " + shopName);
             // Try to reset to home using Deep Link first (Faster)
             resetAppToHome();
 
@@ -645,7 +643,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             return searchProductInShop(productName, context, shopName, false);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return "获取店铺 [" + shopName + "] 详情失败：" + e.getMessage();
         }
     }
@@ -677,19 +675,19 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
             try {
                  targetCard.click();
                  
-                 context.sendText("找到并已进入店铺：" + targetShopName + "，准备定位商品：" + productName);
+                 sendTextSafe("找到并已进入店铺：" + targetShopName + "，准备定位商品：" + productName);
                  
                  String result = searchProductInShop(productName, context, targetShopName, true);
-                 context.sendText(result);
+                 sendTextSafe(result);
                  return result;
 
             } catch (Exception e) {
-                return reportError(context, "进入店铺失败: " + e.getMessage());
+                return reportError("进入店铺失败: " + e.getMessage());
             }
         }
         
         String msg = "未找到目标店铺：" + targetShopName;
-        context.sendText(msg);
+        sendTextSafe(msg);
         return msg;
     }
 
@@ -748,17 +746,17 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
                         if (foundText) {
                             productText = sb.toString();
-                            System.out.println("Found product text: " + productText);
+                            AppLog.info("Found product text: " + productText);
                         } else {
                             productText = "";
                         }
                     } catch (Exception ex) {
-                        System.out.println(ex.getMessage());
+                        AppLog.info(ex.getMessage());
                     }
                     
                     if (clickToEnter) {
                         String msg = "已进入店铺 [" + shopName + "]，找到商品：" + productName + "，正在尝试直接加购...";
-                        context.sendText(msg);
+                        sendTextSafe(msg);
                         
                         try {
                             
@@ -789,7 +787,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                             boolean added = false;
                             int addCount = 0;
                             for (int k = 0; k < 5; k++) {
-                                System.out.println("Attempt " + (k+1) + " to add to cart...");
+                                AppLog.info("Attempt " + (k+1) + " to add to cart...");
                                 
                                 // 1. Try to click "加购" (Add to Cart) under parent
                                 try {
@@ -799,7 +797,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                                         addCount++;
                                     }
                                 } catch (Exception e) {
-                                    System.out.println("Add to cart button click failed: " + e.getMessage());
+                                    AppLog.info("Add to cart button click failed: " + e.getMessage());
                                 }
                                 
                                 Thread.sleep(1000);
@@ -811,14 +809,14 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                                     if (!checkoutBtns.isEmpty()) {
                                         WebElement btn = checkoutBtns.get(0);
                                         if (btn.isDisplayed() && btn.isEnabled()) {
-                                            System.out.println("Found checkout button, clicking...");
+                                            AppLog.info("Found checkout button, clicking...");
                                             btn.click();
                                             added = true;
                                             break;
                                         }
                                     }
                                 } catch (Exception e) {
-                                     System.out.println("Check checkout button failed: " + e.getMessage());
+                                     AppLog.info("Check checkout button failed: " + e.getMessage());
                                 }
                             }
                 
@@ -857,44 +855,44 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                     }
     
                     String msg = "已进入店铺 [" + shopName + "]，找到商品信息：\n" + productText;
-                    context.sendText(msg);
+                    sendTextSafe(msg);
                     return productText;
                 }
             } catch (StaleElementReferenceException e) {
-                System.out.println("Stale element detected, retrying... " + (i + 1));
+                AppLog.info("Stale element detected, retrying... " + (i + 1));
                 if (i == maxRetries - 1) {
                      String msg = "已进入店铺 [" + shopName + "]，但在店铺内未找到商品：" + productName + " (Stale Element)";
-                     context.sendText(msg);
+                     sendTextSafe(msg);
                      return msg;
                 }
                 Thread.sleep(1000);
             } catch (Exception e) {
                 if (e.getMessage().contains("do not exist in DOM")) {
-                     System.out.println("Element stale (msg check), retrying... " + (i + 1));
+                     AppLog.info("Element stale (msg check), retrying... " + (i + 1));
                      if (i < maxRetries - 1) {
                          Thread.sleep(1000);
                          continue;
                      }
                 }
                 String msg = "已进入店铺 [" + shopName + "]，但在店铺内未找到商品：" + productName + " (Error: " + e.getMessage() + ")";
-                System.out.println(msg);
+                AppLog.info(msg);
                 return "";
             }
         }
 
-        System.out.println("在店铺 [" + shopName + "] 未找到商品");
+        AppLog.info("在店铺 [" + shopName + "] 未找到商品");
         return "";
     }
 
     private void resetAppToHome() {
         try {
-            System.out.println("Attempting to reset navigation via Back Key...");
+            AppLog.info("Attempting to reset navigation via Back Key...");
             String homeIndicatorXpath = "//android.widget.TextView[contains(@content-desc,\"闪购\")]";
             
             for (int i = 0; i < 5; i++) {
                 // Check if we are at home (Short timeout)
                 if (!this.findElementsAndWait(homeIndicatorXpath, 1).isEmpty()) {
-                     System.out.println("Found Home indicator ('闪购'), stopping back navigation.");
+                     AppLog.info("Found Home indicator ('闪购'), stopping back navigation.");
                      break;
                 }
 
@@ -902,7 +900,7 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
                 Thread.sleep(800);
             }
         } catch (Exception e) {
-            System.out.println("Back key navigation failed: " + e.getMessage());
+            AppLog.info("Back key navigation failed: " + e.getMessage());
         }
     }
 
@@ -918,13 +916,17 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
         this.quitDriver();
     }
 
-    private String reportError(ToolContext context, String msg) {
-        System.err.println(msg);
+    private void sendTextSafe(String content) {
+        if (this.messenger == null) return;
         try {
-            context.sendText("Error: " + msg);
-        } catch (Exception e) {
-            e.printStackTrace();
+            this.messenger.sendText(content);
+        } catch (Exception ignored) {
         }
+    }
+
+    private String reportError(String msg) {
+        AppLog.error(msg);
+        sendTextSafe("Error: " + msg);
         return msg;
     }
 }

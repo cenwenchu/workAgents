@@ -6,6 +6,11 @@ import java.util.List;
 
 import com.qiyi.util.LLMUtil.ModelType;
 
+/**
+ * 文件批处理工具（播客后处理相关）。
+ *
+ * <p>当前主要用于：批量调用 LLM 翻译/规范化文件名，并在本地目录内重命名。</p>
+ */
 public class PFileUtil {
 
     private static final String RENAME_PROMPT = "你是一个专业的文件名翻译助手。我有一组播客文件名，格式可能为 '{ChannelName}_{Title}.pdf' 或其他格式。请识别每个文件名中的 '{Title}' 部分（即去掉开头的频道名后剩下的部分，或者如果是简单文件名则直接翻译），如果是英文，将其翻译成中文；如果是中文，保持不变。请按以下格式返回翻译结果：\n1. 识别文件名核心含义并翻译。\n2. 新文件名**只保留翻译后的 Title**，去掉前面的 '{ChannelName}' 部分（如果有）。\n3. 确保新文件名保持原扩展名（.pdf 或 .txt）。\n\n返回格式（每行一个）：\n原始文件名=新的文件名\n\n文件名列表如下：\n";
@@ -49,14 +54,7 @@ public class PFileUtil {
             String response = "";
 
             log("正在请求批量翻译文件名...");
-
-            if (modelType == ModelType.GEMINI) {
-                response = LLMUtil.chatWithGemini(prompt).trim();
-            } else if (modelType == ModelType.DEEPSEEK || modelType == ModelType.ALL) {
-                response = LLMUtil.chatWithDeepSeek(prompt).trim();
-            } else if (modelType == ModelType.ALIYUN) {
-                response = LLMUtil.chatWithAliyun(prompt).trim();
-            }
+            response = LLMUtil.chat(prompt, modelType).trim();
 
             // Clean up response code blocks if any
             response = response.replace("```", "");
@@ -106,6 +104,6 @@ public class PFileUtil {
     }
     
     private static void log(String msg) {
-        System.out.println(msg);
+        AppLog.info(msg);
     }
 }

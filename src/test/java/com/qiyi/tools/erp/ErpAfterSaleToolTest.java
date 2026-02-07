@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,9 @@ public class ErpAfterSaleToolTest {
 
     @Mock
     private ToolContext context;
+
+    @Mock
+    private ToolMessenger messenger;
 
     @Mock
     private Playwright playwright;
@@ -71,14 +75,10 @@ public class ErpAfterSaleToolTest {
     public void testExecuteBrowserConnectionFailed() {
         doReturn(null).when(tool).connectToBrowser();
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("Browser connection failed"));
-        try {
-            verify(context, atLeastOnce()).sendText(contains("无法连接到浏览器"));
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        verify(messenger, atLeastOnce()).sendText(contains("无法连接到浏览器"));
     }
 
     @Test
@@ -86,7 +86,7 @@ public class ErpAfterSaleToolTest {
         doReturn(false).when(tool).ensureLogin(any(), anyString(), any());
         
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertEquals("Error: Login failed", result);
     }
@@ -112,7 +112,7 @@ public class ErpAfterSaleToolTest {
         when(apiResponse.text()).thenReturn(responseBody.toJSONString());
 
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("待拦截总数: 5"));
     }
@@ -134,7 +134,7 @@ public class ErpAfterSaleToolTest {
         when(apiResponse.text()).thenReturn(responseBody.toJSONString());
 
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertEquals("No data found", result);
     }

@@ -4,10 +4,11 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Page;
 import com.qiyi.util.LLMUtil.ModelType;
 import com.qiyi.util.PFileUtil;
-import com.qiyi.podcast.service.FileService;
-import com.qiyi.podcast.service.PodCastPostToWechat;
+import com.qiyi.service.podcast.service.FileService;
+import com.qiyi.service.podcast.service.PodCastPostToWechat;
 import com.qiyi.util.PlayWrightUtil;
-import com.qiyi.wechat.WechatArticle;
+import com.qiyi.service.wechat.WechatArticle;
+import com.qiyi.util.AppLog;
 
 public class PodCastToWechatTaskTest {
 
@@ -22,7 +23,7 @@ public class PodCastToWechatTaskTest {
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
         if (connection == null){
-            System.out.println("无法连接到浏览器，程序退出");
+            AppLog.info("无法连接到浏览器，程序退出");
             return;
         }
 
@@ -49,7 +50,7 @@ public class PodCastToWechatTaskTest {
         // 支持从命令行里面输入 publishPodcastDir，通过交互的方式提示用户输入
         String publishPodcastDir = "/Users/cenwenchu/Desktop/podCastItems/publish/";
         java.util.Scanner scanner = new java.util.Scanner(System.in);
-        System.out.print("请输入 播客发布目录 (默认 " + publishPodcastDir + "): ");
+        AppLog.info("请输入 播客发布目录 (默认 " + publishPodcastDir + "): ");
         String input = scanner.nextLine();
         if (!input.trim().isEmpty()) {
             publishPodcastDir = input.trim();
@@ -58,7 +59,7 @@ public class PodCastToWechatTaskTest {
         // 执行自动化操作
         PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
         if (connection == null){
-            System.out.println("无法连接到浏览器，程序退出");
+            AppLog.info("无法连接到浏览器，程序退出");
             return;
         }
 
@@ -78,8 +79,8 @@ public class PodCastToWechatTaskTest {
                 task.publishPodcastToWechat(podcastFilePath, true);
             }
             catch(Exception ex){
-                System.out.println("发布播客到微信公众号失败：" + podcastFilePath);
-                ex.printStackTrace();
+                AppLog.info("发布播客到微信公众号失败：" + podcastFilePath);
+                AppLog.error(ex);
             }
         }
 

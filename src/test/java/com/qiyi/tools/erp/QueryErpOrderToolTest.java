@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,9 @@ public class QueryErpOrderToolTest {
 
     @Mock
     private ToolContext context;
+
+    @Mock
+    private ToolMessenger messenger;
 
     @Mock
     private Playwright playwright;
@@ -65,7 +69,7 @@ public class QueryErpOrderToolTest {
     @Test
     public void testExecuteMissingOrderId() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertEquals("Error: Missing orderId", result);
     }
@@ -77,7 +81,7 @@ public class QueryErpOrderToolTest {
         JSONObject params = new JSONObject();
         params.put("orderId", "12345");
         
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         
         assertTrue(result.contains("Browser connection failed"));
     }
@@ -89,10 +93,10 @@ public class QueryErpOrderToolTest {
         JSONObject params = new JSONObject();
         params.put("orderId", "12345");
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertEquals("Error: Login failed", result);
-        verify(tool).ensureLogin(eq(page), anyString(), eq(context));
+        verify(tool).ensureLogin(eq(page), anyString(), eq(messenger));
     }
 
     @Test
@@ -120,7 +124,7 @@ public class QueryErpOrderToolTest {
         JSONObject params = new JSONObject();
         params.put("orderId", "12345");
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         // Verify result contains order info
         assertTrue(result.contains("ORDER_123"));
@@ -147,7 +151,7 @@ public class QueryErpOrderToolTest {
         JSONObject params = new JSONObject();
         params.put("orderId", "12345");
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertEquals("No records found", result);
     }

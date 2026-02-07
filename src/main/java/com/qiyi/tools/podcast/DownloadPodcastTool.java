@@ -3,8 +3,15 @@ package com.qiyi.tools.podcast;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import java.util.concurrent.locks.ReentrantLock;
+import com.qiyi.util.AppLog;
 
+/**
+ * 播客抓取与后处理入口工具（Podwise）。
+ *
+ * <p>执行流程：连接浏览器 → 扫描可下载条目 → 下载 →（可选）调用大模型做重命名/摘要/图片等后处理。</p>
+ */
 public class DownloadPodcastTool implements Tool {
     private static final ReentrantLock DOWNLOAD_LOCK = new ReentrantLock();
     private com.qiyi.agent.PodwiseAgent podwiseAgent = new com.qiyi.agent.PodwiseAgent();
@@ -37,7 +44,7 @@ public class DownloadPodcastTool implements Tool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         int maxProcessCount = params != null && params.containsKey("maxProcessCount") ? params.getIntValue("maxProcessCount") : DOWNLOAD_MAX_PROCESS_COUNT;
         int maxTryTimes = params != null && params.containsKey("maxTryTimes") ? params.getIntValue("maxTryTimes") : DOWNLOAD_MAX_TRY_TIMES;
         int maxDuplicatePages = params != null && params.containsKey("maxDuplicatePages") ? params.getIntValue("maxDuplicatePages") : DOWNLOAD_MAX_DUPLICATE_PAGES;
@@ -46,25 +53,25 @@ public class DownloadPodcastTool implements Tool {
 
         if (!DOWNLOAD_LOCK.tryLock()) {
             try {
-                context.sendText("当前已有下载任务正在执行，请稍后再试。");
+                if (messenger != null) messenger.sendText("当前已有下载任务正在执行，请稍后再试。");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             return "Task locked";
         }
 
         try {
-            context.sendText("开始执行下载任务...");
-            int count = podwiseAgent.run(maxProcessCount, maxTryTimes, maxDuplicatePages, downloadMaxProcessCount, threadPoolSize, context);
+            if (messenger != null) messenger.sendText("开始执行下载任务...");
+            int count = podwiseAgent.run(maxProcessCount, maxTryTimes, maxDuplicatePages, downloadMaxProcessCount, threadPoolSize, context, messenger);
             String result = "下载任务执行完毕，共下载更新了 " + count + " 条播客。";
-            context.sendText(result);
+            if (messenger != null) messenger.sendText(result);
             return result;
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             try {
-                context.sendText("下载任务执行异常: " + e.getMessage());
+                if (messenger != null) messenger.sendText("下载任务执行异常: " + e.getMessage());
             } catch (Exception ex) {
-                ex.printStackTrace();
+                AppLog.error(ex);
             }
             return "Error: " + e.getMessage();
         } finally {

@@ -3,6 +3,7 @@ package com.qiyi.config;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
+import com.qiyi.util.AppLog;
 
 public class AppConfig {
     private static final AppConfig INSTANCE = new AppConfig();
@@ -36,6 +37,8 @@ public class AppConfig {
     public static final String KEY_AUTOWEB_VISUAL_PROMPT = "autoweb.visual.prompt";
     public static final String KEY_AUTOWEB_WAIT_FOR_LOAD_STATE_TIMEOUT_MS = "autoweb.waitForLoadState.timeout.ms";
     public static final String KEY_AUTOWEB_DEBUG_FRAME_CAPTURE = "autoweb.debug.frame.capture";
+    public static final String KEY_FUTU_OPEND_HOST = "futu.opend.host";
+    public static final String KEY_FUTU_OPEND_PORT = "futu.opend.port";
 
     // Default Values
     public static final String DEFAULT_DOWNLOAD_DIR = "/tmp/podCastItems/";
@@ -44,6 +47,8 @@ public class AppConfig {
     public static final String DEFAULT_AUTOWEB_VISUAL_PROMPT = "请你提取一下图片里面的页面布局和元素信息，方便大模型理解这个界面的结构和元素，保障对于筛选项和操作按钮的准确和完整，不用给建议，只需要称述实际存在的元素内容，在保障完整性的同时，尽量减少字符数";
     public static final int DEFAULT_AUTOWEB_WAIT_FOR_LOAD_STATE_TIMEOUT_MS = 20000;
     public static final boolean DEFAULT_AUTOWEB_DEBUG_FRAME_CAPTURE = false;
+    public static final String DEFAULT_FUTU_OPEND_HOST = "127.0.0.1";
+    public static final int DEFAULT_FUTU_OPEND_PORT = 11111;
 
     private AppConfig() {
         loadProperties();
@@ -56,13 +61,13 @@ public class AppConfig {
     private void loadProperties() {
         try (InputStream input = AppConfig.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
             if (input == null) {
-                System.err.println("Sorry, unable to find podcast.cfg");
+                AppLog.error("Sorry, unable to find podcast.cfg");
                 return;
             }
             properties.load(input);
         } catch (IOException ex) {
-            System.err.println("Error loading configuration: " + ex.getMessage());
-            ex.printStackTrace();
+            AppLog.error("Error loading configuration: " + ex.getMessage());
+            AppLog.error(ex);
         }
     }
 
@@ -120,7 +125,7 @@ public class AppConfig {
             try {
                 return Integer.parseInt(v);
             } catch (NumberFormatException e) {
-                System.err.println("Invalid autoweb waitForLoadState timeout format, using default: " + DEFAULT_AUTOWEB_WAIT_FOR_LOAD_STATE_TIMEOUT_MS);
+                AppLog.error("Invalid autoweb waitForLoadState timeout format, using default: " + DEFAULT_AUTOWEB_WAIT_FOR_LOAD_STATE_TIMEOUT_MS);
             }
         }
         return DEFAULT_AUTOWEB_WAIT_FOR_LOAD_STATE_TIMEOUT_MS;
@@ -168,7 +173,7 @@ public class AppConfig {
             try {
                 return Integer.parseInt(sizeStr);
             } catch (NumberFormatException e) {
-                System.err.println("Invalid batch size format, using default: " + DEFAULT_PUBLISH_BATCH_SIZE);
+                AppLog.error("Invalid batch size format, using default: " + DEFAULT_PUBLISH_BATCH_SIZE);
             }
         }
         return DEFAULT_PUBLISH_BATCH_SIZE;
@@ -180,9 +185,25 @@ public class AppConfig {
             try {
                 return Integer.parseInt(portStr);
             } catch (NumberFormatException e) {
-                System.err.println("Invalid chrome debug port format, using default: " + DEFAULT_CHROME_DEBUG_PORT);
+                AppLog.error("Invalid chrome debug port format, using default: " + DEFAULT_CHROME_DEBUG_PORT);
             }
         }
         return DEFAULT_CHROME_DEBUG_PORT;
+    }
+
+    public String getFutuOpenDHost() {
+        return getProperty(KEY_FUTU_OPEND_HOST, DEFAULT_FUTU_OPEND_HOST);
+    }
+
+    public int getFutuOpenDPort() {
+        String portStr = getProperty(KEY_FUTU_OPEND_PORT);
+        if (portStr != null && !portStr.isEmpty()) {
+            try {
+                return Integer.parseInt(portStr);
+            } catch (NumberFormatException e) {
+                AppLog.error("Invalid futu OpenD port format, using default: " + DEFAULT_FUTU_OPEND_PORT);
+            }
+        }
+        return DEFAULT_FUTU_OPEND_PORT;
     }
 }

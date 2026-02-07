@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
@@ -24,6 +26,10 @@ import com.alibaba.dashscope.exception.NoApiKeyException;
 import com.alibaba.dashscope.exception.UploadFileException;
 import java.util.Collections;
 import java.util.Map;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
 import com.google.genai.Client;
 import com.google.genai.types.Content;
@@ -51,6 +57,17 @@ import io.github.ollama4j.models.generate.OllamaStreamHandler;
 
 import io.github.ollama4j.models.chat.OllamaChatMessageRole;
 
+/**
+ * 大模型能力统一入口（Router + Clients）。
+ *
+ * <p>该类封装多个模型/供应商的调用细节（DeepSeek / 阿里云 DashScope / Gemini / Ollama / 其他），对上层提供：</p>
+ * <ul>
+ *     <li>chat / chatResult：按配置与优先级路由到可用模型</li>
+ *     <li>hasAnyRemoteChatKeyConfigured：用于判断是否可以走远程 LLM；无 Key 时可降级为直连工具模式</li>
+ * </ul>
+ *
+ * <p>注意：不要在日志中输出任何 API Key 或密钥内容。</p>
+ */
 public class LLMUtil {
 
     public enum ModelType {
@@ -65,12 +82,778 @@ public class LLMUtil {
         GLM
     }
 
+    public static class LLMSettings {
+        public static String DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+        public static String DEEPSEEK_MODEL = "deepseek-chat";
+
+        public static String ALIYUN_CHAT_MODEL = "qwen3-max";
+        public static String ALIYUN_VL_MODEL = "qwen3-vl-plus";
+
+        public static String GEMINI_CHAT_MODEL = "gemini-3-flash-preview";
+        public static String GEMINI_PDF_MODEL = "gemini-3-flash-preview";
+        public static String GEMINI_VISION_MODEL = "gemini-2.0-flash-exp";
+        public static String GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
+
+        public static String MOONSHOT_CHAT_COMPLETIONS_URL = "https://api.moonshot.cn/v1/chat/completions";
+        public static String MOONSHOT_MODEL = "kimi-k2.5";
+
+        public static String MINIMAX_CHAT_COMPLETIONS_URL = "https://api.minimaxi.com/v1/chat/completions";
+        public static String MINIMAX_MODEL = "MiniMax-M2.1";
+
+        public static String GLM_CHAT_COMPLETIONS_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+        public static String GLM_MODEL = "glm-4.6";
+
+        public static int HTTP_CONNECT_TIMEOUT_SECONDS = 20;
+        public static int HTTP_REQUEST_TIMEOUT_SECONDS = 120;
+        public static int HTTP_RETRY_MAX_ATTEMPTS = 3;
+        public static long HTTP_RETRY_BACKOFF_MILLIS = 600;
+
+        public static int DEEPSEEK_CONNECT_TIMEOUT_SECONDS = 30;
+        public static int DEEPSEEK_WRITE_TIMEOUT_SECONDS = 30;
+        public static int DEEPSEEK_READ_TIMEOUT_SECONDS = 600;
+        public static int DEEPSEEK_CALL_TIMEOUT_SECONDS = 610;
+
+        public static String LOG_LEVEL = "INFO";
+        public static boolean LOG_STACKTRACE = false;
+    }
+
+    private static final HttpClient SHARED_HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(LLMSettings.HTTP_CONNECT_TIMEOUT_SECONDS))
+            .build();
+
+    public static class LLMResult {
+        private final boolean success;
+        private final String text;
+        private final ModelType model;
+        private final String provider;
+        private final Map<String, Object> usage;
+        private final String error;
+
+        private LLMResult(boolean success, String text, ModelType model, String provider, Map<String, Object> usage, String error) {
+            this.success = success;
+            this.text = text == null ? "" : text;
+            this.model = model;
+            this.provider = provider;
+            this.usage = usage == null ? null : Collections.unmodifiableMap(usage);
+            this.error = error;
+        }
+
+        public static LLMResult ok(String text, ModelType model, String provider, Map<String, Object> usage) {
+            return new LLMResult(true, text, model, provider, usage, null);
+        }
+
+        public static LLMResult fail(ModelType model, String provider, String error) {
+            return new LLMResult(false, "", model, provider, null, error == null ? "" : error);
+        }
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public String getText() {
+            return text;
+        }
+
+        public ModelType getModel() {
+            return model;
+        }
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public Map<String, Object> getUsage() {
+            return usage;
+        }
+
+        public String getError() {
+            return error;
+        }
+    }
+
+    public interface LLMProvider {
+        ModelType type();
+        boolean isConfigured(AppConfig cfg);
+        LLMResult chat(String prompt);
+        default LLMResult chat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess) {
+            return chat(toPrompt(messages));
+        }
+    }
+
+    private static class LLMRouter {
+        private final List<LLMProvider> providers;
+
+        private LLMRouter(List<LLMProvider> providers) {
+            this.providers = providers;
+        }
+
+        private LLMProvider findProvider(ModelType type) {
+            for (LLMProvider p : providers) {
+                if (p.type() == type) return p;
+            }
+            return null;
+        }
+
+        public LLMResult chat(String prompt, ModelType preferredModel) {
+            ModelType normalizedPreferred = normalize(preferredModel);
+            AppConfig cfg = AppConfig.getInstance();
+
+            if (normalizedPreferred != null && normalizedPreferred != ModelType.ALL) {
+                LLMProvider p = findProvider(normalizedPreferred);
+                if (p == null) {
+                    return LLMResult.fail(normalizedPreferred, null, "Provider not found: " + normalizedPreferred);
+                }
+                if (!p.isConfigured(cfg)) {
+                    return LLMResult.fail(normalizedPreferred, p.getClass().getSimpleName(), "Model not configured: " + normalizedPreferred);
+                }
+                return p.chat(prompt);
+            }
+
+            for (ModelType t : getFallbackOrder()) {
+                LLMProvider p = findProvider(t);
+                if (p == null) continue;
+                if (!p.isConfigured(cfg)) continue;
+                LLMResult res = p.chat(prompt);
+                if (res != null && res.isSuccess()) return res;
+            }
+            LLMProvider ollama = findProvider(ModelType.OLLAMA);
+            if (ollama != null) return ollama.chat(prompt);
+            return LLMResult.fail(ModelType.OLLAMA, null, "No available provider");
+        }
+
+        public LLMResult chat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess, ModelType preferredModel) {
+            ModelType normalizedPreferred = normalize(preferredModel);
+            AppConfig cfg = AppConfig.getInstance();
+
+            if (normalizedPreferred != null && normalizedPreferred != ModelType.ALL) {
+                LLMProvider p = findProvider(normalizedPreferred);
+                if (p == null) {
+                    return LLMResult.fail(normalizedPreferred, null, "Provider not found: " + normalizedPreferred);
+                }
+                if (!p.isConfigured(cfg)) {
+                    return LLMResult.fail(normalizedPreferred, p.getClass().getSimpleName(), "Model not configured: " + normalizedPreferred);
+                }
+                return p.chat(messages, isStreamingProcess);
+            }
+
+            for (ModelType t : getFallbackOrder()) {
+                LLMProvider p = findProvider(t);
+                if (p == null) continue;
+                if (!p.isConfigured(cfg)) continue;
+                LLMResult res = p.chat(messages, isStreamingProcess);
+                if (res != null && res.isSuccess()) return res;
+            }
+            LLMProvider ollama = findProvider(ModelType.OLLAMA);
+            if (ollama != null) return ollama.chat(messages, isStreamingProcess);
+            return LLMResult.fail(ModelType.OLLAMA, null, "No available provider");
+        }
+    }
+
+    private static final LLMRouter ROUTER = new LLMRouter(Arrays.asList(
+            new DeepSeekProvider(),
+            new AliyunProvider(),
+            new MoonshotProvider(),
+            new MinimaxProvider(),
+            new GlmProvider(),
+            new GeminiProvider(),
+            new OllamaProvider()
+    ));
+
+    private enum LogLevel {
+        ERROR(1),
+        WARN(2),
+        INFO(3),
+        DEBUG(4);
+
+        private final int rank;
+        LogLevel(int rank) { this.rank = rank; }
+    }
+
+    private static LogLevel resolveLogLevel() {
+        String raw = LLMSettings.LOG_LEVEL == null ? "" : LLMSettings.LOG_LEVEL.trim().toUpperCase();
+        if ("DEBUG".equals(raw)) return LogLevel.DEBUG;
+        if ("INFO".equals(raw)) return LogLevel.INFO;
+        if ("WARN".equals(raw) || "WARNING".equals(raw)) return LogLevel.WARN;
+        if ("ERROR".equals(raw)) return LogLevel.ERROR;
+        return LogLevel.INFO;
+    }
+
+    private static boolean logEnabled(LogLevel level) {
+        return level.rank <= resolveLogLevel().rank;
+    }
+
+    private static void logInfo(String msg) {
+        if (!logEnabled(LogLevel.INFO)) return;
+        AppLog.info(msg);
+    }
+
+    private static void logWarn(String msg) {
+        if (!logEnabled(LogLevel.WARN)) return;
+        AppLog.info(msg);
+    }
+
+    private static void logError(String msg, Throwable t) {
+        if (!logEnabled(LogLevel.ERROR)) return;
+        AppLog.error(msg);
+        if (t != null && LLMSettings.LOG_STACKTRACE) {
+            AppLog.error(t);
+        }
+    }
+
     public static final String OLLAMA_HOST = "http://localhost:11434";
     public static final String OLLAMA_MODEL_QWEN3_VL_8B = "qwen3-vl:8b";
     public static final String OLLAMA_MODEL_QWEN3_8B = "qwen3:8b";
     public static final String OLLAMA_MODEL_HUNYUAN_MT = "hunyuan-mt:latest";
 
+    public static String chat(String prompt) {
+        return chat(prompt, null);
+    }
+
+    public static String chat(String prompt, ModelType preferredModel) {
+        return chatResult(prompt, preferredModel).getText();
+    }
+
+    public static String chat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess) {
+        return chat(messages, isStreamingProcess, null);
+    }
+
+    public static String chat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess, ModelType preferredModel) {
+        return chatResult(messages, isStreamingProcess, preferredModel).getText();
+    }
+
+    public static LLMResult chatResult(String prompt) {
+        return chatResult(prompt, null);
+    }
+
+    public static LLMResult chatResult(String prompt, ModelType preferredModel) {
+        long begin = System.nanoTime();
+        int promptChars = prompt == null ? 0 : prompt.length();
+        int approxTokens = promptChars <= 0 ? 0 : Math.max(1, promptChars / 4);
+        try {
+            LLMResult res = ROUTER.chat(prompt, preferredModel);
+            long costMs = (System.nanoTime() - begin) / 1_000_000;
+            logInfo("[llm] chat done, preferred=" + (preferredModel == null ? "null" : preferredModel.name())
+                    + ", model=" + (res == null || res.getModel() == null ? "null" : res.getModel().name())
+                    + ", provider=" + (res == null ? "null" : safeOneLine(res.getProvider()))
+                    + ", success=" + (res != null && res.isSuccess())
+                    + ", promptChars=" + promptChars
+                    + ", approxTokens=" + approxTokens
+                    + ", elapsedMs=" + costMs
+                    + ", usageKeys=" + (res == null || res.getUsage() == null ? "null" : res.getUsage().keySet()));
+            if (res != null && !res.isSuccess()) {
+                logWarn("[llm] chat failed, error=" + safeOneLine(res.getError()));
+            }
+            return res;
+        } catch (Exception e) {
+            long costMs = (System.nanoTime() - begin) / 1_000_000;
+            logError("[llm] chat exception, preferred=" + (preferredModel == null ? "null" : preferredModel.name())
+                    + ", promptChars=" + promptChars
+                    + ", approxTokens=" + approxTokens
+                    + ", elapsedMs=" + costMs
+                    + ", error=" + safeOneLine(e.getMessage()), e);
+            return LLMResult.fail(preferredModel == null ? ModelType.ALL : preferredModel, "LLMUtil", e.getMessage());
+        }
+    }
+
+    public static LLMResult chatResult(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess) {
+        return chatResult(messages, isStreamingProcess, null);
+    }
+
+    public static LLMResult chatResult(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess, ModelType preferredModel) {
+        long begin = System.nanoTime();
+        int msgCount = messages == null ? 0 : messages.size();
+        String prompt = toPrompt(messages);
+        int promptChars = prompt == null ? 0 : prompt.length();
+        int approxTokens = promptChars <= 0 ? 0 : Math.max(1, promptChars / 4);
+        try {
+            LLMResult res = ROUTER.chat(messages, isStreamingProcess, preferredModel);
+            long costMs = (System.nanoTime() - begin) / 1_000_000;
+            logInfo("[llm] chat(messages) done, preferred=" + (preferredModel == null ? "null" : preferredModel.name())
+                    + ", model=" + (res == null || res.getModel() == null ? "null" : res.getModel().name())
+                    + ", provider=" + (res == null ? "null" : safeOneLine(res.getProvider()))
+                    + ", success=" + (res != null && res.isSuccess())
+                    + ", streaming=" + isStreamingProcess
+                    + ", messageCount=" + msgCount
+                    + ", promptChars=" + promptChars
+                    + ", approxTokens=" + approxTokens
+                    + ", elapsedMs=" + costMs
+                    + ", usageKeys=" + (res == null || res.getUsage() == null ? "null" : res.getUsage().keySet()));
+            if (res != null && !res.isSuccess()) {
+                logWarn("[llm] chat(messages) failed, error=" + safeOneLine(res.getError()));
+            }
+            return res;
+        } catch (Exception e) {
+            long costMs = (System.nanoTime() - begin) / 1_000_000;
+            logError("[llm] chat(messages) exception, preferred=" + (preferredModel == null ? "null" : preferredModel.name())
+                    + ", streaming=" + isStreamingProcess
+                    + ", messageCount=" + msgCount
+                    + ", promptChars=" + promptChars
+                    + ", approxTokens=" + approxTokens
+                    + ", elapsedMs=" + costMs
+                    + ", error=" + safeOneLine(e.getMessage()), e);
+            return LLMResult.fail(preferredModel == null ? ModelType.ALL : preferredModel, "LLMUtil", e.getMessage());
+        }
+    }
+
+    private static String safeOneLine(String s) {
+        if (s == null) return "null";
+        String v = s.replace("\n", "\\n").replace("\r", "\\r").trim();
+        if (v.length() > 400) return v.substring(0, 400) + "...";
+        return v;
+    }
+
+    /**
+     * 判断是否配置了任意“远程”聊天模型的 Key。
+     *
+     * <p>用于在入口层决定是否走 LLM 工具规划链路，还是降级为“直连工具模式”。</p>
+     */
+    public static boolean hasAnyRemoteChatKeyConfigured() {
+        AppConfig cfg = AppConfig.getInstance();
+        return hasKey(cfg.getDeepSeekApiKey())
+                || hasKey(cfg.getAliyunApiKey())
+                || hasKey(cfg.getMoonshotApiKey())
+                || hasKey(cfg.getMinimaxApiKey())
+                || hasKey(cfg.getGlmApiKey())
+                || hasKey(cfg.getGeminiApiKey());
+    }
+
+    private static ModelType resolveChatModel(ModelType preferredModel) {
+        ModelType normalizedPreferred = normalize(preferredModel);
+        if (normalizedPreferred != null && normalizedPreferred != ModelType.ALL && isModelConfigured(normalizedPreferred)) {
+            return normalizedPreferred;
+        }
+        List<ModelType> fallbackOrder = Arrays.asList(
+                ModelType.DEEPSEEK,
+                ModelType.ALIYUN,
+                ModelType.MOONSHOT,
+                ModelType.MINIMAX,
+                ModelType.GLM,
+                ModelType.GEMINI,
+                ModelType.OLLAMA
+        );
+        for (ModelType t : fallbackOrder) {
+            if (isModelConfigured(t)) {
+                return t;
+            }
+        }
+        return ModelType.OLLAMA;
+    }
+
+    private static boolean isModelConfigured(ModelType modelType) {
+        AppConfig cfg = AppConfig.getInstance();
+        if (modelType == ModelType.DEEPSEEK) return hasKey(cfg.getDeepSeekApiKey());
+        if (modelType == ModelType.ALIYUN) return hasKey(cfg.getAliyunApiKey());
+        if (modelType == ModelType.ALIYUN_VL) return hasKey(cfg.getAliyunApiKey());
+        if (modelType == ModelType.MOONSHOT) return hasKey(cfg.getMoonshotApiKey());
+        if (modelType == ModelType.MINIMAX) return hasKey(cfg.getMinimaxApiKey());
+        if (modelType == ModelType.GLM) return hasKey(cfg.getGlmApiKey());
+        if (modelType == ModelType.GEMINI) return hasKey(cfg.getGeminiApiKey());
+        if (modelType == ModelType.OLLAMA) return true;
+        return false;
+    }
+
+    private static ModelType normalize(ModelType modelType) {
+        if (modelType == null) return null;
+        if (modelType == ModelType.ALIYUN_VL) return ModelType.ALIYUN;
+        return modelType;
+    }
+
+    private static List<ModelType> getFallbackOrder() {
+        return Arrays.asList(
+                ModelType.DEEPSEEK,
+                ModelType.ALIYUN,
+                ModelType.MOONSHOT,
+                ModelType.MINIMAX,
+                ModelType.GLM,
+                ModelType.GEMINI,
+                ModelType.OLLAMA
+        );
+    }
+
+    private static boolean hasKey(String v) {
+        return v != null && !v.trim().isEmpty();
+    }
+
+    private static String toPrompt(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages) {
+        if (messages == null || messages.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Object m : messages) {
+            if (m == null) continue;
+            String role = tryInvokeToString(m, "role");
+            if (role == null) role = tryInvokeToString(m, "getRole");
+            String content = tryInvokeToString(m, "content");
+            if (content == null) content = tryInvokeToString(m, "getContent");
+            if (content == null) content = String.valueOf(m);
+            if (role != null && !role.trim().isEmpty()) {
+                sb.append(role.trim()).append(": ");
+            }
+            sb.append(content).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private static String tryInvokeToString(Object target, String methodName) {
+        try {
+            Object res = target.getClass().getMethod(methodName).invoke(target);
+            if (res == null) return null;
+            return String.valueOf(res);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     // --- Alibaba Cloud (Qwen) ---
+
+    private static class AliyunProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.ALIYUN;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getAliyunApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            try {
+                Generation gen = new Generation();
+                Message userMsg = Message.builder()
+                        .role(Role.USER.getValue())
+                        .content(prompt)
+                        .build();
+
+                GenerationParam param = GenerationParam.builder()
+                        .model(LLMSettings.ALIYUN_CHAT_MODEL)
+                        .messages(Arrays.asList(userMsg))
+                        .resultFormat(GenerationParam.ResultFormat.MESSAGE)
+                        .apiKey(AppConfig.getInstance().getAliyunApiKey())
+                        .build();
+
+                GenerationResult result = gen.call(param);
+                String text = result.getOutput().getChoices().get(0).getMessage().getContent();
+                return LLMResult.ok(text, ModelType.ALIYUN, "AliyunProvider", null);
+            } catch (ApiException | NoApiKeyException | InputRequiredException e) {
+                logError("Alibaba Cloud Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.ALIYUN, "AliyunProvider", e.getMessage());
+            } catch (Exception e) {
+                logError("Alibaba Cloud Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.ALIYUN, "AliyunProvider", e.getMessage());
+            }
+        }
+    }
+
+    private static class GeminiProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.GEMINI;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getGeminiApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            try (Client client = Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build()) {
+                GenerateContentResponse response = client.models.generateContent(LLMSettings.GEMINI_CHAT_MODEL, prompt, null);
+                String text = response == null ? "" : response.text();
+                return LLMResult.ok(text, ModelType.GEMINI, "GeminiProvider", null);
+            } catch (Exception e) {
+                logError("Gemini Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.GEMINI, "GeminiProvider", e.getMessage());
+            }
+        }
+    }
+
+    private static class OllamaProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.OLLAMA;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return true;
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            try {
+                String text = chatWithOllama(prompt, OLLAMA_MODEL_QWEN3_8B, null, false);
+                return LLMResult.ok(text, ModelType.OLLAMA, "OllamaProvider", null);
+            } catch (Exception e) {
+                logError("Ollama Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.OLLAMA, "OllamaProvider", e.getMessage());
+            }
+        }
+    }
+
+    private static class DeepSeekProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.DEEPSEEK;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getDeepSeekApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            if (!hasKey(AppConfig.getInstance().getDeepSeekApiKey())) {
+                return LLMResult.fail(ModelType.DEEPSEEK, "DeepSeekProvider", "DeepSeek API Key is missing!");
+            }
+
+            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
+                    .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
+                    .baseUrl(LLMSettings.DEEPSEEK_BASE_URL)
+                    .connectTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CONNECT_TIMEOUT_SECONDS))
+                    .writeTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_WRITE_TIMEOUT_SECONDS))
+                    .readTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_READ_TIMEOUT_SECONDS))
+                    .callTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CALL_TIMEOUT_SECONDS))
+                    .model(LLMSettings.DEEPSEEK_MODEL)
+                    .logRequests(logEnabled(LogLevel.DEBUG))
+                    .logResponses(logEnabled(LogLevel.DEBUG))
+                    .build();
+
+            try {
+                UserMessage userMessage = UserMessage.builder().addText(prompt).build();
+                ChatCompletionRequest request = ChatCompletionRequest.builder().messages(userMessage).build();
+
+                ChatCompletionResponse response = deepseekClient
+                        .chatCompletion(new OpenAiClientContext(), request)
+                        .execute();
+
+                String responseText = "";
+                if (response != null && response.choices() != null && !response.choices().isEmpty()) {
+                    responseText = response.choices().get(0).message().content();
+                }
+                return LLMResult.ok(responseText, ModelType.DEEPSEEK, "DeepSeekProvider", null);
+            } catch (Exception e) {
+                logError("DeepSeek Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.DEEPSEEK, "DeepSeekProvider", e.getMessage());
+            } finally {
+                deepseekClient.shutdown();
+            }
+        }
+
+        @Override
+        public LLMResult chat(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess) {
+            if (!hasKey(AppConfig.getInstance().getDeepSeekApiKey())) {
+                return LLMResult.fail(ModelType.DEEPSEEK, "DeepSeekProvider", "DeepSeek API Key is missing!");
+            }
+
+            if (!isStreamingProcess) {
+                DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
+                        .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
+                        .baseUrl(LLMSettings.DEEPSEEK_BASE_URL)
+                        .model(LLMSettings.DEEPSEEK_MODEL)
+                        .connectTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CONNECT_TIMEOUT_SECONDS))
+                        .writeTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_WRITE_TIMEOUT_SECONDS))
+                        .readTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_READ_TIMEOUT_SECONDS))
+                        .callTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CALL_TIMEOUT_SECONDS))
+                        .logRequests(logEnabled(LogLevel.DEBUG))
+                        .logResponses(logEnabled(LogLevel.DEBUG))
+                        .build();
+                try {
+                    ChatCompletionRequest request = ChatCompletionRequest.builder()
+                            .messages(messages).build();
+
+                    ChatCompletionResponse response = deepseekClient
+                            .chatCompletion(new OpenAiClientContext(), request)
+                            .execute();
+
+                    String responseText = "";
+                    if (response != null && response.choices() != null && !response.choices().isEmpty()) {
+                        responseText = response.choices().get(0).message().content();
+                    } else {
+                        logWarn("DeepSeek: 未收到有效响应");
+                    }
+                    return LLMResult.ok(responseText, ModelType.DEEPSEEK, "DeepSeekProvider", null);
+                } catch (Exception ex) {
+                    logError("调用 DeepSeek API 失败: " + ex.getMessage(), ex);
+                    return LLMResult.fail(ModelType.DEEPSEEK, "DeepSeekProvider", ex.getMessage());
+                } finally {
+                    deepseekClient.shutdown();
+                }
+            }
+
+            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
+                    .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
+                    .baseUrl(LLMSettings.DEEPSEEK_BASE_URL)
+                    .model(LLMSettings.DEEPSEEK_MODEL)
+                    .connectTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CONNECT_TIMEOUT_SECONDS))
+                    .writeTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_WRITE_TIMEOUT_SECONDS))
+                    .readTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_READ_TIMEOUT_SECONDS))
+                    .callTimeout(java.time.Duration.ofSeconds(LLMSettings.DEEPSEEK_CALL_TIMEOUT_SECONDS))
+                    .logStreamingResponses(logEnabled(LogLevel.DEBUG))
+                    .build();
+
+            StringBuilder sb = new StringBuilder();
+            CountDownLatch latch = new CountDownLatch(1);
+
+            try {
+                ChatCompletionRequest request = ChatCompletionRequest.builder()
+                        .model(LLMSettings.DEEPSEEK_MODEL)
+                        .messages(messages)
+                        .stream(true)
+                        .streamOptions(StreamOptions.builder().includeUsage(true).build())
+                        .build();
+
+                Flux<ChatCompletionResponse> flux = deepseekClient.chatFluxCompletion(request);
+
+                flux.subscribe(
+                        chunk -> {
+                            if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                                String delta = chunk.choices().get(0).delta().content();
+                                if (delta != null) {
+                                    sb.append(delta);
+                                }
+                            }
+                        },
+                        error -> {
+                            logError("DeepSeek 流式错误: " + error.getMessage(), error);
+                            latch.countDown();
+                        },
+                        latch::countDown
+                );
+
+                latch.await();
+            } catch (Exception ex) {
+                logError("调用 DeepSeek API 失败: " + ex.getMessage(), ex);
+                return LLMResult.fail(ModelType.DEEPSEEK, "DeepSeekProvider", ex.getMessage());
+            } finally {
+                deepseekClient.shutdown();
+            }
+
+            return LLMResult.ok(sb.toString(), ModelType.DEEPSEEK, "DeepSeekProvider", null);
+        }
+    }
+
+    private static class MoonshotProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.MOONSHOT;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getMoonshotApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            String apiKey = AppConfig.getInstance().getMoonshotApiKey();
+            if (!hasKey(apiKey)) {
+                return LLMResult.fail(ModelType.MOONSHOT, "MoonshotProvider", "Moonshot API Key is missing!");
+            }
+            try {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("model", LLMSettings.MOONSHOT_MODEL);
+                Map<String, Object> message = new HashMap<>();
+                message.put("role", "user");
+                message.put("content", prompt);
+                payload.put("messages", java.util.List.of(message));
+                payload.put("stream", false);
+                Map<String, Object> thinking = new HashMap<>();
+                thinking.put("type", normalizeThinkingType(AppConfig.getInstance().getMoonshotThinking()));
+                payload.put("thinking", thinking);
+                return postOpenAiLikeChatCompletionResult(LLMSettings.MOONSHOT_CHAT_COMPLETIONS_URL, apiKey, payload, ModelType.MOONSHOT, "MoonshotProvider");
+            } catch (Exception e) {
+                logError("Moonshot Chat Error: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.MOONSHOT, "MoonshotProvider", e.getMessage());
+            }
+        }
+    }
+
+    private static class MinimaxProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.MINIMAX;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getMinimaxApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            String apiKey = AppConfig.getInstance().getMinimaxApiKey();
+            if (!hasKey(apiKey)) {
+                return LLMResult.fail(ModelType.MINIMAX, "MinimaxProvider", "Minimax API Key is missing!");
+            }
+            try {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("model", LLMSettings.MINIMAX_MODEL);
+                Map<String, Object> message = new HashMap<>();
+                message.put("role", "user");
+                message.put("content", prompt);
+                payload.put("messages", java.util.List.of(message));
+                payload.put("stream", false);
+
+                Map<String, Object> extraBody = new HashMap<>();
+                extraBody.put("reasoning_split", Boolean.TRUE);
+                payload.put("extra_body", extraBody);
+
+                LLMResult res = postOpenAiLikeChatCompletionResult(LLMSettings.MINIMAX_CHAT_COMPLETIONS_URL, apiKey, payload, ModelType.MINIMAX, "MinimaxProvider");
+                if (res.isSuccess()) {
+                    String content = res.getText().replaceAll("(?s)<think>.*?</think>", "").trim();
+                    return LLMResult.ok(content, ModelType.MINIMAX, "MinimaxProvider", res.getUsage());
+                }
+                return res;
+            } catch (Exception e) {
+                logError("Minimax Chat Exception: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.MINIMAX, "MinimaxProvider", e.getMessage());
+            }
+        }
+    }
+
+    private static class GlmProvider implements LLMProvider {
+        @Override
+        public ModelType type() {
+            return ModelType.GLM;
+        }
+
+        @Override
+        public boolean isConfigured(AppConfig cfg) {
+            return cfg != null && hasKey(cfg.getGlmApiKey());
+        }
+
+        @Override
+        public LLMResult chat(String prompt) {
+            String apiKey = AppConfig.getInstance().getGlmApiKey();
+            if (!hasKey(apiKey)) {
+                return LLMResult.fail(ModelType.GLM, "GlmProvider", "GLM API Key is missing!");
+            }
+            try {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("model", LLMSettings.GLM_MODEL);
+                Map<String, Object> message = new HashMap<>();
+                message.put("role", "user");
+                message.put("content", prompt);
+                payload.put("messages", java.util.List.of(message));
+                payload.put("stream", false);
+                Map<String, Object> thinking = new HashMap<>();
+                thinking.put("type", normalizeThinkingType(AppConfig.getInstance().getGlmThinking()));
+                payload.put("thinking", thinking);
+
+                LLMResult res = postOpenAiLikeChatCompletionResult(LLMSettings.GLM_CHAT_COMPLETIONS_URL, apiKey, payload, ModelType.GLM, "GlmProvider");
+                if (res.isSuccess()) {
+                    String content = res.getText().replaceAll("(?s)<think>.*?</think>", "").trim();
+                    return LLMResult.ok(content, ModelType.GLM, "GlmProvider", res.getUsage());
+                }
+                return res;
+            } catch (Exception e) {
+                logError("GLM Chat Exception: " + e.getMessage(), e);
+                return LLMResult.fail(ModelType.GLM, "GlmProvider", e.getMessage());
+            }
+        }
+    }
 
     /**
      * 与阿里云 Qwen 模型进行对话
@@ -79,82 +862,12 @@ public class LLMUtil {
      * @return 模型回复
      */
     public static String chatWithAliyun(String prompt) {
-        try {
-            Generation gen = new Generation();
-            Message userMsg = Message.builder()
-                    .role(Role.USER.getValue())
-                    .content(prompt)
-                    .build();
-            
-            GenerationParam param = GenerationParam.builder()
-                    .model("qwen3-max") // 使用通义千问-Max
-                    .messages(Arrays.asList(userMsg))
-                    .resultFormat(GenerationParam.ResultFormat.MESSAGE)
-                    .apiKey(AppConfig.getInstance().getAliyunApiKey())
-                    .build();
-            
-            GenerationResult result = gen.call(param);
-            return result.getOutput().getChoices().get(0).getMessage().getContent();
-        } catch (ApiException | NoApiKeyException | InputRequiredException e) {
-            System.err.println("Alibaba Cloud Chat Error: " + e.getMessage());
-            e.printStackTrace();
-            return "";
-        }
+        return chatResult(prompt, ModelType.ALIYUN).getText();
     }
     
     // --- Moonshot (月之暗面, OpenAI-compatible) ---
     public static String chatWithMoonshot(String prompt) {
-        String apiKey = AppConfig.getInstance().getMoonshotApiKey();
-        if (apiKey == null || apiKey.trim().isEmpty()) {
-            System.err.println("Moonshot API Key is missing!");
-            return "";
-        }
-        try {
-            String thinkingType = AppConfig.getInstance().getMoonshotThinking();
-            if (thinkingType == null || thinkingType.trim().isEmpty()) {
-                thinkingType = "disabled";
-            }
-            java.util.Map<String, Object> message = new java.util.HashMap<>();
-            message.put("role", "user");
-            message.put("content", prompt);
-            
-            java.util.Map<String, Object> payload = new java.util.HashMap<>();
-            payload.put("model", "kimi-k2.5");
-            payload.put("messages", java.util.List.of(message));
-            payload.put("stream", false);
-            java.util.Map<String, Object> thinking = new java.util.HashMap<>();
-            thinking.put("type", thinkingType);
-            payload.put("thinking", thinking);
-            
-            String jsonBody = com.alibaba.fastjson2.JSON.toJSONString(payload);
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create("https://api.moonshot.cn/v1/chat/completions"))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-            java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                com.alibaba.fastjson2.JSONObject json = com.alibaba.fastjson2.JSONObject.parseObject(response.body());
-                com.alibaba.fastjson2.JSONArray choices = json.getJSONArray("choices");
-                if (choices != null && !choices.isEmpty()) {
-                    com.alibaba.fastjson2.JSONObject first = choices.getJSONObject(0);
-                    com.alibaba.fastjson2.JSONObject msg = first.getJSONObject("message");
-                    if (msg != null) {
-                        return msg.getString("content");
-                    }
-                }
-                return "";
-            } else {
-                System.err.println("Moonshot Chat Error: HTTP " + response.statusCode() + " - " + response.body());
-                return "";
-            }
-        } catch (Exception e) {
-            System.err.println("Moonshot Chat Error: " + e.getMessage());
-            e.printStackTrace();
-            return "";
-        }
+        return chatResult(prompt, ModelType.MOONSHOT).getText();
     }
 
     /**
@@ -196,14 +909,14 @@ public class LLMUtil {
                         }
                     }
                     if (imageUrl == null || imageUrl.trim().isEmpty()) {
-                        System.err.println("Failed to resolve image source for Aliyun analysis: " + src);
+                        logWarn("Failed to resolve image source for Aliyun analysis: " + src);
                         continue;
                     }
                     contents.add(Collections.singletonMap("image", imageUrl));
                 }
             }
             if (contents.isEmpty()) {
-                System.err.println("Failed to resolve any images for Aliyun analysis.");
+                logWarn("Failed to resolve any images for Aliyun analysis.");
                 return "Error: Image upload failed.";
             }
 
@@ -216,7 +929,7 @@ public class LLMUtil {
                     .build();
 
             MultiModalConversationParam param = MultiModalConversationParam.builder()
-                    .model("qwen3-vl-plus") // 使用 Qwen3-VL-Plus
+                    .model(LLMSettings.ALIYUN_VL_MODEL)
                     .message(userMsg)
                     .apiKey(AppConfig.getInstance().getAliyunApiKey())
                     .build();
@@ -224,8 +937,7 @@ public class LLMUtil {
             MultiModalConversationResult result = conv.call(param);
             return result.getOutput().getChoices().get(0).getMessage().getContent().get(0).get("text").toString();
         } catch (ApiException | NoApiKeyException | UploadFileException e) {
-            System.err.println("Alibaba Cloud VL Error: " + e.getMessage());
-            e.printStackTrace();
+            logError("Alibaba Cloud VL Error: " + e.getMessage(), e);
             return "";
         }
     }
@@ -235,7 +947,7 @@ public class LLMUtil {
             String content = PodCastUtil.readFileContent(file);
             return chatWithAliyun(summaryPrompt + "\n\n" + content);
         } catch (IOException e) {
-            System.err.println("Read file error: " + e.getMessage());
+            logError("Read file error: " + e.getMessage(), e);
             return "";
         }
     }
@@ -243,124 +955,11 @@ public class LLMUtil {
     // --- DeepSeek ---
 
     public static String chatWithDeepSeek(String prompt) {
-        String responseText = "";
-
-        DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-                .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-                .baseUrl("https://api.deepseek.com")
-                .connectTimeout(java.time.Duration.ofSeconds(30))  // 连接超时
-                .writeTimeout(java.time.Duration.ofSeconds(30))   // 写入超时（发送请求）
-                .readTimeout(java.time.Duration.ofSeconds(600))   // 读取超时（等待响应）
-                .callTimeout(java.time.Duration.ofSeconds(610))   // 整个调用超时，比readTimeout稍长
-                .model("deepseek-chat")
-                .build();
-
-        try {
-            UserMessage userMessage = UserMessage.builder().addText(prompt).build();
-            ChatCompletionRequest request = ChatCompletionRequest.builder().messages(userMessage).build();
-
-            ChatCompletionResponse response = deepseekClient
-                    .chatCompletion(new OpenAiClientContext(), request)
-                    .execute();
-
-            if (response != null && response.choices() != null && !response.choices().isEmpty()) {
-                responseText = response.choices().get(0).message().content();
-            }
-        } catch (Exception e) {
-            System.out.println("DeepSeek Chat Error: " + e.getMessage());
-            e.printStackTrace();
-        } finally {
-            deepseekClient.shutdown();
-        }
-        return responseText;
+        return chatResult(prompt, ModelType.DEEPSEEK).getText();
     }
 
     public static String chatWithDeepSeek(List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages, boolean isStreamingProcess) {
-        String responseText = "";
-
-        if (isStreamingProcess) {
-            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-                    .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-                    .baseUrl("https://api.deepseek.com")
-                    .model("deepseek-chat")
-                    .logStreamingResponses(true)
-                    .build();
-
-            StringBuilder sb = new StringBuilder();
-            CountDownLatch latch = new CountDownLatch(1);
-
-            try {
-                ChatCompletionRequest request = ChatCompletionRequest.builder()
-                        .model("deepseek-chat")
-                        .messages(messages)
-                        .stream(true)
-                        .streamOptions(StreamOptions.builder().includeUsage(true).build())
-                        .build();
-
-                System.out.println("开始流式响应...\n");
-                Flux<ChatCompletionResponse> flux = deepseekClient.chatFluxCompletion(request);
-
-                flux.subscribe(
-                        chunk -> {
-                            if (chunk.choices() != null && !chunk.choices().isEmpty()) {
-                                String delta = chunk.choices().get(0).delta().content();
-                                if (delta != null) {
-                                    sb.append(delta);
-                                }
-                            }
-                        },
-                        error -> {
-                            System.err.println("\n流式错误: " + error.getMessage());
-                            latch.countDown();
-                        },
-                        () -> {
-                            System.out.println("\n\n流式响应完成！");
-                            latch.countDown();
-                        }
-                );
-
-                latch.await();
-            } catch (Exception ex) {
-                System.out.println("调用 DeepSeek API 失败: " + ex.getMessage());
-                ex.printStackTrace();
-            } finally {
-                deepseekClient.shutdown();
-            }
-            responseText = sb.toString();
-
-        } else {
-            DeepSeekClient deepseekClient = new DeepSeekClient.Builder()
-                    .openAiApiKey(AppConfig.getInstance().getDeepSeekApiKey())
-                    .baseUrl("https://api.deepseek.com")
-                    .model("deepseek-chat")
-                    .connectTimeout(java.time.Duration.ofSeconds(30))
-                    .readTimeout(java.time.Duration.ofSeconds(600))
-                    .logRequests(true)
-                    .logResponses(true)
-                    .build();
-
-            try {
-                ChatCompletionRequest request = ChatCompletionRequest.builder()
-                        .messages(messages).build();
-
-                ChatCompletionResponse response = deepseekClient
-                        .chatCompletion(new OpenAiClientContext(), request)
-                        .execute();
-
-                if (response != null && response.choices() != null && !response.choices().isEmpty()) {
-                    responseText = response.choices().get(0).message().content();
-                } else {
-                    System.out.println("未收到有效响应");
-                }
-            } catch (Exception ex) {
-                System.out.println("调用 DeepSeek API 失败: " + ex.getMessage());
-                ex.printStackTrace();
-            } finally {
-                deepseekClient.shutdown();
-            }
-        }
-
-        return responseText;
+        return chatResult(messages, isStreamingProcess, ModelType.DEEPSEEK).getText();
     }
 
     public static String generateContentWithDeepSeekByFile(java.io.File file, String summaryPrompt, boolean isStreamingProcess) throws IOException {
@@ -379,23 +978,14 @@ public class LLMUtil {
     // --- Gemini ---
 
     public static String chatWithGemini(String prompt) {
-        String responseText = "";
-        try (Client client = Client.builder().apiKey(AppConfig.getInstance().getGeminiApiKey()).build()) {
-            GenerateContentResponse response = client.models.generateContent("gemini-3-flash-preview", prompt, null);
-            responseText = response.text();
-        } catch (Exception e) {
-            System.out.println("Gemini Chat Error: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return responseText;
+        return chatResult(prompt, ModelType.GEMINI).getText();
     }
 
     public static String generateSummaryWithGemini(java.io.File pdfFile, String summaryPrompt) {
         String responseText = "";
-        try {
-            Client client = Client.builder()
-                    .apiKey(AppConfig.getInstance().getGeminiApiKey())
-                    .build();
+        try (Client client = Client.builder()
+                .apiKey(AppConfig.getInstance().getGeminiApiKey())
+                .build()) {
 
             File uploadedFile = client.files.upload(
                     pdfFile.getAbsolutePath(),
@@ -404,7 +994,7 @@ public class LLMUtil {
                             .build()
             );
 
-            System.out.println("文件上传成功: " + uploadedFile.uri().get());
+            logInfo("文件上传成功: " + uploadedFile.uri().get());
 
             Content content = Content.fromParts(
                     Part.fromText(summaryPrompt),
@@ -412,24 +1002,22 @@ public class LLMUtil {
             );
 
             GenerateContentResponse response = client.models.generateContent(
-                    "gemini-3-flash-preview",
+                    LLMSettings.GEMINI_PDF_MODEL,
                     content,
                     null);
 
             responseText = response.text();
         } catch (Exception ex) {
-            System.out.println("调用 Gemini API 失败: " + ex.getMessage());
-            ex.printStackTrace();
+            logError("调用 Gemini API 失败: " + ex.getMessage(), ex);
         }
         return responseText;
     }
 
     public static String analyzeImageWithGemini(java.io.File imageFile, String prompt) {
         String responseText = "";
-        try {
-            Client client = Client.builder()
-                    .apiKey(AppConfig.getInstance().getGeminiApiKey())
-                    .build();
+        try (Client client = Client.builder()
+                .apiKey(AppConfig.getInstance().getGeminiApiKey())
+                .build()) {
 
             File uploadedFile = client.files.upload(
                     imageFile.getAbsolutePath(),
@@ -438,7 +1026,7 @@ public class LLMUtil {
                             .build()
             );
 
-            System.out.println("图片上传成功: " + uploadedFile.uri().get());
+            logInfo("图片上传成功: " + uploadedFile.uri().get());
 
             Content content = Content.fromParts(
                     Part.fromText(prompt),
@@ -446,24 +1034,22 @@ public class LLMUtil {
             );
 
             GenerateContentResponse response = client.models.generateContent(
-                    "gemini-2.0-flash-exp",
+                    LLMSettings.GEMINI_VISION_MODEL,
                     content,
                     null);
 
             responseText = response.text();
         } catch (Exception ex) {
-            System.out.println("调用 Gemini Vision API 失败: " + ex.getMessage());
-            ex.printStackTrace();
+            logError("调用 Gemini Vision API 失败: " + ex.getMessage(), ex);
         }
         return responseText;
     }
 
     public static String analyzeImagesWithGemini(java.io.File[] imageFiles, String prompt) {
         String responseText = "";
-        try {
-            Client client = Client.builder()
-                    .apiKey(AppConfig.getInstance().getGeminiApiKey())
-                    .build();
+        try (Client client = Client.builder()
+                .apiKey(AppConfig.getInstance().getGeminiApiKey())
+                .build()) {
             List<Part> parts = new ArrayList<>();
             parts.add(Part.fromText(prompt));
             for (java.io.File f : imageFiles) {
@@ -477,11 +1063,10 @@ public class LLMUtil {
             }
             Content content = Content.fromParts(parts.toArray(new Part[0]));
             GenerateContentResponse response =
-                    client.models.generateContent("gemini-2.0-flash-exp", content, null);
+                    client.models.generateContent(LLMSettings.GEMINI_VISION_MODEL, content, null);
             responseText = response.text();
         } catch (Exception ex) {
-            System.out.println("调用 Gemini Vision API 失败: " + ex.getMessage());
-            ex.printStackTrace();
+            logError("调用 Gemini Vision API 失败: " + ex.getMessage(), ex);
         }
         return responseText;
     }
@@ -506,13 +1091,13 @@ public class LLMUtil {
             );
 
             GenerateContentResponse response = client.models.generateContent(
-                    "gemini-3-pro-image-preview",
+                    LLMSettings.GEMINI_IMAGE_MODEL,
                     content,
                     config);
 
             for (Part part : response.parts()) {
                 if (part.text().isPresent()) {
-                    System.out.println(part.text().get());
+                    logInfo(part.text().get());
                 } else if (part.inlineData().isPresent()) {
                     try {
                         var blob = part.inlineData().get();
@@ -520,7 +1105,7 @@ public class LLMUtil {
                             Path outputDirPath = Paths.get(outputDirectory);
                             if (!Files.exists(outputDirPath)) {
                                 Files.createDirectories(outputDirPath);
-                                System.out.println("创建输出目录: " + outputDirectory);
+                                logInfo("创建输出目录: " + outputDirectory);
                             }
 
                             String timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
@@ -529,16 +1114,15 @@ public class LLMUtil {
 
                             Path imageFilePath = outputDirPath.resolve(imageFileName);
                             Files.write(imageFilePath, blob.data().get());
-                            System.out.println("图片生成成功: " + imageFilePath);
+                            logInfo("图片生成成功: " + imageFilePath);
                         }
                     } catch (IOException ex) {
-                        System.out.println("写入图片文件失败: " + ex.getMessage());
-                        ex.printStackTrace();
+                        logError("写入图片文件失败: " + ex.getMessage(), ex);
                     }
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logError("调用 Gemini Image API 失败: " + e.getMessage(), e);
         }
     }
 
@@ -579,8 +1163,7 @@ public class LLMUtil {
             OllamaChatResult chatResult = ollamaAPI.chat(request);
             return chatResult.getResponseModel().getMessage().getContent();
         } catch (Exception e) {
-             System.err.println("Ollama Chat Error: " + e.getMessage());
-             e.printStackTrace();
+             logError("Ollama Chat Error: " + e.getMessage(), e);
              return "";
         }
     }
@@ -632,8 +1215,7 @@ public class LLMUtil {
 
              return chatResult;
         } catch (Exception e) {
-             System.err.println("Ollama Streaming Chat Error: " + e.getMessage());
-             e.printStackTrace();
+             logError("Ollama Streaming Chat Error: " + e.getMessage(), e);
              return null;
         }
     }
@@ -699,7 +1281,7 @@ public class LLMUtil {
                         }
                         images.add(imageBytes);
                     } catch (IOException e) {
-                        System.err.println("Failed to read image: " + src + ", error: " + e.getMessage());
+                        logWarn("Failed to read image: " + src + ", error: " + e.getMessage());
                         // Continue to next image or return error? 
                         // Current logic: ignore failed image
                     }
@@ -729,8 +1311,7 @@ public class LLMUtil {
             OllamaChatResult chatResult = ollamaAPI.chat(request);
             return chatResult;
         } catch (Exception e) {
-             System.err.println("Ollama Image Chat Error: " + e.getMessage());
-             e.printStackTrace();
+             logError("Ollama Image Chat Error: " + e.getMessage(), e);
              return null;
         }
     }
@@ -738,127 +1319,90 @@ public class LLMUtil {
     // --- Minimax ---
 
     public static String chatWithMinimax(String prompt) {
-        String apiKey = AppConfig.getInstance().getMinimaxApiKey();
-        if (apiKey == null || apiKey.trim().isEmpty()) {
-            System.err.println("Minimax API Key is missing!");
-            return "";
-        }
-
-        try {
-            java.util.Map<String, Object> message = new java.util.HashMap<>();
-            message.put("role", "user");
-            message.put("content", prompt);
-
-            java.util.Map<String, Object> payload = new java.util.HashMap<>();
-            payload.put("model", "MiniMax-M2.1");
-            payload.put("messages", java.util.List.of(message));
-            payload.put("stream", false);
-
-            java.util.Map<String, Object> extraBody = new java.util.HashMap<>();
-            extraBody.put("reasoning_split", Boolean.TRUE);
-            payload.put("extra_body", extraBody);
-
-            String jsonBody = com.alibaba.fastjson2.JSON.toJSONString(payload);
-
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create("https://api.minimaxi.com/v1/chat/completions"))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .build();
-
-            java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() == 200) {
-                com.alibaba.fastjson2.JSONObject jsonResponse = com.alibaba.fastjson2.JSON.parseObject(response.body());
-                if (jsonResponse.containsKey("choices")) {
-                    String content = jsonResponse.getJSONArray("choices")
-                            .getJSONObject(0)
-                            .getJSONObject("message")
-                            .getString("content");
-                    if (content != null) {
-                        content = content.replaceAll("(?s)<think>.*?</think>", "").trim();
-                    }
-                    return content;
-                }
-            } else {
-                System.err.println("Minimax API Error: " + response.statusCode() + " - " + response.body());
-            }
-        } catch (Exception e) {
-            System.err.println("Minimax Chat Exception: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return "";
+        return chatResult(prompt, ModelType.MINIMAX).getText();
     }
 
     // --- Zhipu GLM ---
 
     public static String chatWithGLM(String prompt) {
-        String apiKey = AppConfig.getInstance().getGlmApiKey();
-        if (apiKey == null || apiKey.trim().isEmpty()) {
-            System.err.println("GLM API Key is missing!");
-            return "";
+        return chatResult(prompt, ModelType.GLM).getText();
+    }
+
+    private static String normalizeThinkingType(String thinkingRaw) {
+        String thinkingNorm = thinkingRaw == null ? "" : thinkingRaw.trim().toLowerCase();
+        if (thinkingNorm.isEmpty()) return "disabled";
+        if ("enabled".equals(thinkingNorm) || "enable".equals(thinkingNorm) || "true".equals(thinkingNorm) || "1".equals(thinkingNorm) || "on".equals(thinkingNorm)) {
+            return "enabled";
         }
+        if ("disabled".equals(thinkingNorm) || "disable".equals(thinkingNorm) || "false".equals(thinkingNorm) || "0".equals(thinkingNorm) || "off".equals(thinkingNorm)) {
+            return "disabled";
+        }
+        return "disabled";
+    }
 
-        try {
-            String thinkingRaw = AppConfig.getInstance().getGlmThinking();
-            String thinkingNorm = thinkingRaw == null ? "" : thinkingRaw.trim().toLowerCase();
-            String thinkingType;
-            if (thinkingNorm.isEmpty()) {
-                thinkingType = "disabled";
-            } else if ("enabled".equals(thinkingNorm) || "enable".equals(thinkingNorm) || "true".equals(thinkingNorm) || "1".equals(thinkingNorm) || "on".equals(thinkingNorm)) {
-                thinkingType = "enabled";
-            } else if ("disabled".equals(thinkingNorm) || "disable".equals(thinkingNorm) || "false".equals(thinkingNorm) || "0".equals(thinkingNorm) || "off".equals(thinkingNorm)) {
-                thinkingType = "disabled";
-            } else {
-                thinkingType = "disabled";
-            }
-            java.util.Map<String, Object> message = new java.util.HashMap<>();
-            message.put("role", "user");
-            message.put("content", prompt);
+    private static LLMResult postOpenAiLikeChatCompletionResult(String url, String apiKey, Map<String, Object> payload, ModelType modelType, String providerName) throws Exception {
+        String jsonBody = com.alibaba.fastjson2.JSON.toJSONString(payload);
+        int attempts = Math.max(1, LLMSettings.HTTP_RETRY_MAX_ATTEMPTS);
 
-            java.util.Map<String, Object> payload = new java.util.HashMap<>();
-            payload.put("model", "glm-4.6");
-            payload.put("messages", java.util.List.of(message));
-            payload.put("stream", false);
-            java.util.Map<String, Object> thinking = new java.util.HashMap<>();
-            thinking.put("type", thinkingType);
-            payload.put("thinking", thinking);
-
-            String jsonBody = com.alibaba.fastjson2.JSON.toJSONString(payload);
-
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create("https://open.bigmodel.cn/api/paas/v4/chat/completions"))
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(LLMSettings.HTTP_REQUEST_TIMEOUT_SECONDS))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey)
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .build();
 
-            java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                com.alibaba.fastjson2.JSONObject jsonResponse = com.alibaba.fastjson2.JSON.parseObject(response.body());
-                if (jsonResponse.containsKey("choices")) {
-                    com.alibaba.fastjson2.JSONArray choices = jsonResponse.getJSONArray("choices");
+            try {
+                HttpResponse<String> response = SHARED_HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+                int code = response.statusCode();
+                if (code >= 200 && code < 300) {
+                    com.alibaba.fastjson2.JSONObject json = com.alibaba.fastjson2.JSON.parseObject(response.body());
+                    com.alibaba.fastjson2.JSONArray choices = json.getJSONArray("choices");
+                    String content = "";
                     if (choices != null && !choices.isEmpty()) {
-                        String content = choices.getJSONObject(0)
-                                .getJSONObject("message")
-                                .getString("content");
-                        if (content != null) {
-                            content = content.replaceAll("(?s)<think>.*?</think>", "").trim();
+                        com.alibaba.fastjson2.JSONObject first = choices.getJSONObject(0);
+                        com.alibaba.fastjson2.JSONObject msg = first.getJSONObject("message");
+                        if (msg != null) {
+                            String c = msg.getString("content");
+                            content = c == null ? "" : c;
                         }
-                        return content;
                     }
+
+                    Map<String, Object> usage = null;
+                    com.alibaba.fastjson2.JSONObject usageObj = json.getJSONObject("usage");
+                    if (usageObj != null) {
+                        usage = usageObj.toJavaObject(Map.class);
+                    }
+
+                    return LLMResult.ok(content, modelType, providerName, usage);
                 }
-            } else {
-                System.err.println("GLM API Error: " + response.statusCode() + " - " + response.body());
+
+                boolean retryable = code == 408 || code == 409 || code == 425 || code == 429 || (code >= 500 && code <= 599);
+                if (!retryable || attempt == attempts) {
+                    String err = "HTTP " + code + " - " + response.body();
+                    logError("LLM HTTP Error: " + err, null);
+                    return LLMResult.fail(modelType, providerName, err);
+                }
+            } catch (IOException e) {
+                if (attempt == attempts) throw e;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
             }
-        } catch (Exception e) {
-            System.err.println("GLM Chat Exception: " + e.getMessage());
-            e.printStackTrace();
+
+            try {
+                Thread.sleep(LLMSettings.HTTP_RETRY_BACKOFF_MILLIS * attempt);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
         }
-        return "";
+        return LLMResult.fail(modelType, providerName, "Unknown error");
+    }
+
+    private static String postOpenAiLikeChatCompletion(String url, String apiKey, Map<String, Object> payload) throws Exception {
+        LLMResult res = postOpenAiLikeChatCompletionResult(url, apiKey, payload, ModelType.ALL, "OpenAiLike");
+        return res == null ? "" : res.getText();
     }
 }

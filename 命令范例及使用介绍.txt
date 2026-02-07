@@ -1,20 +1,35 @@
+如果要看项目架构介绍：
+请直接查看 PROJECT_STRUCTURE.md
+
 使用介绍：
-1.src/main/resources/podcast.cfg 是系统启动的基础配置，由于涉及到比较敏感的信息，因此只上传了一个podcast_bck.cfg的空配置文件，具体要配置，可以找我
-2.配置完以后，可以通过两种方式来体验自然语言的执行，或者调试：
-  ConsoleAgent.java 可以通过命令行启动，然后直接在命令行里面输入一些命令。
-  DingTalkAgent.java 通过钉钉和Agent交互：
-  a.在（ConsoleAgent）模式下，输入“查一下xxx的uid”，会的到“姓名: 岑文初, UserId: manager6339, 部门: 根部门”
-  b.将 UserId后面的信息，填入到podcast.admin.users=  后面。
-  c.启动 DingTalkAgent将会收到一条机器人的消息，然后就可以对话互动了。
+1.src/main/resources/podcast.cfg 是系统启动的基础配置（classpath 读取）。
+  由于涉及敏感信息，仓库只提供了模板文件：src/main/resources/podcast_bck.cfg
+  使用时请自行复制一份为 podcast.cfg，并补全必要配置（LLM、钉钉、富途等）。
+2.系统支持两种指令输入方式：
+  A.自然语言模式：需要“大模型可用”（配置任意远程 LLM Key，或本机启动 Ollama）。
+  B.直连模式：不依赖大模型，直接输入 toolName key=value（适合调试与开发）。
+3.配置完以后，可以通过两种方式来体验/调试：
+  ConsoleAgent.java：命令行启动，在终端输入指令。
+  DingTalkAgent.java：通过钉钉与 Agent 交互。
+  a.在 ConsoleAgent 下，先启动钉钉组件：start_component id=dingtalk
+  b.查询管理员 UserId（自然语言或直连均可）：
+     - 自然语言：查一下xxx的uid
+     - 直连模式：SearchDingTalkUserTool name="xxx"
+     得到类似输出：姓名: 岑文初, UserId: manager6339, 部门: 根部门
+  c.将 UserId 填入 podcast.cfg 的 podcast.admin.users=...（逗号分隔）
+  d.启动 DingTalkAgent 后将收到一条机器人的消息，然后就可以对话互动了。
 
 3.保留了一个helloworld的Tools，初期使用和测试，可以通过这个类的修改和调试，来熟悉整个系统架构。
-   在tools/example/HelloWorldTool.java  如果配置了deepseek，就可以使用大模型模式的语言解析，否则只能用参数调用
+   文件位置：src/main/java/com/qiyi/tools/example/HelloWorldTool.java
+   工具名：hello_world
+   - 自然语言模式：由大模型进行工具选择与参数抽取（远程 Key 或 Ollama 可用时）
+   - 直连模式：hello_world name="WorkAgents"
 
 注意：
-  1.钉钉相关接口，两种模式下都能使用。
+  1.钉钉相关接口，两种模式下都能使用；但需先启动组件：start_component id=dingtalk
   2.erp相关操作，需要登陆erp。
   3.播客和微信公众号，需要有对应的账号登陆。
-  4.股票的查询，需要有本地股票的网关启动才可以用。
+  4.股票的查询，需要本地启动富途 OpenD，并启动组件：start_component id=futu
   5.移动端的测试，需要pc上启动appium服务端，然后有一台android手机测试状态连接电脑，且手机上有淘宝app。
 
   当然，自己可以尝试创建自己简单的tools，也就是自己可以让 ai 来分析项目，帮你生成一个你想要的tools，
@@ -41,3 +56,11 @@
 先帮我下载最新的播客，更新数量限制在2条以内，然后再发布微信公众号，最后把结果告诉小文
 
 关闭机器人服务
+
+直连模式范例（不依赖大模型）：
+hello_world name="WorkAgents"
+list_capabilities
+list_components
+start_component id=dingtalk
+SearchDingTalkUserTool name="岑文初"
+shutdown_agent

@@ -4,8 +4,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotCommon;
 import com.futu.openapi.pb.QotGetUserSecurity;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -22,6 +23,9 @@ public class GetUserSecurityToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private FutuOpenD futuOpenD;
 
@@ -46,7 +50,7 @@ public class GetUserSecurityToolTest {
     @Test
     public void testExecuteMissingGroupName() {
         JSONObject params = new JSONObject();
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("Error: groupName is required", result);
     }
 
@@ -85,7 +89,7 @@ public class GetUserSecurityToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetUserSecurity.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("HK.00700"));
         assertTrue(result.contains("Tencent"));
@@ -104,7 +108,7 @@ public class GetUserSecurityToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetUserSecurity.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("获取自选股列表失败: Security failed", result);
     }
 }

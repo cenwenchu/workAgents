@@ -3,6 +3,7 @@ package com.qiyi.tools.example;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 
 /**
  * HelloWorld 工具
@@ -24,7 +25,7 @@ public class HelloWorldTool implements Tool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         // 1. 获取参数
         // 假设用户输入： hello_world name="WorkAgents"
         String name = null;
@@ -37,10 +38,10 @@ public class HelloWorldTool implements Tool {
         }
 
         // 2. 发送简单文本消息
-        // context.sendText() 会根据运行环境（控制台或钉钉）自动路由消息
+        // messenger.sendText() 会根据运行环境（控制台或钉钉）自动路由消息
         // 这是最基础的交互方式
         String welcomeMsg = "Hello, " + name + "! 欢迎来到 WorkAgents 世界。";
-        context.sendText(welcomeMsg);
+        if (messenger != null) messenger.sendText(welcomeMsg);
 
         // 3. 演示如何进行更复杂的业务逻辑
         // 这里通过发送一段教学文本，指导开发者如何利用系统能力
@@ -52,8 +53,8 @@ public class HelloWorldTool implements Tool {
         guide.append("   在 ToolManager 中注册参数中文名，可以让 LLM 更准确地提取参数。\n\n");
         
         guide.append("2. **发送多种消息**:\n");
-        guide.append("   `context.sendText(\"文本\");`\n");
-        guide.append("   `context.sendImage(\"图片URL\");`\n");
+        guide.append("   `messenger.sendText(\"文本\");`\n");
+        guide.append("   `messenger.sendImage(\"图片URL\");`\n");
         guide.append("   // 钉钉环境下还支持 Markdown, Link 等丰富格式\n\n");
         
         guide.append("3. **调用大模型 (LLM)**:\n");
@@ -62,7 +63,7 @@ public class HelloWorldTool implements Tool {
         guide.append("   List<Message> msgs = new ArrayList<>();\n");
         guide.append("   msgs.add(UserMessage.builder().addText(\"你的提示词\").build());\n");
         guide.append("   String reply = LLMUtil.chatWithDeepSeek(msgs, false);\n");
-        guide.append("   context.sendText(\"AI回复: \" + reply);\n");
+        guide.append("   messenger.sendText(\"AI回复: \" + reply);\n");
         guide.append("   ```\n\n");
 
         guide.append("4. **集成业务系统**:\n");
@@ -70,7 +71,7 @@ public class HelloWorldTool implements Tool {
         
         guide.append("\n现在，尝试修改这个文件，打印一句属于您自己的问候语吧！");
 
-        context.sendText(guide.toString());
+        if (messenger != null) messenger.sendText(guide.toString());
 
         return "执行完成: " + welcomeMsg;
     }

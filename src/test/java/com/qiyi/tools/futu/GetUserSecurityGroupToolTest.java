@@ -3,8 +3,9 @@ package com.qiyi.tools.futu;
 import com.alibaba.fastjson2.JSONObject;
 import com.futu.openapi.FTAPI_Conn_Qot;
 import com.futu.openapi.pb.QotGetUserSecurityGroup;
-import com.qiyi.futu.FutuOpenD;
+import com.qiyi.service.futu.FutuOpenD;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -21,6 +22,9 @@ public class GetUserSecurityGroupToolTest {
     @Mock
     private ToolContext context;
     
+    @Mock
+    private ToolMessenger messenger;
+
     @Mock
     private FutuOpenD futuOpenD;
 
@@ -63,7 +67,7 @@ public class GetUserSecurityGroupToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetUserSecurityGroup.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
 
         assertTrue(result.contains("MyGroup"));
         assertTrue(result.contains("类型: " + QotGetUserSecurityGroup.GroupType.GroupType_Custom_VALUE));
@@ -81,7 +85,7 @@ public class GetUserSecurityGroupToolTest {
         when(futuOpenD.sendQotRequest(anyInt(), eq(QotGetUserSecurityGroup.Response.class)))
                 .thenReturn(response);
 
-        String result = tool.execute(params, context);
+        String result = tool.execute(params, context, messenger);
         assertEquals("获取自选股分组失败: Group failed", result);
     }
 }

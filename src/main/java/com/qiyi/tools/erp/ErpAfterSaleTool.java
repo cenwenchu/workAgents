@@ -10,7 +10,9 @@ import com.microsoft.playwright.APIRequestContext;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
+import com.qiyi.util.AppLog;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -50,23 +52,19 @@ public class ErpAfterSaleTool extends ErpBaseTool {
     }
 
     @Override
-    public String execute(JSONObject params, ToolContext context) {
+    public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         if (!TOOL_LOCK.tryLock()) {
-            try {
-                context.sendText("ERP查询任务正在执行中，请稍后再试。");
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            sendTextSafe(messenger, "ERP查询任务正在执行中，请稍后再试。");
             return "Error: Task locked";
         }
 
         PlayWrightUtil.Connection connection = null;
         try {
-            context.sendText("开始执行ERP售后预警查询任务...");
+            sendTextSafe(messenger, "开始执行ERP售后预警查询任务...");
 
             connection = connectToBrowser();
             if (connection == null) {
-                context.sendText("无法连接到浏览器，任务终止");
+                sendTextSafe(messenger, "无法连接到浏览器，任务终止");
                 return "Error: Browser connection failed";
             }
 
@@ -80,24 +78,20 @@ public class ErpAfterSaleTool extends ErpBaseTool {
             Page page = browserContext.newPage();
             try {
                 // 1. Check Login
-                if (!ensureLogin(page, PAGE_URL, context)) {
+                if (!ensureLogin(page, PAGE_URL, messenger)) {
                     return "Error: Login failed";
                 }
 
                 // 2. Fetch Data
-                return fetchData(page, context);
+                return fetchData(page, messenger);
 
             } finally {
                 page.close();
             }
 
         } catch (Exception e) {
-            e.printStackTrace();
-            try {
-                context.sendText("任务执行异常: " + e.getMessage());
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+            AppLog.error(e);
+            sendTextSafe(messenger, "任务执行异常: " + e.getMessage());
             return "Error: " + e.getMessage();
         } finally {
             disconnectBrowser(connection);
@@ -105,7 +99,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
         }
     }
 
-    private String fetchData(Page page, ToolContext context) {
+    private String fetchData(Page page, ToolMessenger messenger) {
         try {
             // Capture the real API request to get the URL and Template Payload
             // We reload the page to trigger the request
@@ -126,7 +120,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                     page.reload();
                 });
             } catch (Exception e) {
-                System.out.println("Wait for request timeout or failed: " + e.getMessage());
+                AppLog.info("Wait for request timeout or failed: " + e.getMessage());
             }
 
             String apiUrl = API_URL;
@@ -149,7 +143,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                 }
             } else {
                 // Fallback if capture failed
-                System.out.println("Could not capture API request, using default URL and payload.");
+                AppLog.info("Could not capture API request, using default URL and payload.");
                 apiUrl = API_URL;
                 payload = createDefaultPayload();
             }
@@ -161,7 +155,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
             APIRequestContext requestContext = page.context().request();
             RequestOptions options = createApiRequestOptions(page, payload, PAGE_URL);
 
-            System.out.println("Sending request to: " + apiUrl);
+            AppLog.info("Sending request to: " + apiUrl);
             APIResponse response = requestContext.post(apiUrl, options);
             
             int status = response.status();
@@ -174,10 +168,10 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                 return "Error: Non-JSON response (Status " + status + ")";
             }
 
-            return handleApiResponse(context, status, bodyJson);
+            return handleApiResponse(messenger, status, bodyJson);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return "Error: " + e.getMessage();
         }
     }
@@ -229,11 +223,11 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Failed to update payload time: " + e.getMessage());
+            AppLog.error("Failed to update payload time: " + e.getMessage());
         }
     }
 
-    private String handleApiResponse(ToolContext context, int status, JSONObject bodyJson) {
+    private String handleApiResponse(ToolMessenger messenger, int status, JSONObject bodyJson) {
         try {
             if (status == 200) {
                 boolean success = bodyJson.getBooleanValue("success");
@@ -245,7 +239,7 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                         if (data instanceof JSONArray) {
                             JSONArray dataArray = (JSONArray) data;
                             if (dataArray.isEmpty()) {
-                                context.sendText("查询成功，但今日无售后预警数据。");
+                                sendTextSafe(messenger, "查询成功，但今日无售后预警数据。");
                                 return "No data found";
                             }
                             
@@ -259,25 +253,33 @@ public class ErpAfterSaleTool extends ErpBaseTool {
                         }
 
                         String finalOutput = resultBuilder.toString();
-                        context.sendText("ERP售后预警查询结果:\n" + finalOutput);
+                        sendTextSafe(messenger, "ERP售后预警查询结果:\n" + finalOutput);
                         return finalOutput;
 
                     } else {
-                        context.sendText("查询成功，但返回数据为空。");
+                        sendTextSafe(messenger, "查询成功，但返回数据为空。");
                         return "Data is null";
                     }
                 } else {
                     String msg = bodyJson.getString("message");
-                    context.sendText("查询失败: " + msg);
+                    sendTextSafe(messenger, "查询失败: " + msg);
                     return "Error: " + msg;
                 }
             } else {
-                context.sendText("接口调用失败 (Status " + status + ")");
+                sendTextSafe(messenger, "接口调用失败 (Status " + status + ")");
                 return "Error: Status " + status;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return "Error processing response: " + e.getMessage();
+        }
+    }
+
+    private void sendTextSafe(ToolMessenger messenger, String content) {
+        if (messenger == null) return;
+        try {
+            messenger.sendText(content);
+        } catch (Exception ignored) {
         }
     }
 

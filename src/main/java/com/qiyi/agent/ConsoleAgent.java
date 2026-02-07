@@ -1,130 +1,128 @@
 package com.qiyi.agent;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
-import com.qiyi.tools.Tool;
-import com.qiyi.tools.ToolRegistry;
+import com.qiyi.tools.TaskProcessor;
+import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
+import com.qiyi.tools.context.ConsoleToolContext;
+import com.qiyi.util.AppLog;
 
+import java.io.File;
+import java.util.Collections;
+import java.util.List;
 import java.util.Scanner;
 
 /**
  * 命令行工具测试代理
  * 用于在不启动 DingTalkAgent 的情况下，直接测试各个 Tool 的功能。
  */
-public class ConsoleAgent {
+public class ConsoleAgent extends AbstractAgent {
+    private final ToolContext context;
 
     public static void main(String[] args) {
-        // 初始化工具管理器
+        new ConsoleAgent().start();
+    }
+
+    public ConsoleAgent() {
+        this.context = new ConsoleToolContext();
+    }
+
+    @Override
+    protected void doStart() {
         com.qiyi.tools.ToolManager.init();
-        // 确保 DingTalkUtil 配置也加载（如果工具依赖它）
-        // 但为了剥离，我们尽量减少显式依赖，除非必要
-        try {
-             // 某些工具可能仍依赖 DingTalkUtil 的静态配置（如 SendMessageTool）
-             Class.forName("com.qiyi.util.DingTalkUtil");
-        } catch (ClassNotFoundException ignored) {}
-        
-        System.out.println("环境初始化完成。");
+        AppLog.info("环境初始化完成。");
 
         Scanner scanner = new Scanner(System.in);
-        System.out.println("==========================================");
-        System.out.println("欢迎使用 ConsoleAgent 工具测试控制台");
-        System.out.println("此工具允许您直接调用已注册的 Tool 进行测试，无需通过钉钉交互。");
-        System.out.println("输入 'help' 查看可用命令");
-        System.out.println("==========================================");
+        AppLog.info("==========================================");
+        AppLog.info("欢迎使用 ConsoleAgent");
+        AppLog.info("直接输入自然语言指令进行聊天，输入 exit/quit 退出");
+        AppLog.info("==========================================");
 
-        while (true) {
-            System.out.print("ConsoleAgent> ");
+        while (isRunning()) {
+            AppLog.info("ConsoleAgent> ");
             if (!scanner.hasNextLine()) break;
-            String line = scanner.nextLine().trim();
+            String line = scanner.nextLine();
+            if (line == null) continue;
+            line = line.trim();
             if (line.isEmpty()) continue;
-
-            String[] parts = line.split("\\s+", 2);
-            String command = parts[0].toLowerCase();
-            String argsStr = parts.length > 1 ? parts[1] : "";
-
+            if ("exit".equalsIgnoreCase(line) || "quit".equalsIgnoreCase(line)) {
+                AppLog.info("再见！");
+                stop();
+                break;
+            }
             try {
-                switch (command) {
-                    case "exit":
-                    case "quit":
-                        System.out.println("再见！");
-                        // System.exit(0);
-                        return;
-                    case "help":
-                        printHelp();
-                        break;
-                    case "list":
-                        listTools();
-                        break;
-                    case "exec":
-                        executeTool(argsStr);
-                        break;
-                    case "chat":
-                        if (parts.length > 1) {
-                            com.qiyi.tools.ToolManager.analyzeAndExecute(parts[1], new com.qiyi.tools.context.ConsoleToolContext());
-                        } else {
-                            System.out.println("请输入聊天内容。");
-                        }
-                        break;
-                    default:
-                        // 直接作为自然语言处理
-                        com.qiyi.tools.ToolManager.analyzeAndExecute(line, new com.qiyi.tools.context.ConsoleToolContext());
-                }
+                chat(line);
             } catch (Exception e) {
-                System.err.println("执行出错: " + e.getMessage());
-                e.printStackTrace();
+                AppLog.error("执行出错: " + e.getMessage());
+                AppLog.error(e);
             }
         }
+        scanner.close();
     }
 
-    private static void printHelp() {
-        System.out.println("可用命令:");
-        System.out.println("  list                       列出所有已注册的工具");
-        System.out.println("  exec <tool_name> [json]    执行指定工具");
-        System.out.println("                             示例: exec list_capabilities");
-        System.out.println("                             示例: exec search_keyword {\"keyword\":\"iPhone\"}");
-        System.out.println("  chat <text>                (可选) 模拟用户聊天/指令");
-        System.out.println("  <text>                     直接输入文本进行对话或指令");
-        System.out.println("                             示例: 帮我查一下茅台股价");
-        System.out.println("  exit / quit                退出程序");
+    @Override
+    public String chat(String userInput) {
+        if (userInput == null) return "";
+        String input = userInput.trim();
+        if (input.isEmpty()) return "";
+        CapturingMessenger messenger = new CapturingMessenger();
+        TaskProcessor.process(input, context, messenger);
+        return messenger.getCaptured();
     }
 
-    private static void listTools() {
-        System.out.println("已注册工具列表 (" + ToolRegistry.getAll().size() + "):");
-        for (Tool tool : ToolRegistry.getAll()) {
-            System.out.printf("- %-25s : %s%n", tool.getName(), tool.getDescription());
-        }
-    }
+    private static final class CapturingMessenger implements ToolMessenger {
+        private final StringBuilder captured = new StringBuilder();
+        private List<String> mentionedUserIds = Collections.emptyList();
 
-    private static void executeTool(String argsStr) {
-        String[] parts = argsStr.split("\\s+", 2);
-        if (parts.length < 1 || parts[0].isEmpty()) {
-            System.out.println("参数错误。用法: exec <tool_name> [json_params]");
-            return;
-        }
-        String toolName = parts[0];
-        String jsonParams = parts.length > 1 ? parts[1] : "{}";
-
-        if (!ToolRegistry.contains(toolName)) {
-            System.out.println("错误: 找不到工具 '" + toolName + "'");
-            return;
+        @Override
+        public List<String> getMentionedUserIds() {
+            return mentionedUserIds;
         }
 
-        Tool tool = ToolRegistry.get(toolName);
-        try {
-            JSONObject params = JSON.parseObject(jsonParams);
-            System.out.println(">> 正在执行工具: " + toolName);
-            System.out.println(">> 参数: " + params.toJSONString());
-            
-            long startTime = System.currentTimeMillis();
-            // 模拟 senderId 和 atUserIds
-            String result = tool.execute(params, new com.qiyi.tools.context.ConsoleToolContext());
-            long endTime = System.currentTimeMillis();
-            
-            System.out.println(">> 执行结果 (耗时 " + (endTime - startTime) + "ms):");
-            System.out.println(result);
-        } catch (Exception e) {
-            System.out.println("参数解析失败或执行异常: " + e.getMessage());
-            e.printStackTrace();
+        @Override
+        public ToolMessenger withMentionedUserIds(List<String> mentionedUserIds) {
+            this.mentionedUserIds = mentionedUserIds == null ? Collections.emptyList() : mentionedUserIds;
+            return this;
+        }
+
+        @Override
+        public void sendText(String content) {
+            if (content != null) {
+                captured.append(content).append("\n");
+            }
+            AppLog.info("[ConsoleAgent] Text: " + content);
+        }
+
+        @Override
+        public void sendMarkdown(String title, String content) {
+            if (title != null) {
+                captured.append(title).append("\n");
+            }
+            if (content != null) {
+                captured.append(content).append("\n");
+            }
+            AppLog.info("[ConsoleAgent] Markdown Title: " + title);
+            AppLog.info("[ConsoleAgent] Content: \n" + content);
+        }
+
+        @Override
+        public void sendImage(String imageUrl) {
+            if (imageUrl != null) {
+                captured.append(imageUrl).append("\n");
+            }
+            AppLog.info("[ConsoleAgent] Image: " + imageUrl);
+        }
+
+        @Override
+        public void sendImage(File imageFile) {
+            String path = imageFile == null ? null : imageFile.getAbsolutePath();
+            if (path != null) {
+                captured.append(path).append("\n");
+            }
+            AppLog.info("[ConsoleAgent] Local Image: " + path);
+        }
+
+        public String getCaptured() {
+            return captured.toString().trim();
         }
     }
 }

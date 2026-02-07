@@ -1,7 +1,5 @@
 package com.qiyi.util;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.dingtalk.api.DefaultDingTalkClient;
 import com.dingtalk.api.DingTalkClient;
 import com.dingtalk.api.request.OapiRobotSendRequest;
@@ -12,13 +10,12 @@ import com.dingtalk.api.response.OapiUserListsimpleResponse;
 import com.dingtalk.api.response.OapiV2DepartmentListsubResponse;
 import com.dingtalk.open.app.api.OpenDingTalkClient;
 import com.dingtalk.open.app.api.OpenDingTalkStreamClientBuilder;
-import com.dingtalk.open.app.api.callback.OpenDingTalkCallbackListener;
 import com.dingtalk.open.app.api.security.AuthClientCredential;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.binary.Base64;
-import com.qiyi.dingtalk.DingTalkDepartment;
-import com.qiyi.dingtalk.DingTalkUser;
+import com.qiyi.service.dingtalk.DingTalkDepartment;
+import com.qiyi.service.dingtalk.DingTalkUser;
 import com.taobao.api.FileItem;
 import com.aliyun.dingtalkoauth2_1_0.models.GetAccessTokenResponse;
 import com.aliyun.dingtalkrobot_1_0.models.*;
@@ -30,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -38,7 +36,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 import com.aliyun.teaopenapi.models.Config;
 import com.aliyun.teautil.models.RuntimeOptions;
-import com.qiyi.tools.ToolManager;
+import com.qiyi.config.AppConfig;
 
 /**
  * 钉钉工具类
@@ -55,6 +53,27 @@ import com.qiyi.tools.ToolManager;
  */
 public class DingTalkUtil {
 
+    public static class DingTalkSettings {
+        public static String OAPI_BASE_URL = "https://oapi.dingtalk.com";
+        public static String STREAM_CALLBACK_PATH = "/v1.0/im/bot/messages/get";
+        public static String DEFAULT_PROTOCOL = "https";
+        public static String DEFAULT_REGION_ID = "central";
+        public static String DEFAULT_LANGUAGE = "zh_CN";
+        public static String DEFAULT_TIME_ZONE = "Asia/Shanghai";
+        public static String DEFAULT_CALENDAR_ID = "primary";
+        public static String ACCESS_TOKEN_CACHE_KEY_PREFIX = "dingtalk_access_token_";
+        public static long ACCESS_TOKEN_CACHE_SECONDS = 3600;
+        public static long PAGINATION_THROTTLE_MILLIS = 200;
+        public static int USER_LIST_PAGE_SIZE = 30;
+        public static String USER_LIST_ORDER_FIELD = "modify_desc";
+        public static String DEPARTMENTS_CACHE_KEY_PREFIX = "dingtalk_departments_v2_";
+        public static String CONTACTS_FILE_CACHE_PREFIX = "dingtalk_contacts_cache_";
+        public static String CONTACTS_FILE_CACHE_SUFFIX = ".json";
+        public static long DEPARTMENT_FILE_REFRESH_THRESHOLD_MILLIS = 24L * 3600 * 1000;
+        public static long DEPARTMENT_MEMORY_CACHE_SECONDS = 30L * 60;
+        public static String ROOT_DEPARTMENT_ID = "1";
+    }
+
     // 机器人配置信息（从配置文件加载）
     private static String ROBOT_TOKEN = "";
     private static String ROBOT_SECRET = "";
@@ -66,62 +85,52 @@ public class DingTalkUtil {
     public static Long AGENT_ID = 0L; // AgentId 用于发送工作通知（如本地图片）
     public static List<String> PODCAST_ADMIN_USERS = new ArrayList<>();
 
-    static {
-        initClientConfig();
-    }
+    private static final AtomicBoolean CONFIG_INITIALIZED = new AtomicBoolean(false);
 
-    /**
-     * 显示调用关闭函数
-     * @deprecated 请使用 ToolManager.analyzeAndExecute
-     */
-    @Deprecated
-    private static void analyzeAndExecute(String text, String senderId, List<String> atUserIds) {
-         ToolManager.analyzeAndExecute(text, new com.qiyi.tools.context.DingTalkToolContext(senderId, atUserIds));
-    }
-    
     public static synchronized void initClientConfig() {
-        java.util.Properties props = new java.util.Properties();
-        try (java.io.InputStream input = DingTalkUtil.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
-            if (input == null) {
-                System.out.println("配置文件 podcast.cfg 未找到");
-            } else {
-                props.load(input);
+        AppConfig config = AppConfig.getInstance();
+
+        String robotToken = config.getProperty(AppConfig.KEY_DINGTALK_TOKEN);
+        if (robotToken != null) ROBOT_TOKEN = robotToken;
+
+        String robotSecret = config.getProperty(AppConfig.KEY_DINGTALK_SECRET);
+        if (robotSecret != null) ROBOT_SECRET = robotSecret;
+
+        String robotClientId = config.getProperty(AppConfig.KEY_DINGTALK_CLIENT_ID);
+        if (robotClientId != null) ROBOT_CLIENT_ID = robotClientId;
+
+        String robotClientSecret = config.getProperty(AppConfig.KEY_DINGTALK_CLIENT_SECRET);
+        if (robotClientSecret != null) ROBOT_CLIENT_SECRET = robotClientSecret;
+
+        String robotCode = config.getProperty(AppConfig.KEY_DINGTALK_CODE);
+        if (robotCode != null) ROBOT_CODE = robotCode;
+
+        String agentIdStr = config.getProperty(AppConfig.KEY_DINGTALK_AGENT_ID);
+        if (agentIdStr != null && !agentIdStr.isEmpty()) {
+            try {
+                AGENT_ID = Long.parseLong(agentIdStr);
+            } catch (NumberFormatException e) {
+                AppLog.error("Invalid dingtalk.agent.id format");
             }
-        } catch (java.io.IOException ex) {
-            System.out.println("加载配置文件失败: " + ex.getMessage());
-            ex.printStackTrace();
         }
 
-        if (props.containsKey("dingtalk.robot.token")) {
-            ROBOT_TOKEN = props.getProperty("dingtalk.robot.token");
+        String users = config.getProperty(AppConfig.KEY_ADMIN_USERS);
+        if (users != null && !users.isEmpty()) {
+            List<String> parsed = Arrays.stream(users.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.toList());
+            PODCAST_ADMIN_USERS = parsed;
+        } else {
+            PODCAST_ADMIN_USERS = Collections.emptyList();
         }
-        if (props.containsKey("dingtalk.robot.secret")) {
-            ROBOT_SECRET = props.getProperty("dingtalk.robot.secret");
-        }
-        if (props.containsKey("dingtalk.robot.client.id")) {
-            ROBOT_CLIENT_ID = props.getProperty("dingtalk.robot.client.id");
-        }
-        if (props.containsKey("dingtalk.robot.client.secret")) {
-            ROBOT_CLIENT_SECRET = props.getProperty("dingtalk.robot.client.secret");
-        }
-        if (props.containsKey("dingtalk.robot.code")) {
-            ROBOT_CODE = props.getProperty("dingtalk.robot.code");
-        }
-        
-        if (props.containsKey("dingtalk.agent.id")) {
-            try {
-                AGENT_ID = Long.parseLong(props.getProperty("dingtalk.agent.id"));
-            } catch (NumberFormatException e) {
-                System.err.println("Invalid dingtalk.agent.id format");
-            }
-        }
-        
-        if (props.containsKey("podcast.admin.users")) {
-            String users = props.getProperty("podcast.admin.users");
-            if (users != null && !users.isEmpty()) {
-                PODCAST_ADMIN_USERS = Arrays.asList(users.split(","));
-            }
-        }
+
+        CONFIG_INITIALIZED.set(true);
+    }
+
+    private static void ensureConfigInitialized() {
+        if (CONFIG_INITIALIZED.get()) return;
+        initClientConfig();
     }
 
 
@@ -133,6 +142,7 @@ public class DingTalkUtil {
     //启动监听机器人消息回调本地线程，搭配RobotMsgCallbackConsumer来使用
     //注意：这里是阻塞线程，需要在单独的线程中调用
     public static synchronized void startRobotMsgCallbackConsumer() {
+        ensureConfigInitialized();
         startRobotMsgCallbackConsumer(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
     }
 
@@ -147,7 +157,7 @@ public class DingTalkUtil {
         final String finalClientSecret = clientSecret;
 
         if (streamClient != null) {
-            System.out.println("Robot callback consumer is already running.");
+            AppLog.info("Robot callback consumer is already running.");
             return;
         }
 
@@ -159,15 +169,15 @@ public class DingTalkUtil {
                 OpenDingTalkClient client = OpenDingTalkStreamClientBuilder
                         .custom()
                         .credential(new AuthClientCredential(finalClientId, finalClientSecret))
-                        .registerCallbackListener("/v1.0/im/bot/messages/get", new RobotMsgCallbackConsumer())
+                        .registerCallbackListener(DingTalkSettings.STREAM_CALLBACK_PATH, new com.qiyi.service.dingtalk.stream.RobotMsgCallbackConsumer())
                         .build();
 
-                System.out.println("DingTalk Stream Client starting...");
+                AppLog.info("DingTalk Stream Client starting...");
                 client.start();
                 streamClient = client;
             } catch (Exception e) {
-                System.err.println("DingTalk Stream Client Error: " + e.getMessage());
-                e.printStackTrace();
+                AppLog.error("DingTalk Stream Client Error: " + e.getMessage());
+                AppLog.error(e);
                 // 如果启动失败，重置 streamClient 以便允许重试
                 streamClient = null; 
             }
@@ -184,55 +194,29 @@ public class DingTalkUtil {
         if (streamClient != null) {
             try {
                 streamClient.stop();
-                System.out.println("DingTalk Stream Client stopped.");
+                AppLog.info("DingTalk Stream Client stopped.");
             } catch (Exception e) {
-                e.printStackTrace();
+                AppLog.error(e);
             }
             streamClient = null;
         }
     }
 
-    //接收企业内部机器人消息，在群里如果有人 @机器人，就会收到消息
-     public static class RobotMsgCallbackConsumer implements OpenDingTalkCallbackListener<JSONObject, JSONObject> {
-    /*
-        * @param request
-        * @return
-        */
-        @Override
-        public JSONObject execute(JSONObject request) {
-            
-            System.out.println(JSON.toJSONString(request));
-            try {
-                JSONObject text = request.getJSONObject("text");
-                String senderStaffId = request.getString("senderStaffId");
-
-                if (text != null) {
-                    //机器人接收消息内容
-                    String msg = text.getString("content").trim();
-                    // String openConversationId = request.getString("conversationId");
-
-                    // 解析 @ 人列表
-                    List<String> atUserIds = parseAtUserIds(msg);
-
-                    // 使用 LLM 分析并执行意图
-                    java.util.concurrent.CompletableFuture.runAsync(() -> {
-                        analyzeAndExecute(msg, senderStaffId, atUserIds);
-                    });
-                }
-            } catch (Exception e) {
-                System.out.println("receive group message by robot error:" +e.getMessage());
-                e.printStackTrace();
-            }
-            return new JSONObject();
-        }
+    public static synchronized boolean isRobotMsgCallbackConsumerRunning() {
+        return streamClient != null;
     }
 
     public static String getUnionIdByUserId(String userId) throws Exception {
-        DingTalkClient client = new DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/v2/user/get");
+        ensureConfigInitialized();
+        return getUnionIdByUserId(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, userId);
+    }
+
+    public static String getUnionIdByUserId(String appKey, String appSecret, String userId) throws Exception {
+        DingTalkClient client = new DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/topapi/v2/user/get");
         com.dingtalk.api.request.OapiV2UserGetRequest req = new com.dingtalk.api.request.OapiV2UserGetRequest();
         req.setUserid(userId);
-        req.setLanguage("zh_CN");
-        com.dingtalk.api.response.OapiV2UserGetResponse rsp = client.execute(req, getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET));
+        req.setLanguage(DingTalkSettings.DEFAULT_LANGUAGE);
+        com.dingtalk.api.response.OapiV2UserGetResponse rsp = client.execute(req, getDingTalkRobotAccessToken(appKey, appSecret));
         if (rsp.getResult() != null) {
             return rsp.getResult().getUnionid();
         }
@@ -241,21 +225,26 @@ public class DingTalkUtil {
 
     public static com.aliyun.dingtalkcalendar_1_0.Client createCalendarClient() throws Exception {
         com.aliyun.teaopenapi.models.Config config = new com.aliyun.teaopenapi.models.Config();
-        config.protocol = "https";
-        config.regionId = "central";
+        config.protocol = DingTalkSettings.DEFAULT_PROTOCOL;
+        config.regionId = DingTalkSettings.DEFAULT_REGION_ID;
         return new com.aliyun.dingtalkcalendar_1_0.Client(config);
     }
 
     public static String createCalendarEvent(String userId, String summary, String description, String startTime, String endTime, List<String> attendeeUnionIds, String location) throws Exception {
+        ensureConfigInitialized();
+        return createCalendarEvent(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, userId, summary, description, startTime, endTime, attendeeUnionIds, location);
+    }
+
+    public static String createCalendarEvent(String appKey, String appSecret, String userId, String summary, String description, String startTime, String endTime, List<String> attendeeUnionIds, String location) throws Exception {
         com.aliyun.dingtalkcalendar_1_0.Client client = createCalendarClient();
         com.aliyun.dingtalkcalendar_1_0.models.CreateEventHeaders headers = new com.aliyun.dingtalkcalendar_1_0.models.CreateEventHeaders();
-        headers.xAcsDingtalkAccessToken = getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
+        headers.xAcsDingtalkAccessToken = getDingTalkRobotAccessToken(appKey, appSecret);
 
         com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest request = new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest()
             .setSummary(summary)
             .setDescription(description)
-            .setStart(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestStart().setDateTime(startTime).setTimeZone("Asia/Shanghai"))
-            .setEnd(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestEnd().setDateTime(endTime).setTimeZone("Asia/Shanghai"));
+            .setStart(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestStart().setDateTime(startTime).setTimeZone(DingTalkSettings.DEFAULT_TIME_ZONE))
+            .setEnd(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestEnd().setDateTime(endTime).setTimeZone(DingTalkSettings.DEFAULT_TIME_ZONE));
             
         if (location != null && !location.isEmpty()) {
             request.setLocation(new com.aliyun.dingtalkcalendar_1_0.models.CreateEventRequest.CreateEventRequestLocation().setDisplayName(location));
@@ -268,188 +257,22 @@ public class DingTalkUtil {
         request.setAttendees(attendees);
 
         // createEventWithOptions(userId, calendarId, request, headers, runtime)
-        CreateEventResponse response = client.createEventWithOptions(userId, "primary", request, headers, new com.aliyun.teautil.models.RuntimeOptions());
+        CreateEventResponse response = client.createEventWithOptions(userId, DingTalkSettings.DEFAULT_CALENDAR_ID, request, headers, new com.aliyun.teautil.models.RuntimeOptions());
         if (response.getBody() != null) {
             return response.getBody().getId();
         }
         return null;
     }
-
-
-
-    /**
-     * 解析消息中的 @ 人员列表
-     * 通过 DeepSeek 分析消息内容，结合企业通讯录，识别出需要通知的用户 ID
-     */
-    private static List<String> parseAtUserIds(String msg) {
-        List<String> atUserIds = new ArrayList<>();
-        try {
-            // 1. 获取全量用户列表 (带缓存)
-            List<DingTalkDepartment> departments = getAllDepartments(true, true);
-            List<DingTalkUser> allUsers = new ArrayList<>();
-            for (DingTalkDepartment dept : departments) {
-                if (dept.getUserList() != null) {
-                    allUsers.addAll(dept.getUserList());
-                }
-            }
-            
-            // 去重
-            java.util.Map<String, String> userMap = new java.util.HashMap<>();
-            for (DingTalkUser user : allUsers) {
-                userMap.put(user.getName(), user.getUserid());
-            }
-            
-            if (userMap.isEmpty()) {
-                return atUserIds;
-            }
-
-            // 2. 构造提示词给 DeepSeek
-            // 优化：不再发送全量用户列表，仅让 AI 提取消息中的人名，后续再本地匹配
-            String prompt = String.format(
-                "请分析以下消息内容，提取出其中提到的人员姓名（可能是中文名或英文名）。只返回姓名列表，用逗号分隔。不要包含任何解释性文字。如果没有提到特定人员，返回空字符串。消息内容：'%s'",
-                msg
-            );
-            
-            // 3. 调用 DeepSeek
-            List<io.github.pigmesh.ai.deepseek.core.chat.Message> messages = new ArrayList<>();
-            messages.add(io.github.pigmesh.ai.deepseek.core.chat.UserMessage.builder().addText(prompt).build());
-            
-            String response = LLMUtil.chatWithDeepSeek(messages, false);
-            
-            // 4. 解析结果并匹配 UserID
-            if (response != null && !response.trim().isEmpty()) {
-                // 去除可能存在的 Markdown 代码块标记
-                response = response.replace("```", "").trim();
-                
-                String[] names = response.split("[,，]"); // 支持中英文逗号
-                for (String name : names) {
-                    String trimmedName = name.trim();
-                    if (trimmedName.isEmpty()) continue;
-                    
-                    // 1. 尝试精确匹配
-                    if (userMap.containsKey(trimmedName)) {
-                        atUserIds.add(userMap.get(trimmedName));
-                        System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 精确匹配到用户ID: " + userMap.get(trimmedName));
-                    } else {
-                        // 2. 尝试模糊匹配 (包含关系)
-                        // 寻找所有包含 trimmedName 的名字
-                        java.util.Map<String, String> partialMatches = new java.util.HashMap<>();
-                        for (java.util.Map.Entry<String, String> entry : userMap.entrySet()) {
-                             if (entry.getKey().contains(trimmedName)) {
-                                 partialMatches.put(entry.getValue(), entry.getKey()); // ID -> Name
-                             }
-                        }
-
-                        if (partialMatches.size() == 1) {
-                            String userId = partialMatches.keySet().iterator().next();
-                            String matchedName = partialMatches.get(userId);
-                            atUserIds.add(userId);
-                            System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 模糊匹配到唯一用户: " + matchedName + " (" + userId + ")");
-                        } else if (partialMatches.size() > 1) {
-                             System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 模糊匹配到多个用户，存在歧义: " + partialMatches.values());
-                        } else {
-                             System.out.println("DeepSeek 提取的姓名 '" + trimmedName + "' 未在用户列表中找到");
-                        }
-                    }
-                }
-            }
-
-        } catch (Exception e) {
-            System.err.println("解析 @ 人员失败: " + e.getMessage());
-            e.printStackTrace();
-        }
-        return atUserIds;
-    }
-
     // =========================================================================
     // 异步消息发送队列支持
     // =========================================================================
-
-    public enum MsgType {
-        TEXT, IMAGE, LINK, WORK_IMAGE, WORK_TEXT
-    }
-
-    private static class DingTalkMessageTask {
-        List<String> userIds;
-        MsgType type;
-        String content; // text content or image url or mediaId
-        String title; // for link message
-        String messageUrl; // for link message
-        String picUrl; // for link message
-
-        public DingTalkMessageTask(List<String> userIds, MsgType type, String content) {
-            this.userIds = userIds;
-            this.type = type;
-            this.content = content;
-        }
-
-        // For Link Message (Text + Image)
-        public DingTalkMessageTask(List<String> userIds, String title, String text, String messageUrl, String picUrl) {
-            this.userIds = userIds;
-            this.type = MsgType.LINK;
-            this.title = title;
-            this.content = text;
-            this.messageUrl = messageUrl;
-            this.picUrl = picUrl;
-        }
-    }
-
-    private static final java.util.concurrent.BlockingQueue<DingTalkMessageTask> messageQueue = new java.util.concurrent.LinkedBlockingQueue<>();
-    
-    static {
-        Thread messageProcessorThread = new Thread(() -> {
-            System.out.println("DingTalk-Async-Msg-Processor started.");
-            while (true) {
-                try {
-                    DingTalkMessageTask task = messageQueue.take(); // 阻塞获取
-                    // System.out.println("Processing async dingtalk task: " + task.type);
-                    processMessageTask(task);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    System.out.println("DingTalk-Async-Msg-Processor interrupted.");
-                    break;
-                } catch (Throwable e) {
-                    System.err.println("Error processing DingTalk message task: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            }
-        });
-        messageProcessorThread.setDaemon(true);
-        messageProcessorThread.setName("DingTalk-Async-Msg-Processor");
-        messageProcessorThread.start();
-    }
-
-    private static void processMessageTask(DingTalkMessageTask task) {
-        try {
-            if (task.userIds == null || task.userIds.isEmpty()) return;
-
-            if (task.type == MsgType.TEXT) {
-                sendTextMessageToEmployees(task.userIds, task.content);
-            } else if (task.type == MsgType.IMAGE) {
-                sendImageMessageToEmployees(task.userIds, task.content);
-            } else if (task.type == MsgType.LINK) {
-                sendLinkMessageToEmployees(task.userIds, task.title, task.content, task.messageUrl, task.picUrl);
-            } else if (task.type == MsgType.WORK_IMAGE) {
-                sendWorkNotificationImage(task.userIds, task.content); // content is mediaId
-            } else if (task.type == MsgType.WORK_TEXT) {
-                sendWorkNotificationText(task.userIds, task.content);
-            }
-            
-            // 简单的限流，避免触发钉钉频率限制
-            Thread.sleep(200); 
-        } catch (Exception e) {
-            System.err.println("Failed to send async message: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
 
     /**
      * 异步发送文本消息
      * 将消息放入队列，由后台线程逐条发送
      */
     public static void sendAsyncTextMessage(List<String> userIds, String content) {
-        if (userIds == null || userIds.isEmpty()) return;
-        messageQueue.offer(new DingTalkMessageTask(userIds, MsgType.TEXT, content));
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueText(userIds, content);
     }
 
     /**
@@ -457,8 +280,7 @@ public class DingTalkUtil {
      * 将消息放入队列，由后台线程逐条发送
      */
     public static void sendAsyncImageMessage(List<String> userIds, String photoUrl) {
-        if (userIds == null || userIds.isEmpty()) return;
-        messageQueue.offer(new DingTalkMessageTask(userIds, MsgType.IMAGE, photoUrl));
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueImage(userIds, photoUrl);
     }
 
     /**
@@ -466,8 +288,11 @@ public class DingTalkUtil {
      * 将消息放入队列，由后台线程逐条发送
      */
     public static void sendAsyncWorkImageMessage(List<String> userIds, String mediaId) {
-        if (userIds == null || userIds.isEmpty()) return;
-        messageQueue.offer(new DingTalkMessageTask(userIds, MsgType.WORK_IMAGE, mediaId));
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueWorkImage(userIds, mediaId);
+    }
+
+    public static void sendAsyncWorkImageMessage(String appKey, String appSecret, long agentId, List<String> userIds, String mediaId) {
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueWorkImage(appKey, appSecret, agentId, userIds, mediaId);
     }
 
     /**
@@ -475,8 +300,11 @@ public class DingTalkUtil {
      * 将消息放入队列，由后台线程逐条发送
      */
     public static void sendAsyncWorkTextMessage(List<String> userIds, String content) {
-        if (userIds == null || userIds.isEmpty()) return;
-        messageQueue.offer(new DingTalkMessageTask(userIds, MsgType.WORK_TEXT, content));
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueWorkText(userIds, content);
+    }
+
+    public static void sendAsyncWorkTextMessage(String appKey, String appSecret, long agentId, List<String> userIds, String content) {
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueWorkText(appKey, appSecret, agentId, userIds, content);
     }
 
     /**
@@ -489,12 +317,11 @@ public class DingTalkUtil {
      * @param picUrl 图片URL
      */
     public static void sendAsyncLinkMessage(List<String> userIds, String title, String text, String messageUrl, String picUrl) {
-        if (userIds == null || userIds.isEmpty()) return;
-        messageQueue.offer(new DingTalkMessageTask(userIds, title, text, messageUrl, picUrl));
+        com.qiyi.service.dingtalk.messaging.DingTalkAsyncDispatcher.getInstance().enqueueLink(userIds, title, text, messageUrl, picUrl);
     }
 
     public static String uploadMedia(String appKey, String appSecret, java.io.File file) throws Exception {
-        com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient("https://oapi.dingtalk.com/media/upload");
+        com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/media/upload");
         com.dingtalk.api.request.OapiMediaUploadRequest req = new com.dingtalk.api.request.OapiMediaUploadRequest();
         req.setType("image");
         req.setMedia(new FileItem(file));
@@ -507,15 +334,23 @@ public class DingTalkUtil {
     }
 
     public static void sendWorkNotificationImage(List<String> userIds, String mediaId) throws Exception {
+        ensureConfigInitialized();
         if (AGENT_ID == 0) {
-            System.out.println("Agent ID not configured, cannot send work notification image.");
+            AppLog.info("Agent ID not configured, cannot send work notification image.");
             return;
+        }
+        sendWorkNotificationImage(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, AGENT_ID, userIds, mediaId);
+    }
+
+    public static void sendWorkNotificationImage(String appKey, String appSecret, long agentId, List<String> userIds, String mediaId) throws Exception {
+        if (agentId <= 0) {
+            throw new IllegalStateException("Agent ID not configured, cannot send work notification image.");
         }
 
         // 2. 发送图片
-        com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2");
+        com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/topapi/message/corpconversation/asyncsend_v2");
         com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request req = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request();
-        req.setAgentId(AGENT_ID);
+        req.setAgentId(agentId);
         req.setUseridList(String.join(",", userIds));
         
         com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg msg = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg();
@@ -524,49 +359,60 @@ public class DingTalkUtil {
         msg.getImage().setMediaId(mediaId);
         req.setMsg(msg);
         
-        String accessToken = getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
+        String accessToken = getDingTalkRobotAccessToken(appKey, appSecret);
         com.dingtalk.api.response.OapiMessageCorpconversationAsyncsendV2Response rsp = client.execute(req, accessToken);
         if (rsp.getErrcode() != 0) {
              throw new RuntimeException("Send work notification image failed: " + rsp.getErrmsg());
         }
     }
 
-    //注意，如果文本内容曾经发过，钉钉会有机制来保障不重发，因此注意不要始终发相同的内容
-    private static void sendWorkNotificationText(List<String> userIds, String content) throws Exception {
-         if (AGENT_ID == 0) return;
-         com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2");
-         com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request req = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request();
-         req.setAgentId(AGENT_ID);
-         req.setUseridList(String.join(",", userIds));
-         
-         com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg msg = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg();
-         msg.setMsgtype("text");
-         msg.setText(new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Text());
-         msg.getText().setContent(content);
-         req.setMsg(msg);
-         
-         String accessToken = getDingTalkRobotAccessToken(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET);
-         com.dingtalk.api.response.OapiMessageCorpconversationAsyncsendV2Response rsp = client.execute(req, accessToken);
-         
-         if (rsp.getErrcode() != 0) {
-             System.err.println("Send work notification text failed: " + rsp.getErrmsg() + ", code: " + rsp.getErrcode());
-             throw new RuntimeException("Send work notification text failed: " + rsp.getErrmsg());
-         } else {
-             System.out.println("Send work notification text success. TaskId: " + rsp.getTaskId());
-         }
+    public static void sendWorkNotificationText(List<String> userIds, String content) throws Exception {
+        ensureConfigInitialized();
+        if (AGENT_ID == 0) {
+            AppLog.info("Agent ID not configured, cannot send work notification text.");
+            return;
+        }
+        sendWorkNotificationText(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, AGENT_ID, userIds, content);
+    }
+
+    public static void sendWorkNotificationText(String appKey, String appSecret, long agentId, List<String> userIds, String content) throws Exception {
+        if (agentId <= 0) {
+            throw new IllegalStateException("Agent ID not configured, cannot send work notification text.");
+        }
+
+        com.dingtalk.api.DefaultDingTalkClient client = new com.dingtalk.api.DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/topapi/message/corpconversation/asyncsend_v2");
+        com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request req = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request();
+        req.setAgentId(agentId);
+        req.setUseridList(String.join(",", userIds));
+
+        com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg msg = new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Msg();
+        msg.setMsgtype("text");
+        msg.setText(new com.dingtalk.api.request.OapiMessageCorpconversationAsyncsendV2Request.Text());
+        msg.getText().setContent(content);
+        req.setMsg(msg);
+
+        String accessToken = getDingTalkRobotAccessToken(appKey, appSecret);
+        com.dingtalk.api.response.OapiMessageCorpconversationAsyncsendV2Response rsp = client.execute(req, accessToken);
+
+        if (rsp.getErrcode() != 0) {
+            AppLog.error("Send work notification text failed: " + rsp.getErrmsg() + ", code: " + rsp.getErrcode());
+            throw new RuntimeException("Send work notification text failed: " + rsp.getErrmsg());
+        } else {
+            AppLog.info("Send work notification text success. TaskId: " + rsp.getTaskId());
+        }
     }
 
     public static com.aliyun.dingtalkrobot_1_0.Client createClient() throws Exception {
         Config config = new Config();
-        config.protocol = "https";
-        config.regionId = "central";
+        config.protocol = DingTalkSettings.DEFAULT_PROTOCOL;
+        config.regionId = DingTalkSettings.DEFAULT_REGION_ID;
         return new com.aliyun.dingtalkrobot_1_0.Client(config);
     }
 
     public static com.aliyun.dingtalkoauth2_1_0.Client createOAuthClient() throws Exception {
         com.aliyun.teaopenapi.models.Config config = new com.aliyun.teaopenapi.models.Config();
-        config.protocol = "https";
-        config.regionId = "central";
+        config.protocol = DingTalkSettings.DEFAULT_PROTOCOL;
+        config.regionId = DingTalkSettings.DEFAULT_REGION_ID;
         return new com.aliyun.dingtalkoauth2_1_0.Client(config);
     }
 
@@ -613,10 +459,10 @@ public class DingTalkUtil {
     public static String getDingTalkRobotAccessToken(String appKey,String appSecret) throws Exception
     {
         // 尝试从缓存获取
-        String cacheKey = "dingtalk_access_token_" + appKey;
+        String cacheKey = DingTalkSettings.ACCESS_TOKEN_CACHE_KEY_PREFIX + appKey;
         String cachedToken = dingTalkCache.get(cacheKey);
         if (cachedToken != null) {
-            // System.out.println("Get accessToken from cache: " + cachedToken);
+            // AppLog.info("Get accessToken from cache: " + cachedToken);
             return cachedToken;
         }
 
@@ -643,11 +489,11 @@ public class DingTalkUtil {
         } 
         if (accessTokenResponse != null) {
             accessToken = accessTokenResponse.getBody().getAccessToken();
-            System.out.println("accessTokenResponse: " + accessToken);
+            AppLog.info("accessTokenResponse: " + accessToken);
             
             // 获取成功后放入缓存，设置过期时间为 60 分钟 (3600 秒)
             if (accessToken != null && !accessToken.isEmpty()) {
-                dingTalkCache.put(cacheKey, accessToken, 3600);
+                dingTalkCache.put(cacheKey, accessToken, DingTalkSettings.ACCESS_TOKEN_CACHE_SECONDS);
             }
         }
 
@@ -696,8 +542,8 @@ public class DingTalkUtil {
                 
                 if (pageData != null && !pageData.isEmpty()) {
                     allData.addAll(pageData);
-                    System.out.printf("第 %d 页获取 %d 条数据，累计 %d 条%n", 
-                        page, pageData.size(), allData.size());
+                    AppLog.info(String.format("第 %d 页获取 %d 条数据，累计 %d 条%n", 
+                        page, pageData.size(), allData.size()));
                     
                     // 如果返回的数据小于请求的页大小，说明没有更多数据了
                     if (pageData.size() < pageSize) {
@@ -711,10 +557,10 @@ public class DingTalkUtil {
                 }
                 
                 // 避免频繁请求
-                Thread.sleep(200);
+                Thread.sleep(DingTalkSettings.PAGINATION_THROTTLE_MILLIS);
                 
             } catch (Exception e) {
-                System.err.println("分页获取数据失败: " + e.getMessage());
+                AppLog.error("分页获取数据失败: " + e.getMessage());
                 throw e;
             }
         }
@@ -729,20 +575,20 @@ public class DingTalkUtil {
 
         String accessToken = getDingTalkRobotAccessToken(appKey, appSecret);
         if (accessToken == null || accessToken.isEmpty()) {
-            System.out.println("Failed to get access token");
+            AppLog.info("Failed to get access token");
             return Collections.emptyList();
         }
         
-        return getAllDataByPagination(appKey, appSecret, departmentId, 30, cursor -> {
+        return getAllDataByPagination(appKey, appSecret, departmentId, DingTalkSettings.USER_LIST_PAGE_SIZE, cursor -> {
             try {
-                DingTalkClient client = new DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/user/listsimple");
+                DingTalkClient client = new DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/topapi/user/listsimple");
                 OapiUserListsimpleRequest req = new OapiUserListsimpleRequest();
                 req.setDeptId(Long.parseLong(departmentId));
                 req.setCursor(cursor);
-                req.setSize(30L);
-                req.setOrderField("modify_desc");
+                req.setSize((long) DingTalkSettings.USER_LIST_PAGE_SIZE);
+                req.setOrderField(DingTalkSettings.USER_LIST_ORDER_FIELD);
                 req.setContainAccessLimit(false);
-                req.setLanguage("zh_CN");
+                req.setLanguage(DingTalkSettings.DEFAULT_LANGUAGE);
                 
                 OapiUserListsimpleResponse rsp = client.execute(req, accessToken);
                 if (rsp.isSuccess() && rsp.getResult() != null) {
@@ -764,11 +610,11 @@ public class DingTalkUtil {
 
         String accessToken = getDingTalkRobotAccessToken(appKey, appSecret);
         if (accessToken == null || accessToken.isEmpty()) {
-            System.out.println("Failed to get access token");
+            AppLog.info("Failed to get access token");
             return departmentList;
         }
 
-        DingTalkClient client = new DefaultDingTalkClient("https://oapi.dingtalk.com/topapi/v2/department/listsub");
+        DingTalkClient client = new DefaultDingTalkClient(DingTalkSettings.OAPI_BASE_URL + "/topapi/v2/department/listsub");
         OapiV2DepartmentListsubRequest req = new OapiV2DepartmentListsubRequest();
 
         if (departmentId!= null)
@@ -809,6 +655,7 @@ public class DingTalkUtil {
      * @param cacheSeconds 缓存时间（秒），如果 <= 0 则不使用缓存
      */
     public static List<DingTalkDepartment> getAllDepartments(boolean isNeedUserList, boolean needCache) throws Exception {
+        ensureConfigInitialized();
         return getAllDepartments(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, isNeedUserList, needCache);
     }
 
@@ -816,10 +663,13 @@ public class DingTalkUtil {
     private static final java.util.Map<String, java.util.concurrent.atomic.AtomicBoolean> REFRESH_LOCKS = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static List<DingTalkDepartment> getAllDepartments(String appKey, String appSecret, boolean isNeedUserList, boolean needCache) throws Exception {
-        String cacheKey = "dingtalk_departments_v2_" + appKey + "_" + isNeedUserList;
+        String cacheKey = DingTalkSettings.DEPARTMENTS_CACHE_KEY_PREFIX + appKey + "_" + isNeedUserList;
         // 文件名加入 appKey 以区分不同应用，防止缓存冲突
         String safeAppKey = appKey != null ? appKey.replaceAll("[^a-zA-Z0-9.-]", "_") : "default";
-        java.io.File cacheFile = new java.io.File(System.getProperty("java.io.tmpdir"), "dingtalk_contacts_cache_" + safeAppKey + "_" + isNeedUserList + ".json");
+        java.io.File cacheFile = new java.io.File(
+                System.getProperty("java.io.tmpdir"),
+                DingTalkSettings.CONTACTS_FILE_CACHE_PREFIX + safeAppKey + "_" + isNeedUserList + DingTalkSettings.CONTACTS_FILE_CACHE_SUFFIX
+        );
         
         // 1. 优先尝试文件缓存 (Stale-While-Revalidate 模式)
         if (needCache && cacheFile.exists()) {
@@ -827,33 +677,33 @@ public class DingTalkUtil {
                 // 读取文件
                 ObjectMapper mapper = new ObjectMapper();
                 List<DingTalkDepartment> cachedData = mapper.readValue(cacheFile, new com.fasterxml.jackson.core.type.TypeReference<List<DingTalkDepartment>>(){});
-                System.out.println("Loaded DingTalk departments from local file cache: " + cacheFile.getAbsolutePath());
+                AppLog.info("Loaded DingTalk departments from local file cache: " + cacheFile.getAbsolutePath());
                 
                 // 异步刷新逻辑：如果使用了缓存，且文件超过1天（24小时）未更新，则触发异步刷新
-                if (System.currentTimeMillis() - cacheFile.lastModified() > 24 * 3600 * 1000) {
+                if (System.currentTimeMillis() - cacheFile.lastModified() > DingTalkSettings.DEPARTMENT_FILE_REFRESH_THRESHOLD_MILLIS) {
                     REFRESH_LOCKS.putIfAbsent(cacheKey, new java.util.concurrent.atomic.AtomicBoolean(false));
                     java.util.concurrent.atomic.AtomicBoolean isRefreshing = REFRESH_LOCKS.get(cacheKey);
                     
                     if (isRefreshing.compareAndSet(false, true)) {
                         new Thread(() -> {
                             try {
-                                System.out.println("Local cache expired (>1 day), starting asynchronous refresh...");
+                                AppLog.info("Local cache expired (>1 day), starting asynchronous refresh...");
                                 fetchAndCacheDepartments(appKey, appSecret, isNeedUserList, cacheKey, cacheFile);
-                                System.out.println("Asynchronous refresh of DingTalk departments completed.");
+                                AppLog.info("Asynchronous refresh of DingTalk departments completed.");
                             } catch (Exception e) {
-                                System.err.println("Async refresh failed: " + e.getMessage());
+                                AppLog.error("Async refresh failed: " + e.getMessage());
                             } finally {
                                 isRefreshing.set(false);
                             }
                         }).start();
                     }
                 } else {
-                    System.out.println("Local cache is fresh (<1 day), skipping refresh.");
+                    AppLog.info("Local cache is fresh (<1 day), skipping refresh.");
                 }
                 
                 return cachedData;
             } catch (Exception e) {
-                System.err.println("Failed to load local file cache, falling back to sync load: " + e.getMessage());
+                AppLog.error("Failed to load local file cache, falling back to sync load: " + e.getMessage());
             }
         }
 
@@ -876,7 +726,7 @@ public class DingTalkUtil {
 
     private static List<DingTalkDepartment> fetchAndCacheDepartments(String appKey, String appSecret, boolean isNeedUserList, String cacheKey, java.io.File cacheFile) throws Exception {
         List<DingTalkDepartment> allDepartments = new ArrayList<>();
-        allDepartments.add(new DingTalkDepartment("1","根部门","0"));
+        allDepartments.add(new DingTalkDepartment(DingTalkSettings.ROOT_DEPARTMENT_ID, "根部门", "0"));
 
         // 递归获取所有部门，从根部门 ID 1 开始
         traverseDepartments(appKey, appSecret, null, allDepartments);
@@ -893,9 +743,9 @@ public class DingTalkUtil {
         // 存入内存缓存
         try {
             String jsonStr = mapper.writeValueAsString(allDepartments);
-            dingTalkCache.put(cacheKey, jsonStr, 30*60);
+            dingTalkCache.put(cacheKey, jsonStr, DingTalkSettings.DEPARTMENT_MEMORY_CACHE_SECONDS);
         } catch (Exception e) {
-            System.err.println("Failed to update memory cache: " + e.getMessage());
+            AppLog.error("Failed to update memory cache: " + e.getMessage());
         }
         
         // 存入文件缓存
@@ -905,9 +755,9 @@ public class DingTalkUtil {
                 cacheFile.delete();
             }
             mapper.writeValue(cacheFile, allDepartments);
-            System.out.println("Saved DingTalk departments to local file cache: " + cacheFile.getAbsolutePath());
+            AppLog.info("Saved DingTalk departments to local file cache: " + cacheFile.getAbsolutePath());
         } catch (Exception e) {
-            System.err.println("Failed to update file cache: " + e.getMessage());
+            AppLog.error("Failed to update file cache: " + e.getMessage());
         }
         
         return allDepartments;
@@ -929,7 +779,7 @@ public class DingTalkUtil {
     public static DingTalkUser findUserFromDepartmentByName(String name) throws Exception {
         if (name == null) return null;
         name = name.trim();
-        // System.out.println("DEBUG: findUserFromDepartmentByName searching for: '" + name + "'");
+        // AppLog.info("DEBUG: findUserFromDepartmentByName searching for: '" + name + "'");
 
         List<DingTalkDepartment> allDepartments = getAllDepartments(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, true, true);
         
@@ -956,15 +806,15 @@ public class DingTalkUtil {
         // 3. 如果精确匹配未找到，且模糊匹配只有一个结果，则返回该结果
         if (partialMatches.size() == 1) {
             DingTalkUser user = partialMatches.values().iterator().next();
-            System.out.println("Exact match not found for '" + name + "', but found unique partial match: " + user.getName());
+            AppLog.info("Exact match not found for '" + name + "', but found unique partial match: " + user.getName());
             return user;
         }
         
         if (partialMatches.size() > 1) {
-             System.out.println("Exact match not found for '" + name + "', and found multiple partial matches (" + partialMatches.size() + "), ambiguous. Matches: " 
+             AppLog.info("Exact match not found for '" + name + "', and found multiple partial matches (" + partialMatches.size() + "), ambiguous. Matches: " 
                  + partialMatches.values().stream().map(DingTalkUser::getName).collect(Collectors.joining(", ")));
         } else if (partialMatches.isEmpty()) {
-             System.out.println("No match found for '" + name + "' in any department.");
+             AppLog.info("No match found for '" + name + "' in any department.");
         }
 
         return null;
@@ -981,6 +831,7 @@ public class DingTalkUtil {
      * @throws Exception 发送过程中的异常
      */
     public static boolean sendTextMessageToEmployees(List<String> userIds, String content) throws Exception {
+        ensureConfigInitialized();
         return sendTextMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, content);
     }
 
@@ -1012,6 +863,7 @@ public class DingTalkUtil {
      * @throws Exception 发送过程中的异常
      */
     public static boolean sendImageMessageToEmployees(List<String> userIds, String photoUrl) throws Exception {
+        ensureConfigInitialized();
         return sendImageMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, photoUrl);
     }
 
@@ -1041,6 +893,7 @@ public class DingTalkUtil {
      * @throws Exception 发送过程中的异常
      */
     public static boolean sendMarkdownMessageToEmployees(List<String> userIds, String title, String markdownText) throws Exception {
+        ensureConfigInitialized();
         return sendMarkdownMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, markdownText);
     }
 
@@ -1074,6 +927,7 @@ public class DingTalkUtil {
      * @throws Exception 发送过程中的异常
      */
     public static boolean sendLinkMessageToEmployees(List<String> userIds, String title, String text, String messageUrl, String picUrl) throws Exception {
+        ensureConfigInitialized();
         return sendLinkMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, text, messageUrl, picUrl);
     }
 
@@ -1112,6 +966,7 @@ public class DingTalkUtil {
      * @throws Exception 发送过程中的异常
      */
     public static boolean sendActionCardMessageToEmployees(List<String> userIds, String title, String text, String singleTitle, String singleUrl) throws Exception {
+        ensureConfigInitialized();
         return sendActionCardMessageToEmployees(ROBOT_CLIENT_ID, ROBOT_CLIENT_SECRET, ROBOT_CODE, userIds, title, text, singleTitle, singleUrl);
     }
 
@@ -1177,13 +1032,13 @@ public class DingTalkUtil {
         try {
             client.batchSendOTOWithOptions(batchSendOTORequest, batchSendOTOHeaders, new RuntimeOptions());
             result = true;
-            System.out.println("发送成功: " + msgKey);
+            AppLog.info("发送成功: " + msgKey);
         } catch (TeaException err) {
-            System.err.println("发送失败 Code: " + err.code);
-            System.err.println("发送失败 Message: " + err.message);
+            AppLog.error("发送失败 Code: " + err.code);
+            AppLog.error("发送失败 Message: " + err.message);
         } catch (Exception _err) {
             TeaException err = new TeaException(_err.getMessage(), _err);
-            System.err.println("系统异常: " + err.message);
+            AppLog.error("系统异常: " + err.message);
         }
 
         return result;
@@ -1267,7 +1122,7 @@ public class DingTalkUtil {
             byte[] signData = mac.doFinal(stringToSign.getBytes("UTF-8"));
             String sign = URLEncoder.encode(new String(Base64.encodeBase64(signData)), "UTF-8");
 
-            String serverUrl = "https://oapi.dingtalk.com/robot/send?sign=" + sign + "&timestamp=" + timestamp;
+            String serverUrl = DingTalkSettings.OAPI_BASE_URL + "/robot/send?sign=" + sign + "&timestamp=" + timestamp;
             DingTalkClient client = new DefaultDingTalkClient(serverUrl);
 
             // 处理 @ 逻辑
@@ -1281,11 +1136,11 @@ public class DingTalkUtil {
             }
 
             OapiRobotSendResponse rsp = client.execute(request, ROBOT_TOKEN);
-            System.out.println("Result: " + rsp.getBody());
+            AppLog.info("Result: " + rsp.getBody());
             return rsp.isSuccess();
 
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return false;
         }
     }

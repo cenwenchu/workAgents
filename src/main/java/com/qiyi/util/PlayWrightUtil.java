@@ -4,6 +4,11 @@ import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
 import com.qiyi.config.AppConfig;
 
+/**
+ * Playwright 浏览器连接与调试辅助。
+ *
+ * <p>该工具类主要用于“复用本机 Chrome（CDP）”的自动化场景，例如播客抓取、微信公众号发布。</p>
+ */
 public class PlayWrightUtil {
 
     public static class Connection {
@@ -34,32 +39,32 @@ public class PlayWrightUtil {
                         break;
                     }
                     try {
-                        System.out.println("等待 Chrome 调试接口准备就绪... (" + (i + 1) + "/10)");
+                        AppLog.info("等待 Chrome 调试接口准备就绪... (" + (i + 1) + "/10)");
                         Thread.sleep(2000);
                     } catch (InterruptedException e) {
-                        e.printStackTrace();
+                        AppLog.error(e);
                     }
                 }
 
                 if (wsEndpoint == null) 
                 {
-                    System.out.println("未找到运行的 Chrome 实例，请先以调试模式启动 Chrome");
+                    AppLog.info("未找到运行的 Chrome 实例，请先以调试模式启动 Chrome");
                     String userDataDir = System.getProperty("user.home") + "/chrome-debug-profile";
-                    System.out.println("启动命令：chrome --remote-debugging-port=" + port + " --user-data-dir=\"" + userDataDir + "\"");
+                    AppLog.info("启动命令：chrome --remote-debugging-port=" + port + " --user-data-dir=\"" + userDataDir + "\"");
 
                     return null;
                 }
                 
             }
             
-            System.out.println("连接到: " + wsEndpoint);
+            AppLog.info("连接到: " + wsEndpoint);
             
             // 2. 连接到现有浏览器
             connection.browser = connection.playwright.chromium().connectOverCDP(wsEndpoint);
             return connection;
                  
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             return null;
         }
     }
@@ -73,7 +78,7 @@ public class PlayWrightUtil {
             try {
                 browser.close();
             } catch (Exception e) {
-                System.out.println("关闭浏览器连接失败: " + e.getMessage());
+                AppLog.info("关闭浏览器连接失败: " + e.getMessage());
             }
         }
 
@@ -91,16 +96,16 @@ public class PlayWrightUtil {
      * @param filename 截图保存的文件名
      */
     public static void highlightAndScreenshot(com.microsoft.playwright.Page page, com.microsoft.playwright.Locator locator, String filename) {
-        System.out.println("DEBUG: 准备高亮元素并截图验证...");
+        AppLog.info("DEBUG: 准备高亮元素并截图验证...");
         try {
             // 高亮按钮 (红色边框)
             locator.evaluate("element => element.style.border = '5px solid red'");
             // 截图保存
             java.nio.file.Path path = java.nio.file.Paths.get(filename);
             page.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions().setPath(path));
-            System.out.println("DEBUG: 截图已保存至: " + path.toAbsolutePath());
+            AppLog.info("DEBUG: 截图已保存至: " + path.toAbsolutePath());
         } catch (Exception debugEx) {
-            System.out.println("DEBUG: 调试代码执行异常: " + debugEx.getMessage());
+            AppLog.info("DEBUG: 调试代码执行异常: " + debugEx.getMessage());
         }
     }
     

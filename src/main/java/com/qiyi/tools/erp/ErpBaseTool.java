@@ -7,7 +7,9 @@ import com.microsoft.playwright.options.RequestOptions;
 import com.qiyi.config.AppConfig;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
+import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.PlayWrightUtil;
+import com.qiyi.util.AppLog;
 
 import java.util.HashMap;
 import java.util.List;
@@ -28,7 +30,7 @@ public abstract class ErpBaseTool implements Tool {
         }
     }
 
-    protected boolean ensureLogin(Page page, String targetUrl, ToolContext context) {
+    protected boolean ensureLogin(Page page, String targetUrl, ToolMessenger messenger) {
         try {
             // Setup network interception to capture headers from real requests
             setupHeaderCapture(page);
@@ -46,7 +48,7 @@ public abstract class ErpBaseTool implements Tool {
             boolean isLoggedIn = isLoginSuccess(page);
             
             if (!isLoggedIn) {
-                context.sendText("检测到ERP系统未登录，请在打开的浏览器中完成登录，任务将等待您的操作。");
+                if (messenger != null) messenger.sendText("检测到ERP系统未登录，请在打开的浏览器中完成登录，任务将等待您的操作。");
                 
                 // Wait loop
                 long maxWaitTime = 5 * 60 * 1000; // 5 minutes
@@ -54,7 +56,7 @@ public abstract class ErpBaseTool implements Tool {
                 
                 while (!isLoggedIn) {
                     if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                        context.sendText("登录等待超时，任务终止。");
+                        if (messenger != null) messenger.sendText("登录等待超时，任务终止。");
                         return false;
                     }
                     
@@ -69,16 +71,16 @@ public abstract class ErpBaseTool implements Tool {
                     }
                 }
                 
-                context.sendText("ERP登录成功，继续执行任务。");
+                if (messenger != null) messenger.sendText("ERP登录成功，继续执行任务。");
 
                 Thread.sleep(2000); 
             }
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.error(e);
             try {
-                context.sendText("检查登录状态时出错: " + e.getMessage());
-            } catch (Exception ex) { ex.printStackTrace(); }
+                if (messenger != null) messenger.sendText("检查登录状态时出错: " + e.getMessage());
+            } catch (Exception ex) { AppLog.error(ex); }
             return false;
         }
     }
@@ -128,7 +130,7 @@ public abstract class ErpBaseTool implements Tool {
                 .setHeader("Referer", referer);
 
         if (!capturedApiHeaders.isEmpty()) {
-            System.out.println("Using Captured Headers: " + capturedApiHeaders.keySet());
+            AppLog.info("Using Captured Headers: " + capturedApiHeaders.keySet());
             for (Map.Entry<String, String> entry : capturedApiHeaders.entrySet()) {
                 String key = entry.getKey();
                 String lowerKey = key.toLowerCase();
@@ -189,7 +191,7 @@ public abstract class ErpBaseTool implements Tool {
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Failed to get storage headers: " + e.getMessage());
+                AppLog.error("Failed to get storage headers: " + e.getMessage());
             }
         }
         return options;
