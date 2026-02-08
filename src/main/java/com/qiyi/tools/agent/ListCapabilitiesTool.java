@@ -14,19 +14,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Tool.Info(
+        name = "list_capabilities",
+        description = "List all available tools and their capabilities. Use this tool when the user asks what the agent can do or asks for help."
+)
 public class ListCapabilitiesTool implements Tool {
 
     private static String cachedCapabilities = null;
-
-    @Override
-    public String getName() {
-        return "list_capabilities";
-    }
-
-    @Override
-    public String getDescription() {
-        return "List all available tools and their capabilities. Use this tool when the user asks what the agent can do or asks for help.";
-    }
 
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {

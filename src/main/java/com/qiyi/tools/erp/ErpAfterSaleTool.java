@@ -21,6 +21,10 @@ import java.util.HashMap;
 import java.time.LocalDate;
 import java.time.ZoneId;
 
+@com.qiyi.tools.Tool.Info(
+        name = "query_erp_aftersale",
+        description = "Query ERP After-Sales Early Warning data. Fetches statistics about returns, intercepts, etc. Parameters: none (defaults to today's data)."
+)
 public class ErpAfterSaleTool extends ErpBaseTool {
     private static final String PAGE_URL = "https://sc.scm121.com/dataCenter/afterSaleEarlyWarning";
     private static final String API_URL = "https://api.erp321.com/jst-data-report/getData/transportData";
@@ -39,16 +43,6 @@ public class ErpAfterSaleTool extends ErpBaseTool {
         FIELD_MAPPING.put("buyer_back_cnt", "买家退回");
         FIELD_MAPPING.put("wait_inbound_cnt", "待入库");
         // Add more mappings as needed based on the JSON keys
-    }
-
-    @Override
-    public String getName() {
-        return "query_erp_aftersale";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Query ERP After-Sales Early Warning data. Fetches statistics about returns, intercepts, etc. Parameters: none (defaults to today's data).";
     }
 
     @Override

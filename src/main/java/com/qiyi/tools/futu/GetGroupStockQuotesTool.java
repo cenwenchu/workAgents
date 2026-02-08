@@ -20,17 +20,12 @@ import java.util.ArrayList;
  *
  * <p>规划补参：在 LLM 未给出 groupName 或给错 key 时，尝试从 userText 中抽取并写回 parameters.groupName。</p>
  */
+@Tool.Info(
+        name = "get_group_stock_quotes",
+        description = "功能：获取指定自选股分组下所有股票的实时报价。参数：groupName(必填 分组名称)。返回：该分组下所有股票的实时价格列表。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetGroupStockQuotesTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_group_stock_quotes";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取指定自选股分组下所有股票的实时报价。参数：groupName(必填 分组名称)。返回：该分组下所有股票的实时价格列表。";
-    }
-
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
         if (plannedTask == null) return;
@@ -87,11 +82,6 @@ public class GetGroupStockQuotesTool implements Tool {
         errors.add(execError);
 
         return new InterfaceDescription(input, output, errors);
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
     }
 
     protected FutuOpenD getFutuOpenD() {

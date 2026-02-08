@@ -25,21 +25,14 @@ import java.util.stream.Stream;
  *
  * <p>执行流程：准备待发布文件 → 连接浏览器 → 校验微信登录 → 逐篇发布 → 归档已发布文件。</p>
  */
+@Tool.Info(
+        name = "publish_wechat",
+        description = "Publish podcast articles to WeChat Official Account. Parameters: isDraft (boolean, default false)."
+)
 public class PublishWechatTool implements Tool {
     private static final ReentrantLock PUBLISH_LOCK = new ReentrantLock();
 
     public static final boolean PUBLISH_IS_DRAFT = false;
-
-    @Override
-    public String getName() {
-        return "publish_wechat";
-    }
-
-    @Override
-    public String getDescription() {
-        return String.format("Publish podcast articles to WeChat Official Account. Parameters: isDraft (boolean, default %s).",
-                PUBLISH_IS_DRAFT);
-    }
 
     protected void disconnectBrowser(PlayWrightUtil.Connection connection) {
         if (connection != null) {
@@ -47,6 +40,11 @@ public class PublishWechatTool implements Tool {
         }
     }
 
+    /**
+     * 执行微信公众号发布任务。
+     *
+     * <p>读取配置的发布目录与归档目录，连接浏览器校验登录状态，批量发布摘要文件并归档。</p>
+     */
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         boolean isDraft = params != null && params.containsKey("isDraft") ? params.getBooleanValue("isDraft") : PUBLISH_IS_DRAFT;
@@ -59,7 +57,7 @@ public class PublishWechatTool implements Tool {
         try {
             String publishDirStr = getPodcastPublishDir();
             if (publishDirStr == null || publishDirStr.isEmpty()) {
-                sendTextSafe(messenger, "发布目录未配置，请检查 podcast.cfg");
+                sendTextSafe(messenger, "发布目录未配置，请检查 agent.cfg");
                 return "Config Error";
             }
 

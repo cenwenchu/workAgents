@@ -5,7 +5,6 @@
 /.settings
 /.vscode
 /target
-src/main/resources/podcast.cfg
 mobile_scripts/__pycache__/adb_server_fastapi.cpython-312.pyc
 mobile_scripts/adb_server_fastapi.py
 mobile_scripts/android_input.js
@@ -22,3 +21,4 @@ mobile_scripts/adb_server.log
 src/main/resources/.DS_Store
 autoweb/debug/
 /autoweb/cache
+src/main/resources/agent.cfg

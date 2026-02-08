@@ -10,25 +10,17 @@ import com.futu.openapi.pb.QotGetKL;
 import com.futu.openapi.pb.QotCommon;
 import com.qiyi.util.AppLog;
 
-import java.util.List;
-import java.util.ArrayList;
-
 /**
  * 获取证券 K 线数据（富途）。
  *
  * <p>规划补参：当 code 缺失时，从 userText 中提取如 HK.00700 / US.AAPL 等证券代码。</p>
  */
+@Tool.Info(
+        name = "get_cur_kline",
+        description = "功能：获取指定证券的最新 K 线数据。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）；klType（整数，选填，K线类型，默认日线。常用值：1=1分钟，2=日线，3=周线，4=月线）；reqNum（整数，选填，请求数量，默认10）。返回：包含所请求数量的K线数据（时间、开高低收、成交量等）的响应字符串。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetCurKlineTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_cur_kline";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取指定证券的最新 K 线数据。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）；klType（整数，选填，K线类型，默认日线。常用值：1=1分钟，2=日线，3=周线，4=月线）；reqNum（整数，选填，请求数量，默认10）。返回：包含所请求数量的K线数据（时间、开高低收、成交量等）的响应字符串。";
-    }
-
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
         if (plannedTask == null) return;
@@ -44,11 +36,6 @@ public class GetCurKlineTool implements Tool {
                 params.put("code", extracted);
             }
         }
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
     }
 
     protected FutuOpenD getFutuOpenD() {

@@ -21,19 +21,13 @@ import com.qiyi.util.AppLog;
  *
  * <p>规划补参：从用户输入中抽取订单号，写入 parameters.orderId。</p>
  */
+@com.qiyi.tools.Tool.Info(
+        name = "query_erp_order",
+        description = "Query ERP order list. Checks login status on ERP page first, notifies if login is needed, then fetches data. Parameters: orderId (string, mandatory)."
+)
 public class QueryErpOrderTool extends ErpBaseTool {
     private static final String ERP_ORDER_PAGE_URL = "https://sc.scm121.com/tradeManage/tower/distribute";
     private static final String API_URL = "https://innerapi.scm121.com/api/inner/order/list";
-
-    @Override
-    public String getName() {
-        return "query_erp_order";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Query ERP order list. Checks login status on ERP page first, notifies if login is needed, then fetches data. Parameters: orderId (string, mandatory).";
-    }
 
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {

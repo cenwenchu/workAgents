@@ -18,18 +18,13 @@ import java.util.List;
  *
  * <p>该工具仅用于“查 UID/用户ID”的场景；发送消息优先用 send_message 由工具内部解析收件人。</p>
  */
+@Tool.Info(
+        name = "SearchDingTalkUserTool",
+        description = "通过用户名的模糊搜索来查询钉钉用户的Uid，输入参数为 name (关键词)",
+        requiredComponents = {ComponentId.DINGTALK}
+)
 public class SearchDingTalkUserTool implements Tool {
     private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
-
-    @Override
-    public String getName() {
-        return "SearchDingTalkUserTool";
-    }
-
-    @Override
-    public String getDescription() {
-        return "通过用户名的模糊搜索来查询钉钉用户的Uid，输入参数为 name (关键词)";
-    }
 
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
@@ -46,11 +41,6 @@ public class SearchDingTalkUserTool implements Tool {
                 params.put("name", extracted);
             }
         }
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.DINGTALK);
     }
 
     @Override

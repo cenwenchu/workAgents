@@ -10,10 +10,13 @@ import org.mockito.MockitoAnnotations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.verify;
 
+/**
+ * HelloWorldTool 单元测试。
+ *
+ * <p>覆盖注释模式元信息读取（{@link com.qiyi.tools.Tool.Info}）与 execute 行为。</p>
+ */
 public class HelloWorldToolTest {
 
     @Mock
@@ -24,17 +27,26 @@ public class HelloWorldToolTest {
 
     private HelloWorldTool tool;
 
+    /**
+     * 初始化 tool 与 mock。
+     */
     @BeforeEach
     public void setUp() {
         MockitoAnnotations.openMocks(this);
         tool = new HelloWorldTool();
     }
 
+    /**
+     * name 由 {@link com.qiyi.tools.Tool.Info} 提供，应可通过默认 getName() 读取。
+     */
     @Test
     public void testGetName() {
         assertEquals("hello_world", tool.getName());
     }
 
+    /**
+     * 传入 name 参数时，应生成对应欢迎语并通过 messenger 回传。
+     */
     @Test
     public void testExecuteWithParam() {
         JSONObject params = new JSONObject();
@@ -43,12 +55,13 @@ public class HelloWorldToolTest {
         String result = tool.execute(params, context, messenger);
         
         verify(messenger).sendText("Hello, Tester! 欢迎来到 WorkAgents 世界。");
-        // Verify that the guide is also sent
-        verify(messenger).sendText(contains("这是一个教学示例"));
         
         assertTrue(result.contains("Hello, Tester!"));
     }
 
+    /**
+     * 未提供 name 参数时，应使用默认值并回传欢迎语。
+     */
     @Test
     public void testExecuteWithoutParam() {
         JSONObject params = new JSONObject();

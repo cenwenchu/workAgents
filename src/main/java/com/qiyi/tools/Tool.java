@@ -4,7 +4,12 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.qiyi.component.ComponentId;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -20,8 +25,94 @@ import java.util.Map;
  * </ul>
  */
 public interface Tool {
-    String getName();
-    String getDescription();
+    /**
+     * Tool 元信息声明（注释模式）。
+     *
+     * <p>当一个类仅实现 {@link #execute(JSONObject, ToolContext, ToolMessenger)} 时，可通过该注解提供
+     * name/description 等必要信息，使其能被系统发现、导出 schema 并被 LLM 调用。</p>
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @interface Info {
+        /**
+         * 工具唯一名称（任务规划与路由的主键）。
+         */
+        String name();
+
+        /**
+         * 工具描述（会被导出到 schema，并作为 LLM 选型与参数抽取的主要依据）。
+         *
+         * <p>历史兼容：如描述中包含 “Parameters:” / “参数:” 等标记，系统会尝试从文本中解析入参结构。</p>
+         */
+        String description();
+
+        /**
+         * 是否允许该 Tool 被自动发现并注册。
+         *
+         * <p>用于排除抽象基类之外的“可实例化但不应暴露”的实现，或用于灰度/临时下线。</p>
+         */
+        boolean register() default true;
+
+        /**
+         * 业务域（用于注入 skills prompt、分类展示等）。
+         *
+         * <p>建议填写完整包名（如 com.qiyi.tools.futu）；留空则默认使用类所在包名；当包名不可用时回退为 general。</p>
+         */
+        String businessDomain() default "";
+
+        /**
+         * 工具类型（用于前端展示与路由策略）。
+         */
+        ToolType type() default ToolType.API;
+
+        /**
+         * 工具执行所需外部组件依赖（由 {@link com.qiyi.component.ComponentManager} 管理）。
+         */
+        ComponentId[] requiredComponents() default {};
+    }
+
+    /**
+     * Tool 自动注册控制（注释模式）。
+     *
+     * <p>与 {@link Info#register()} 语义等价，提供更轻量的开关形式。</p>
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @interface AutoRegister {
+        boolean value() default true;
+    }
+
+    /**
+     * 获取工具名称。
+     *
+     * <p>默认优先读取 {@link Info#name()}；如未提供则抛出异常，避免工具被注册后无法路由。</p>
+     */
+    default String getName() {
+        Info info = this.getClass().getAnnotation(Info.class);
+        if (info != null && info.name() != null && !info.name().trim().isEmpty()) {
+            return info.name().trim();
+        }
+        throw new IllegalStateException("Tool name missing. Override getName() or add @Tool.Info. class=" + this.getClass().getName());
+    }
+
+    /**
+     * 获取工具描述。
+     *
+     * <p>默认优先读取 {@link Info#description()}；如未提供则抛出异常，避免 schema 导出为空。</p>
+     */
+    default String getDescription() {
+        Info info = this.getClass().getAnnotation(Info.class);
+        if (info != null && info.description() != null && !info.description().trim().isEmpty()) {
+            return info.description().trim();
+        }
+        throw new IllegalStateException("Tool description missing. Override getDescription() or add @Tool.Info. class=" + this.getClass().getName());
+    }
+
+    /**
+     * 工具核心执行入口。
+     *
+     * <p>params 为本次任务的参数对象；context 为执行上下文（如会话/环境信息）；messenger 用于进度与结果回传。</p>
+     */
     String execute(JSONObject params, ToolContext context, ToolMessenger messenger);
 
     /**
@@ -48,31 +139,51 @@ public interface Tool {
         return Collections.emptyMap();
     }
 
+    /**
+     * 声明工具依赖的组件列表。
+     *
+     * <p>默认优先读取 {@link Info#requiredComponents()}；未声明则返回空集合。</p>
+     */
     default List<ComponentId> requiredComponents() {
+        Info info = this.getClass().getAnnotation(Info.class);
+        if (info != null && info.requiredComponents() != null && info.requiredComponents().length > 0) {
+            return Arrays.asList(info.requiredComponents());
+        }
         return Collections.emptyList();
     }
 
+    /**
+     * 获取工具业务域。
+     *
+     * <p>默认优先读取 {@link Info#businessDomain()}；未声明则使用类所在包名；不可用时回退为 general。</p>
+     */
     default String getBusinessDomain() {
-        String pkg = this.getClass().getPackage() != null ? this.getClass().getPackage().getName() : "";
-        String prefix = "com.qiyi.tools.";
-        if (pkg.startsWith(prefix)) {
-            String sub = pkg.substring(prefix.length());
-            int dotIndex = sub.indexOf('.');
-            if (dotIndex > 0) {
-                return sub.substring(0, dotIndex);
-            }
-            if (!sub.isEmpty()) {
-                return sub;
-            }
+        Info info = this.getClass().getAnnotation(Info.class);
+        if (info != null && info.businessDomain() != null && !info.businessDomain().trim().isEmpty()) {
+            return info.businessDomain().trim();
         }
-        return "general";
+        Package p = this.getClass().getPackage();
+        if (p == null) return "general";
+        String pkg = p.getName();
+        if (pkg == null || pkg.trim().isEmpty()) return "general";
+        return pkg.trim();
     }
 
+    /**
+     * 获取工具类型。
+     *
+     * <p>默认优先读取 {@link Info#type()}；未声明则使用业务域做简单推断（如 android 归类为移动端脚本）。</p>
+     */
     default ToolType getType() {
+        Info info = this.getClass().getAnnotation(Info.class);
+        if (info != null && info.type() != null) return info.type();
         String domain = getBusinessDomain();
-        
-        if ("android".equalsIgnoreCase(domain)) {
-            return ToolType.AUTO_MOBILE_SCRIPT;
+
+        if (domain != null) {
+            String d = domain.trim().toLowerCase();
+            if ("android".equals(d) || d.endsWith(".android") || d.contains(".android.")) {
+                return ToolType.AUTO_MOBILE_SCRIPT;
+            }
         }
         return ToolType.API;
     }

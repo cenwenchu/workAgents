@@ -10,17 +10,11 @@ import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.AppLog;
 
+@Tool.Info(
+        name = "list_components",
+        description = "列出当前 Agent 的组件列表与状态。参数：无。返回：组件数组（id/description/state/message/error）。"
+)
 public class ListComponentsTool implements Tool {
-    @Override
-    public String getName() {
-        return "list_components";
-    }
-
-    @Override
-    public String getDescription() {
-        return "列出当前 Agent 的组件列表与状态。参数：无。返回：组件数组（id/description/state/message/error）。";
-    }
-
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         ComponentManager mgr = ComponentManager.getInstance();

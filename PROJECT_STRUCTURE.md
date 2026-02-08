@@ -46,12 +46,9 @@ src/main/java/com/qiyi
 
 ```text
 src/main/resources
-└── com/qiyi/skills  # 按业务域拆分的 LLM prompt（base.md, futu.md, erp.md, dingtalk.md ...）
-```
-
-```text
-src/main/resources/META-INF/services
-└── com.qiyi.tools.Tool # Tool ServiceLoader 清单（新增工具只需追加类名即可被发现）
+├── agent.cfg        # Agent 配置（默认会被 AppConfig 从 classpath 加载）
+├── agent_bck.cfg    # 配置模板备份（不包含敏感值）
+└── com/qiyi/skills  # 按业务域拆分的 LLM prompt（base.md, com.qiyi.tools.futu.md ...）
 ```
 
 ## 2. 核心模块详解
@@ -76,11 +73,15 @@ src/main/resources/META-INF/services
 遵循 `Tool` 接口定义，是 Agent 可调用的具体原子能力。新架构引入了上下文感知（Context-Aware）机制，实现了工具逻辑与通信渠道的彻底解耦。
 
 - **Tool.java**: 核心接口，定义工具名/描述/执行方法，并支持声明依赖组件（`requiredComponents()`）。
+- **Tool.Info**: 工具元信息注释模式（name/description/domain/type/requiredComponents），推荐作为唯一元数据来源（通常实现类只需 `@Tool.Info + execute` 即可接入系统；`getName/getDescription/requiredComponents` 可不再实现）。
 - **Tool.enrichPlannedTask(...)**: 任务计划补参扩展点，用于从原始 userText 里补齐/修正 LLM 规划的入参（逻辑下沉到各工具自包含实现）。
 - **TaskProcessor.java**: 任务规划与执行主链路：工具筛选、任务生成（LLM）、组件依赖校验、顺序执行、错误兜底与日志。
 - **TaskPlanEnricher.java**: 规划补参分发器：按 task.tool 找到 Tool 并调用 `enrichPlannedTask`。
 - **ToolManager.java**: 工具注册与 Schema 导出（供 LLM 做工具选择与参数抽取）。
-  - **工具发现**：使用 JDK `ServiceLoader<Tool>`（对应 `META-INF/services/com.qiyi.tools.Tool`），不提供 legacy 注册兜底
+  - **工具发现（默认）**：类路径扫描（默认扫描 `com.qiyi.tools`，支持多包配置）
+    - 配置优先级：`-Dworkagents.tools.scanPackages=...` → `agent.cfg` 的 `tools.scan.packages` → 默认 `com.qiyi.tools`
+    - 单工具开关：`@Tool.Info(register=false)` 或 `@Tool.AutoRegister(false)`
+  - **工具发现（可选）**：兼容 `ServiceLoader<Tool>`（当存在 `META-INF/services/com.qiyi.tools.Tool` 时可作为补充来源，但不再强制要求）
 - **ToolContext / ToolMessenger**: 工具执行上下文与消息输出通道。
   - **DingTalkToolContext**: 钉钉环境下实现（同时是 ToolMessenger）。
   - **ConsoleToolContext**: 控制台环境下实现（同时是 ToolMessenger）。
@@ -210,8 +211,8 @@ src/main/resources/META-INF/services
 - 运行态入口：`tool_doctor`（`com.qiyi.tools.agent.ToolDoctorTool`），直接输出 JSON 报告，便于线上排障
 - 测试入口：`src/test/java/com/qiyi/tools/ToolDoctorTest.java`，用于在 CI/本地测试阶段提前发现配置或约束问题
 - 覆盖检查：
-  - ServiceLoader 清单文件是否存在且非空（`META-INF/services/com.qiyi.tools.Tool`）
-  - ServiceLoader 是否能发现工具
+  - 当前 ToolManager 已注册的工具列表（name/class/domain/type）
+  - （可选）ServiceLoader 清单信息：是否存在与内容（用于某些打包形态排查）
   - 是否存在重复 tool name
   - description 声明了参数但 schema 解析为空的问题
   - requiredComponents 是否都在 `ComponentManager.initDefaults()` 注册范围内
@@ -289,14 +290,15 @@ src/main/resources/META-INF/services
   - 启动/停止：`FutuOpenD.connect()` / `disconnect()`
   - 状态：`FutuOpenD.isConnected()`
 
-### 4.4 配置依赖（podcast.cfg）
+### 4.4 配置依赖（agent.cfg）
 
-统一入口：`com.qiyi.config.AppConfig` 从 classpath 读取 `podcast.cfg`。
+统一入口：`com.qiyi.config.AppConfig` 从 classpath 读取 `agent.cfg`。
 
 - LLM Keys（远程模型）：`deepseek.api-key` / `aliyun.api-key` / `moonshot.api-key` / `minimax.api-key` / `glm.api-key` / `GEMINI_API_KEY`
 - 钉钉机器人：`dingtalk.robot.client.id` / `dingtalk.robot.client.secret` / `dingtalk.robot.code` / `dingtalk.agent.id`（部分能力需要）
 - 富途 OpenD：`futu.opend.host` / `futu.opend.port`
 - 播客目录与管理员：`podcast.download.dir` / `podcast.publish.dir` / `podcast.published.dir` / `podcast.admin.users`
+- 工具扫描包（可选）：`tools.scan.packages`（支持多个包，逗号/分号/空白分隔）
 
 ## 5. 技术栈
 - **核心语言**: Java 17

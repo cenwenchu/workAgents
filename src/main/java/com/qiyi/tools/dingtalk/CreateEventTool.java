@@ -27,23 +27,13 @@ import java.util.Collections;
  *
  * <p>核心流程：解析入参 → 解析参会人（姓名/uid）→ 调用 DingTalkService 创建日程 → 通知发起人/被 @ 的人。</p>
  */
+@Tool.Info(
+        name = "create_event",
+        description = "Create a calendar event. Parameters: summary (string, mandatory), startTime (string, mandatory, yyyy-MM-dd HH:mm:ss), endTime (string, mandatory, yyyy-MM-dd HH:mm:ss), attendees (string/List, mandatory, names/userIds), description (string, optional), location (string, optional).",
+        requiredComponents = {ComponentId.DINGTALK}
+)
 public class CreateEventTool implements Tool {
     private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
-
-    @Override
-    public String getName() {
-        return "create_event";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Create a calendar event. Parameters: summary (string, mandatory), startTime (string, mandatory, yyyy-MM-dd HH:mm:ss), endTime (string, mandatory, yyyy-MM-dd HH:mm:ss), attendees (string/List, mandatory, names/userIds), description (string, optional), location (string, optional).";
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.DINGTALK);
-    }
 
     protected List<DingTalkDepartment> getAllDepartments() throws Exception {
         return DING_TALK_SERVICE.getAllDepartments(true, true);

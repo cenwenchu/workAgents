@@ -12,6 +12,10 @@ import com.qiyi.util.AppLog;
  *
  * <p>执行流程：连接浏览器 → 扫描可下载条目 → 下载 →（可选）调用大模型做重命名/摘要/图片等后处理。</p>
  */
+@Tool.Info(
+        name = "download_podcast",
+        description = "Download podcasts from Podwise. Parameters: maxProcessCount (int, default 50) - Maximum number of new episodes to download (e.g., 'download 5 items' sets this to 5), maxTryTimes (int, default 15) - Maximum scroll attempts, maxDuplicatePages (int, default 10) - Stop after N pages of duplicates, downloadMaxProcessCount (int, default 0) - Max files to process after download (0=all), threadPoolSize (int, default 15) - Thread pool size for processing."
+)
 public class DownloadPodcastTool implements Tool {
     private static final ReentrantLock DOWNLOAD_LOCK = new ReentrantLock();
     private com.qiyi.agent.PodwiseAgent podwiseAgent = new com.qiyi.agent.PodwiseAgent();
@@ -27,21 +31,6 @@ public class DownloadPodcastTool implements Tool {
     public static final int DOWNLOAD_DOWNLOAD_MAX_PROCESS_COUNT = 0;
     public static final int DOWNLOAD_THREAD_POOL_SIZE = 15;
     public static final boolean PUBLISH_IS_DRAFT = false;
-
-    @Override
-    public String getName() {
-        return "download_podcast";
-    }
-
-    @Override
-    public String getDescription() {
-        return String.format("Download podcasts from Podwise. Parameters: maxProcessCount (int, default %d) - Maximum number of new episodes to download (e.g., 'download 5 items' sets this to 5), maxTryTimes (int, default %d) - Maximum scroll attempts, maxDuplicatePages (int, default %d) - Stop after N pages of duplicates, downloadMaxProcessCount (int, default %d) - Max files to process after download (0=all), threadPoolSize (int, default %d) - Thread pool size for processing.",
-                DOWNLOAD_MAX_PROCESS_COUNT,
-                DOWNLOAD_MAX_TRY_TIMES,     
-                DOWNLOAD_MAX_DUPLICATE_PAGES,
-                DOWNLOAD_DOWNLOAD_MAX_PROCESS_COUNT,
-                DOWNLOAD_THREAD_POOL_SIZE);
-    }
 
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {

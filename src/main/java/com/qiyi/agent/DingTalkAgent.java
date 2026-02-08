@@ -19,6 +19,8 @@ import com.qiyi.tools.context.ConsoleToolContext;
  *     <li>启动 DingTalkService（机器人回调消费）</li>
  *     <li>通过 RobotMsgCallbackConsumer 接收消息并交给 TaskProcessor 规划与执行</li>
  * </ul>
+ *
+ * <p>运行所需的钉钉与管理员配置由 {@link com.qiyi.config.AppConfig} 从 {@code agent.cfg} 读取。</p>
  */
 public class DingTalkAgent extends AbstractAgent {
     private final ToolContext chatContext;
@@ -32,6 +34,9 @@ public class DingTalkAgent extends AbstractAgent {
         new DingTalkAgent().start();
     }
 
+    /**
+     * 启动钉钉入口：初始化 Tool/组件、启动钉钉回调消费并进入进程保活循环。
+     */
     @Override
     protected void doStart() {
         com.qiyi.tools.ToolManager.init();
@@ -87,7 +92,7 @@ public class DingTalkAgent extends AbstractAgent {
                 }
             }
         } else {
-            AppLog.warn("未配置 podcast.admin.users，请在 podcast.cfg 中配置");
+            AppLog.warn("未配置 podcast.admin.users，请在 agent.cfg 中配置");
         }
 
         AppLog.info("\n机器人监听已启动。在控制台输入 'exit' 并回车以停止程序...");

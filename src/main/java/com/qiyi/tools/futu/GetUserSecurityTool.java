@@ -10,25 +10,17 @@ import com.futu.openapi.pb.QotGetUserSecurity;
 import com.futu.openapi.pb.QotCommon;
 import com.qiyi.util.AppLog;
 
-import java.util.List;
-import java.util.ArrayList;
-
 /**
  * 获取指定自选股分组下的股票列表（富途）。
  *
  * <p>规划补参：在 groupName 缺失或 key 被污染时，尝试从 userText 中抽取并写回 parameters.groupName。</p>
  */
+@Tool.Info(
+        name = "get_user_security",
+        description = "功能：获取指定分组下的自选股列表。参数：groupName（字符串，必填，分组名称）。返回：股票代码、名称等信息列表。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetUserSecurityTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_user_security";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取指定分组下的自选股列表。参数：groupName（字符串，必填，分组名称）。返回：股票代码、名称等信息列表。";
-    }
-
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
         if (plannedTask == null) return;
@@ -54,11 +46,6 @@ public class GetUserSecurityTool implements Tool {
         }
 
         removeNoiseParamKeys(params);
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
     }
 
     protected FutuOpenD getFutuOpenD() {

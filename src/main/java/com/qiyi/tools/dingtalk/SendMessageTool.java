@@ -22,18 +22,13 @@ import java.util.Collections;
  *
  * <p>规划补参：从用户输入中提取收件人（names/departments）与默认 content={{PREV_RESULT}} 等常见模式。</p>
  */
+@Tool.Info(
+        name = "send_message",
+        description = "Send direct DingTalk text message to specific users. Parameters: content (string, mandatory). Choose ONE of: departments (string/List, names or IDs) OR names (string/List). If both provided, departments take precedence.",
+        requiredComponents = {ComponentId.DINGTALK}
+)
 public class SendMessageTool implements Tool {
     private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
-
-    @Override
-    public String getName() {
-        return "send_message";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Send direct DingTalk text message to specific users. Parameters: content (string, mandatory). Choose ONE of: departments (string/List, names or IDs) OR names (string/List). If both provided, departments take precedence.";
-    }
 
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
@@ -56,11 +51,6 @@ public class SendMessageTool implements Tool {
         if ((content == null || content.trim().isEmpty()) && wantsPrevResultToBeSent(userText)) {
             params.put("content", "{{PREV_RESULT}}");
         }
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.DINGTALK);
     }
 
     protected List<DingTalkDepartment> getAllDepartments() throws Exception {

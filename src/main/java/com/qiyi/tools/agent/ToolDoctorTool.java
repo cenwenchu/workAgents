@@ -18,7 +18,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.ServiceLoader;
 import java.util.Set;
 
 /**
@@ -28,7 +27,8 @@ import java.util.Set;
  *
  * <p>检查范围：</p>
  * <ul>
- *     <li>ServiceLoader 发现结果：是否存在 services 清单、清单内容、实际发现的工具列表</li>
+ *     <li>工具发现结果：当前 {@link ToolManager} 已注册的工具列表（并附带 name/class/domain/type）</li>
+ *     <li>ServiceLoader 清单信息（可选）：是否存在 services 清单、清单内容（用于排查某些打包形态）</li>
  *     <li>重复 tool name：同名工具会导致注册/路由歧义</li>
  *     <li>Schema 健康：description 声明了参数但 schema 解析为空（常见于格式不规范）</li>
  *     <li>skills.md 缺失：按 domain 检查 resources/com/qiyi/skills/&lt;domain&gt;.md（缺失不阻断，仅提示）</li>
@@ -42,17 +42,16 @@ import java.util.Set;
  *     <li>schemaIssues / duplicateToolNames / missingComponents / missingDomainSkills</li>
  * </ul>
  */
+@Tool.Info(
+        name = "tool_doctor",
+        description = "对当前 Agent 的 tools 做自检（发现/重复/Schema/skills.md/组件依赖）。参数：无。返回：JSON 报告。"
+)
 public class ToolDoctorTool implements Tool {
-    @Override
-    public String getName() {
-        return "tool_doctor";
-    }
-
-    @Override
-    public String getDescription() {
-        return "对当前 Agent 的 tools 做自检（发现/重复/Schema/skills.md/组件依赖）。参数：无。返回：JSON 报告。";
-    }
-
+    /**
+     * 执行自检并返回 JSON 报告字符串。
+     *
+     * <p>当提供 messenger 时，会将报告同步发送到消息通道，便于在控制台/钉钉直接查看。</p>
+     */
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         JSONObject report = new JSONObject();
@@ -79,11 +78,10 @@ public class ToolDoctorTool implements Tool {
         report.put("servicesPath", servicesPath);
         report.put("configuredToolClasses", configuredToolClasses);
 
-        List<Tool> discovered = new ArrayList<>();
+        List<Tool> discovered = new ArrayList<>(ToolManager.getAll());
         JSONArray discoveredTools = new JSONArray();
-        for (Tool t : ServiceLoader.load(Tool.class)) {
+        for (Tool t : discovered) {
             if (t == null) continue;
-            discovered.add(t);
             JSONObject one = new JSONObject();
             one.put("name", t.getName());
             one.put("class", t.getClass().getName());
@@ -162,9 +160,8 @@ public class ToolDoctorTool implements Tool {
         for (String domain : domains) {
             String path = "com/qiyi/skills/" + domain + ".md";
             try (InputStream in = cl.getResourceAsStream(path)) {
-                if (in == null) {
-                    missingDomainSkills.add(domain);
-                }
+                if (in != null) continue;
+                missingDomainSkills.add(domain);
             } catch (Exception e) {
                 missingDomainSkills.add(domain);
             }

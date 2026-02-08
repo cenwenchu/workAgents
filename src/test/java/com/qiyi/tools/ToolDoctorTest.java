@@ -14,42 +14,46 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.ServiceLoader;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Tool 生态健康检查测试。
+ *
+ * <p>该测试用于在本地/CI 提前发现工具注册、schema 导出、组件依赖等问题。</p>
+ */
 public class ToolDoctorTest {
 
+    /**
+     * 校验工具可被发现、无重复名称、schema 可导出、组件依赖可满足。
+     *
+     * <p>工具发现以 {@link ToolManager} 为准；ServiceLoader 清单存在与否不影响核心断言。</p>
+     */
     @Test
     public void toolDiscoveryAndHealth() {
         ClassLoader cl = ToolDoctorTest.class.getClassLoader();
         String servicesPath = "META-INF/services/" + Tool.class.getName();
         List<String> configuredToolClasses = new ArrayList<>();
         try (InputStream in = cl.getResourceAsStream(servicesPath)) {
-            assertTrue(in != null, "Missing " + servicesPath + ". ServiceLoader registration is required.");
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String v = line.trim();
-                    if (v.isEmpty() || v.startsWith("#")) continue;
-                    configuredToolClasses.add(v);
+            if (in != null) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        String v = line.trim();
+                        if (v.isEmpty() || v.startsWith("#")) continue;
+                        configuredToolClasses.add(v);
+                    }
                 }
             }
         } catch (Exception e) {
-            assertTrue(false, "Failed to read " + servicesPath + ": " + e.getMessage());
+            configuredToolClasses.clear();
         }
-        assertFalse(configuredToolClasses.isEmpty(), servicesPath + " is empty. At least one tool must be configured.");
 
-        List<Tool> discovered = new ArrayList<>();
-        for (Tool t : ServiceLoader.load(Tool.class)) {
-            if (t != null) {
-                discovered.add(t);
-            }
-        }
+        List<Tool> discovered = new ArrayList<>(ToolManager.getAll());
         assertFalse(discovered.isEmpty(),
-                "No tools discovered by ServiceLoader. Ensure META-INF/services/com.qiyi.tools.Tool is configured.");
+                "No tools discovered. Ensure tools are on classpath and can be instantiated.");
 
         Map<String, List<String>> nameToClasses = new LinkedHashMap<>();
         for (Tool t : discovered) {

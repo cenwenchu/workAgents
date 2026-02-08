@@ -10,17 +10,11 @@ import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.AppLog;
 
+@Tool.Info(
+        name = "component_status",
+        description = "查询组件状态。参数：id（可选；不传则返回所有组件状态）。返回：状态 JSON。"
+)
 public class ComponentStatusTool implements Tool {
-    @Override
-    public String getName() {
-        return "component_status";
-    }
-
-    @Override
-    public String getDescription() {
-        return "查询组件状态。参数：id（可选；不传则返回所有组件状态）。返回：状态 JSON。";
-    }
-
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         String id = params == null ? null : params.getString("id");

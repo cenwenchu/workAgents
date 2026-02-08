@@ -18,17 +18,12 @@ import java.util.ArrayList;
  *
  * <p>规划补参：当 code 缺失时，从 userText 中提取如 HK.00700 / US.AAPL 等证券代码。</p>
  */
+@Tool.Info(
+        name = "get_stock_quote",
+        description = "功能：获取指定证券的基础实时报价（BasicQot）。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）。返回：包含当前价、涨跌幅等基础字段的响应字符串。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetStockQuoteTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_stock_quote";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取指定证券的基础实时报价（BasicQot）。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）。返回：包含当前价、涨跌幅等基础字段的响应字符串。";
-    }
-
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
         if (plannedTask == null) return;
@@ -44,11 +39,6 @@ public class GetStockQuoteTool implements Tool {
                 params.put("code", extracted);
             }
         }
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
     }
 
     protected FutuOpenD getFutuOpenD() {

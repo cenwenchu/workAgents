@@ -8,17 +8,11 @@ import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.AppLog;
 
+@Tool.Info(
+        name = "start_component",
+        description = "启动指定组件。参数：id（必填，组件ID，例如 dingtalk / futu）。返回：组件状态。"
+)
 public class StartComponentTool implements Tool {
-    @Override
-    public String getName() {
-        return "start_component";
-    }
-
-    @Override
-    public String getDescription() {
-        return "启动指定组件。参数：id（必填，组件ID，例如 dingtalk / futu）。返回：组件状态。";
-    }
-
     @Override
     public String execute(JSONObject params, ToolContext context, ToolMessenger messenger) {
         String id = params == null ? null : params.getString("id");

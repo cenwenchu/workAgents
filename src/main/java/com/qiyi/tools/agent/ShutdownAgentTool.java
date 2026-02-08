@@ -1,24 +1,20 @@
 package com.qiyi.tools.agent;
 
 import com.alibaba.fastjson2.JSONObject;
+import com.qiyi.component.ComponentId;
 import com.qiyi.service.dingtalk.DingTalkService;
 import com.qiyi.tools.Tool;
 import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.AppLog;
 
+@Tool.Info(
+        name = "shutdown_agent",
+        description = "关闭钉钉机器人服务并退出 DingTalkAgent。Parameters: none.",
+        requiredComponents = {ComponentId.DINGTALK}
+)
 public class ShutdownAgentTool implements Tool {
     private static final DingTalkService DING_TALK_SERVICE = DingTalkService.fromAppConfig();
-
-    @Override
-    public String getName() {
-        return "shutdown_agent";
-    }
-
-    @Override
-    public String getDescription() {
-        return "关闭钉钉机器人服务并退出 DingTalkAgent。Parameters: none.";
-    }
 
     protected void stopRobotMsgCallbackConsumer() throws Exception {
         DING_TALK_SERVICE.stopRobotMsgCallbackConsumer();

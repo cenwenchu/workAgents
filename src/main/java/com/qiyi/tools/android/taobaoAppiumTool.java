@@ -47,6 +47,18 @@ import java.util.Set;
  * </ul>
  * </p>
  */
+@Tool.Info(
+        name = "search_taobao_product",
+        description = "用于在淘宝App中搜索商品或查找外卖店铺。支持两种模式：\n" +
+                "1. 查询信息模式 (operation='search')：提供商品名称和类型，可选店铺名称。会扫描店铺列表并整理店铺信息，如果指定了店铺或扫描到店铺，还会尝试获取店内商品详情。\n" +
+                "2. 下单模式 (operation='buy')：必须提供商品名称、类型和店铺名称。直接进入指定店铺并定位商品，为后续下单做准备。\n" +
+                "参数：\n" +
+                "- product_name (String, 必填): 搜索关键词。\n" +
+                "- product_type (String, 选填): '普通商品'或'外卖商品'。\n" +
+                "- target_shop_name (String, 选填): 目标店铺名称。在'buy'模式下必填。\n" +
+                "- operation (String, 选填): 'search' (默认) 或 'buy'。\n" +
+                "- max_shop_count (Integer, 选填): 搜索店铺数量限制，默认为 3。"
+)
 public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
     private ToolMessenger messenger;
@@ -92,24 +104,6 @@ public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     public TaobaoAppiumTool() {
         this.setAppPackage("com.taobao.taobao");
         this.setAppActivity("com.taobao.tao.welcome.Welcome");
-    }
-
-    @Override
-    public String getName() {
-        return "search_taobao_product";
-    }
-
-    @Override
-    public String getDescription() {
-        return "用于在淘宝App中搜索商品或查找外卖店铺。支持两种模式：\n" +
-               "1. 查询信息模式 (operation='search')：提供商品名称和类型，可选店铺名称。会扫描店铺列表并整理店铺信息，如果指定了店铺或扫描到店铺，还会尝试获取店内商品详情。\n" +
-               "2. 下单模式 (operation='buy')：必须提供商品名称、类型和店铺名称。直接进入指定店铺并定位商品，为后续下单做准备。\n" +
-               "参数：\n" +
-               "- product_name (String, 必填): 搜索关键词。\n" +
-               "- product_type (String, 选填): '普通商品'或'外卖商品'。\n" +
-               "- target_shop_name (String, 选填): 目标店铺名称。在'buy'模式下必填。\n" +
-               "- operation (String, 选填): 'search' (默认) 或 'buy'。\n" +
-               "- max_shop_count (Integer, 选填): 搜索店铺数量限制，默认为 3。";
     }
     
     /**

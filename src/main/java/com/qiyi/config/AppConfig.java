@@ -5,6 +5,19 @@ import java.io.InputStream;
 import java.util.Properties;
 import com.qiyi.util.AppLog;
 
+/**
+ * 应用配置读取入口。
+ *
+ * <p>配置文件默认读取 classpath 下的 {@code agent.cfg}（src/main/resources/agent.cfg），用于提供：</p>
+ * <ul>
+ *     <li>大模型相关 key（可选）</li>
+ *     <li>钉钉机器人配置</li>
+ *     <li>播客处理目录与运行参数</li>
+ *     <li>工具自动注册扫描包（tools.scan.packages）</li>
+ * </ul>
+ *
+ * <p>注意：该类仅负责读取与提供原始配置值；敏感配置建议通过外部注入方式提供，不应写入仓库。</p>
+ */
 public class AppConfig {
     private static final AppConfig INSTANCE = new AppConfig();
     private final Properties properties = new Properties();
@@ -39,6 +52,7 @@ public class AppConfig {
     public static final String KEY_AUTOWEB_DEBUG_FRAME_CAPTURE = "autoweb.debug.frame.capture";
     public static final String KEY_FUTU_OPEND_HOST = "futu.opend.host";
     public static final String KEY_FUTU_OPEND_PORT = "futu.opend.port";
+    public static final String KEY_TOOLS_SCAN_PACKAGES = "tools.scan.packages";
 
     // Default Values
     public static final String DEFAULT_DOWNLOAD_DIR = "/tmp/podCastItems/";
@@ -58,10 +72,15 @@ public class AppConfig {
         return INSTANCE;
     }
 
+    /**
+     * 从 classpath 读取配置文件并加载为 Properties。
+     *
+     * <p>当配置文件缺失时会记录日志并保留空配置（调用方需自行处理默认值/降级）。</p>
+     */
     private void loadProperties() {
-        try (InputStream input = AppConfig.class.getClassLoader().getResourceAsStream("podcast.cfg")) {
+        try (InputStream input = AppConfig.class.getClassLoader().getResourceAsStream("agent.cfg")) {
             if (input == null) {
-                AppLog.error("Sorry, unable to find podcast.cfg");
+                AppLog.error("Sorry, unable to find agent.cfg");
                 return;
             }
             properties.load(input);
@@ -75,6 +94,9 @@ public class AppConfig {
         return properties.getProperty(key);
     }
 
+    /**
+     * 获取配置值（带默认值）。
+     */
     public String getProperty(String key, String defaultValue) {
         return properties.getProperty(key, defaultValue);
     }
@@ -205,5 +227,14 @@ public class AppConfig {
             }
         }
         return DEFAULT_FUTU_OPEND_PORT;
+    }
+
+    /**
+     * 获取工具类路径扫描包配置（支持多包）。
+     *
+     * <p>对应配置项：{@code tools.scan.packages}。</p>
+     */
+    public String getToolsScanPackages() {
+        return getProperty(KEY_TOOLS_SCAN_PACKAGES);
     }
 }

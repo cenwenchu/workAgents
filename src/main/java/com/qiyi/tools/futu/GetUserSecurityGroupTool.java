@@ -9,30 +9,17 @@ import com.qiyi.tools.ToolContext;
 import com.qiyi.tools.ToolMessenger;
 import com.qiyi.util.AppLog;
 
-import java.util.List;
-import java.util.ArrayList;
-
 /**
  * 获取用户的自选股分组列表（富途）。
  *
  * <p>用于在后续查询中选择 groupName，例如 get_user_security / get_group_stock_quotes。</p>
  */
+@Tool.Info(
+        name = "get_user_security_group",
+        description = "功能：获取用户的自选股分组列表。参数：groupType（整数，选填，分组类型，默认全部）。返回：分组名称和类型列表。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetUserSecurityGroupTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_user_security_group";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取用户的自选股分组列表。参数：groupType（整数，选填，分组类型，默认全部）。返回：分组名称和类型列表。";
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
-    }
-
     protected FutuOpenD getFutuOpenD() {
         return FutuOpenD.getInstance();
     }

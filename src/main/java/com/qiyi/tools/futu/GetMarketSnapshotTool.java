@@ -10,25 +10,17 @@ import com.futu.openapi.pb.QotGetSecuritySnapshot;
 import com.futu.openapi.pb.QotCommon;
 import com.qiyi.util.AppLog;
 
-import java.util.List;
-import java.util.ArrayList;
-
 /**
  * 获取证券市场快照（富途 SecuritySnapshot）。
  *
  * <p>规划补参：当 code 缺失时，从 userText 中提取如 HK.00700 / US.AAPL 等证券代码。</p>
  */
+@Tool.Info(
+        name = "get_market_snapshot",
+        description = "功能：获取指定证券的市场快照（SecuritySnapshot）。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）。返回：包含最新价、昨收、最高、最低、成交量等快照信息的响应字符串。",
+        requiredComponents = {ComponentId.FUTU}
+)
 public class GetMarketSnapshotTool implements Tool {
-    @Override
-    public String getName() {
-        return "get_market_snapshot";
-    }
-
-    @Override
-    public String getDescription() {
-        return "功能：获取指定证券的市场快照（SecuritySnapshot）。参数：code（字符串，必填，格式如：HK.00700/US.AAPL/SH.600519/SZ.000001）。返回：包含最新价、昨收、最高、最低、成交量等快照信息的响应字符串。";
-    }
-
     @Override
     public void enrichPlannedTask(String userText, JSONObject plannedTask) {
         if (plannedTask == null) return;
@@ -44,11 +36,6 @@ public class GetMarketSnapshotTool implements Tool {
                 params.put("code", extracted);
             }
         }
-    }
-
-    @Override
-    public List<ComponentId> requiredComponents() {
-        return List.of(ComponentId.FUTU);
     }
 
     protected FutuOpenD getFutuOpenD() {

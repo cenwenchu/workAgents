@@ -2,21 +2,34 @@ package com.qiyi.tools;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.qiyi.config.AppConfig;
 import com.qiyi.tools.context.ConsoleToolContext;
 import com.qiyi.util.AppLog;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.ServiceLoader;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.net.JarURLConnection;
+import java.net.URL;
 
 /**
  * 工具注册与查询中心。
@@ -30,9 +43,16 @@ import java.util.ServiceLoader;
  *
  * <p>工具发现方式：</p>
  * <ul>
- *     <li>通过 {@link java.util.ServiceLoader} 发现 {@link Tool} 实现类</li>
- *     <li>清单文件位于 {@code src/main/resources/META-INF/services/com.qiyi.tools.Tool}</li>
- *     <li>本项目不提供 legacy 注册兜底，发现不到工具将直接失败，便于尽早暴露配置问题</li>
+ *     <li>通过 {@link java.util.ServiceLoader} 发现 {@link Tool} 实现类（可选）</li>
+ *     <li>通过类路径扫描发现 {@link Tool} 实现类（默认开启）</li>
+ * </ul>
+ *
+ * <p>类路径扫描配置：</p>
+ * <ul>
+ *     <li>开关：{@code -Dworkagents.tools.autoregister=false} 可关闭扫描</li>
+ *     <li>扫描包：优先读取 {@code -Dworkagents.tools.scanPackages}；其次读取配置文件 key {@code tools.scan.packages}；默认 {@code com.qiyi.tools}</li>
+ *     <li>支持多包：逗号/分号/空白分隔</li>
+ *     <li>单工具开关：{@link Tool.Info#register()} / {@link Tool.AutoRegister}</li>
  * </ul>
  *
  * <p>调用链路：</p>
@@ -106,11 +126,17 @@ public class ToolManager {
         AppLog.info("[tool] init done, toolCount=" + tools.size());
     }
 
+    /**
+     * 发现并注册工具实现。
+     *
+     * <p>注册顺序：先尝试 ServiceLoader（如存在），再执行类路径扫描；工具名冲突会拒绝后续注册。</p>
+     */
     public static void registerTools() {
         AppLog.info("[tool] register begin, alreadyRegistered=" + tools.size());
         registerToolsFromServiceLoader();
+        registerToolsFromClasspathScan();
         if (tools.isEmpty()) {
-            throw new IllegalStateException("No tools discovered by ServiceLoader. Ensure META-INF/services/com.qiyi.tools.Tool is configured.");
+            throw new IllegalStateException("No tools discovered. Ensure tools are on classpath and can be instantiated.");
         }
         AppLog.info("[tool] register done, toolCount=" + tools.size());
         
@@ -135,6 +161,11 @@ public class ToolManager {
         }
     }
 
+    /**
+     * 尝试通过 ServiceLoader 发现 Tool 实现类并注册。
+     *
+     * <p>该方式不再要求必须存在 services 清单；主要用于兼容某些打包形态或外部扩展。</p>
+     */
     private static void registerToolsFromServiceLoader() {
         String servicesPath = "META-INF/services/" + Tool.class.getName();
         try {
@@ -209,13 +240,234 @@ public class ToolManager {
                 + ", invalidName=" + invalidCount);
     }
 
+    /**
+     * 通过类路径扫描发现 Tool 实现类并注册（默认开启）。
+     *
+     * <p>限制与约束：</p>
+     * <ul>
+     *     <li>仅扫描配置包前缀下的 class（默认 com.qiyi.tools）</li>
+     *     <li>仅注册非 abstract、非 interface、非内部类（包含 $）的实现</li>
+     *     <li>要求存在无参构造（可为默认构造）；否则跳过</li>
+     *     <li>如类上声明 {@link Tool.Info#register()} 为 false 或 {@link Tool.AutoRegister} 为 false，则跳过</li>
+     * </ul>
+     */
+    private static void registerToolsFromClasspathScan() {
+        String enabled = System.getProperty("workagents.tools.autoregister", "true");
+        if (!"true".equalsIgnoreCase(enabled) && !"1".equals(enabled)) {
+            AppLog.info("[tool] classpath scan disabled by system property: workagents.tools.autoregister=" + enabled);
+            return;
+        }
+
+        ClassLoader cl = ToolManager.class.getClassLoader();
+        Set<String> pkgs = getScanPackages();
+        int discoveredCount = 0;
+        int instantiatedCount = 0;
+        int registeredCount = 0;
+        int skippedCount = 0;
+        int failedCount = 0;
+
+        for (String pkg : pkgs) {
+            for (String className : listClassNamesUnderPackage(cl, pkg)) {
+                discoveredCount++;
+                Class<?> clazz;
+                try {
+                    clazz = Class.forName(className, false, cl);
+                } catch (Throwable t) {
+                    failedCount++;
+                    continue;
+                }
+
+                if (!Tool.class.isAssignableFrom(clazz)) continue;
+                if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) continue;
+                if (clazz == Tool.class) continue;
+                if (!shouldAutoRegister(clazz)) {
+                    skippedCount++;
+                    continue;
+                }
+
+                Tool tool;
+                try {
+                    Constructor<?> ctor = clazz.getDeclaredConstructor();
+                    if (!ctor.canAccess(null)) {
+                        ctor.setAccessible(true);
+                    }
+                    Object obj = ctor.newInstance();
+                    if (!(obj instanceof Tool)) {
+                        failedCount++;
+                        continue;
+                    }
+                    tool = (Tool) obj;
+                    instantiatedCount++;
+                } catch (Throwable t) {
+                    failedCount++;
+                    continue;
+                }
+
+                if (registerInternal(tool, "classpath-scan")) {
+                    registeredCount++;
+                }
+            }
+        }
+
+        AppLog.info("[tool] classpath scan summary: packages=" + pkgs
+                + ", discoveredClasses=" + discoveredCount
+                + ", instantiated=" + instantiatedCount
+                + ", registered=" + registeredCount
+                + ", skipped=" + skippedCount
+                + ", failed=" + failedCount);
+    }
+
+    /**
+     * 获取需要扫描的包列表（支持多包）。
+     *
+     * <p>优先级：System Property {@code workagents.tools.scanPackages} → 配置文件 {@code tools.scan.packages} → 默认 {@code com.qiyi.tools}。</p>
+     */
+    private static Set<String> getScanPackages() {
+        String raw = System.getProperty("workagents.tools.scanPackages");
+        if (raw == null || raw.trim().isEmpty()) {
+            raw = AppConfig.getInstance().getToolsScanPackages();
+        }
+        if (raw == null || raw.trim().isEmpty()) {
+            raw = "com.qiyi.tools";
+        }
+        Set<String> pkgs = new LinkedHashSet<>();
+        for (String seg : raw.split("[,;\\s]+")) {
+            if (seg == null) continue;
+            String v = seg.trim();
+            if (!v.isEmpty()) pkgs.add(v);
+        }
+        if (pkgs.isEmpty()) pkgs.add("com.qiyi.tools");
+        return pkgs;
+    }
+
+    /**
+     * 判断某个 Tool 实现类是否允许被自动注册。
+     *
+     * <p>优先使用 {@link Tool.Info#register()}；同时兼容 {@link Tool.AutoRegister} 的显式开关。</p>
+     */
+    private static boolean shouldAutoRegister(Class<?> clazz) {
+        Tool.Info info = clazz.getAnnotation(Tool.Info.class);
+        if (info != null && !info.register()) return false;
+        Tool.AutoRegister auto = clazz.getAnnotation(Tool.AutoRegister.class);
+        if (auto != null && !auto.value()) return false;
+        return true;
+    }
+
+    /**
+     * 列出某个包（含子包）下的所有 class 全限定名。
+     *
+     * <p>实现同时支持目录（开发/测试 classpath）与 jar（生产打包）两种形态。</p>
+     */
+    private static Set<String> listClassNamesUnderPackage(ClassLoader cl, String basePackage) {
+        String pkg = basePackage == null ? "" : basePackage.trim();
+        if (pkg.isEmpty()) return java.util.Collections.emptySet();
+
+        String path = pkg.replace('.', '/');
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            Enumeration<URL> urls = cl.getResources(path);
+            while (urls.hasMoreElements()) {
+                URL url = urls.nextElement();
+                if (url == null) continue;
+                String protocol = url.getProtocol();
+                if ("file".equalsIgnoreCase(protocol)) {
+                    try {
+                        Path root = Paths.get(url.toURI());
+                        out.addAll(listClassNamesFromDirectory(root, pkg));
+                    } catch (Exception ignored) {
+                    }
+                } else if ("jar".equalsIgnoreCase(protocol)) {
+                    try {
+                        JarURLConnection conn = (JarURLConnection) url.openConnection();
+                        try (JarFile jar = conn.getJarFile()) {
+                            out.addAll(listClassNamesFromJar(jar, path));
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * 从 classpath 目录中收集 class 文件并转为全限定名。
+     *
+     * <p>仅收集顶层类（忽略内部类 $）。</p>
+     */
+    private static Set<String> listClassNamesFromDirectory(Path rootDir, String basePackage) {
+        Set<String> out = new LinkedHashSet<>();
+        if (rootDir == null) return out;
+        if (!Files.exists(rootDir)) return out;
+
+        Queue<Path> q = new ArrayDeque<>();
+        q.add(rootDir);
+        while (!q.isEmpty()) {
+            Path p = q.poll();
+            try {
+                if (Files.isDirectory(p)) {
+                    try (java.util.stream.Stream<Path> s = Files.list(p)) {
+                        s.forEach(q::add);
+                    }
+                    continue;
+                }
+                String fn = p.getFileName() == null ? null : p.getFileName().toString();
+                if (fn == null || !fn.endsWith(".class")) continue;
+                if (fn.contains("$")) continue;
+
+                Path rel = rootDir.relativize(p);
+                String relStr = rel.toString().replace('/', '.').replace('\\', '.');
+                if (!relStr.endsWith(".class")) continue;
+                String cls = relStr.substring(0, relStr.length() - ".class".length());
+                out.add(basePackage + "." + cls);
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 从 jar 包中收集 class 文件并转为全限定名。
+     *
+     * <p>仅收集顶层类（忽略内部类 $）。</p>
+     */
+    private static Set<String> listClassNamesFromJar(JarFile jar, String basePath) {
+        Set<String> out = new LinkedHashSet<>();
+        if (jar == null) return out;
+        Enumeration<JarEntry> entries = jar.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry e = entries.nextElement();
+            if (e == null) continue;
+            String name = e.getName();
+            if (name == null) continue;
+            if (!name.startsWith(basePath + "/")) continue;
+            if (!name.endsWith(".class")) continue;
+            if (name.contains("$")) continue;
+            String cls = name.substring(0, name.length() - ".class".length()).replace('/', '.');
+            out.add(cls);
+        }
+        return out;
+    }
+
     public static boolean register(Tool tool) {
         return registerInternal(tool, "manual");
     }
 
+    /**
+     * 注册单个工具实例到全局注册表。
+     *
+     * <p>注册以 tool name 为唯一键；当 name 缺失、抛异常或重复时将拒绝注册并返回 false。</p>
+     */
     private static boolean registerInternal(Tool tool, String source) {
         if (tool == null) return false;
-        String name = tool.getName();
+        String name;
+        try {
+            name = tool.getName();
+        } catch (Exception e) {
+            AppLog.warn("[tool] invalid tool name (exception), source=" + source + ", class=" + tool.getClass().getName() + ", err=" + e.getMessage());
+            return false;
+        }
         if (name == null || name.trim().isEmpty()) {
             AppLog.warn("[tool] invalid tool name, source=" + source + ", class=" + tool.getClass().getName());
             return false;

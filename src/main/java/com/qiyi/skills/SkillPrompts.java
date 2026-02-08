@@ -9,7 +9,10 @@ import java.util.Set;
 /**
  * 按业务域加载可选的 LLM skills prompt（markdown），用于给规划阶段提供额外上下文。
  *
- * <p>资源位置：src/main/resources/com/qiyi/skills/*.md</p>
+ * <p>资源位置：src/main/resources/com/qiyi/skills/*.md（文件名与 domain key 一一对应）。</p>
+ *
+ * <p>当前约定：domain 使用工具业务域（通常为完整包名，例如 com.qiyi.tools.futu），因此对应的资源文件名形如
+ * {@code com.qiyi.tools.futu.md}。</p>
  */
 public final class SkillPrompts {
     private static final String BASE_DIR = "com/qiyi/skills/";
@@ -25,15 +28,17 @@ public final class SkillPrompts {
     }
 
     /**
-     * 按业务域加载 prompt（例如 futu/erp/dingtalk），用于仅在需要时注入上下文。
+     * 按业务域加载 prompt（例如 com.qiyi.tools.futu / com.qiyi.tools.erp / com.qiyi.tools.dingtalk），用于仅在需要时注入上下文。
      */
     public static String forDomains(Collection<String> domains) {
         if (domains == null || domains.isEmpty()) return "";
         Set<String> normalized = new LinkedHashSet<>();
         for (String d : domains) {
             if (d == null) continue;
-            String v = d.trim();
-            if (!v.isEmpty()) normalized.add(v);
+            String v = normalizeDomainKey(d);
+            if (!v.isEmpty()) {
+                normalized.add(v);
+            }
         }
         if (normalized.isEmpty()) return "";
 
@@ -42,6 +47,18 @@ public final class SkillPrompts {
             sb.append(loadOrEmpty(domain + ".md"));
         }
         return sb.toString();
+    }
+
+    /**
+     * 规范化 domain key。
+     *
+     * <p>当前只做 trim；保留该方法便于未来扩展（例如统一大小写/别名映射等）。</p>
+     */
+    private static String normalizeDomainKey(String domain) {
+        if (domain == null) return "";
+        String v = domain.trim();
+        if (v.isEmpty()) return "";
+        return v.trim();
     }
 
     private static String loadOrEmpty(String filename) {
