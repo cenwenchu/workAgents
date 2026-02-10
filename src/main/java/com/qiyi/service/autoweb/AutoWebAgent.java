@@ -715,7 +715,7 @@ public class AutoWebAgent {
             java.util.function.Consumer<String> uiLogger,
             HtmlCaptureMode captureMode
     ) {
-        return prepareStepHtmls(rootPage, steps, uiLogger, captureMode, true);
+        return prepareStepHtmls(rootPage, steps, uiLogger, captureMode, false);
     }
 
     /**
@@ -1700,14 +1700,21 @@ public class AutoWebAgent {
             throw new IllegalArgumentException("empty scriptCode");
         }
 
+        String normalizedCode = normalizeGroovyScriptForExecution(scriptCode);
+        if (!normalizedCode.equals(scriptCode)) {
+            String ts = newDebugTimestamp();
+            saveDebugArtifact(ts, "EXEC", "GROOVY", "script_raw", scriptCode, logger);
+            saveDebugArtifact(ts, "EXEC", "GROOVY", "script_normalized", normalizedCode, logger);
+        }
+
         // 1. Static Linting
-        java.util.List<String> lintErrors = GroovyLinter.check(scriptCode);
+        java.util.List<String> lintErrors = GroovyLinter.check(normalizedCode);
         if (!lintErrors.isEmpty()) {
             StringBuilder sb = new StringBuilder("Static Analysis Found Issues:\n");
             for (String err : lintErrors) {
                 sb.append("- ").append(err).append("\n");
             }
-            logger.accept(sb.toString());
+            if (logger != null) logger.accept(sb.toString());
             
             // Abort on security violations
             boolean hasSecurityError = lintErrors.stream().anyMatch(e -> e.startsWith("Security Error"));
@@ -1748,26 +1755,26 @@ public class AutoWebAgent {
                     int newline = buffer.indexOf("\n");
                     while (newline != -1) {
                         String line = buffer.substring(0, newline);
-                        logger.accept(line); // Log to UI
+                        if (logger != null) logger.accept(line);
                         buffer.delete(0, newline + 1);
                         newline = buffer.indexOf("\n");
                     }
                 }
             }, true)); // Auto-flush
 
-            groovy.lang.GroovyShell shell = new groovy.lang.GroovyShell(binding);
-            shell.evaluate(scriptCode);
-            logger.accept("Groovy script executed successfully.");
+            groovy.lang.GroovyShell shell = new groovy.lang.GroovyShell(binding, secureGroovyCompilerConfig());
+            shell.evaluate(normalizedCode);
+            if (logger != null) logger.accept("Groovy script executed successfully.");
         } catch (Exception e) {
             String msg = e.getMessage();
             if (msg == null) msg = "";
-            logger.accept("Groovy execution failed: " + e.getClass().getName() + (msg.isEmpty() ? "" : (": " + msg)));
+            if (logger != null) logger.accept("Groovy execution failed: " + e.getClass().getName() + (msg.isEmpty() ? "" : (": " + msg)));
             try {
                 Throwable c = e.getCause();
                 if (c != null && c != e) {
                     String cm = c.getMessage();
                     if (cm == null) cm = "";
-                    logger.accept("Groovy execution cause: " + c.getClass().getName() + (cm.isEmpty() ? "" : (": " + cm)));
+                    if (logger != null) logger.accept("Groovy execution cause: " + c.getClass().getName() + (cm.isEmpty() ? "" : (": " + cm)));
                 }
             } catch (Exception ignored) {}
             try {
@@ -1779,12 +1786,98 @@ public class AutoWebAgent {
                     for (int i = 0; i < limit; i++) {
                         sb.append(lines[i]).append("\n");
                     }
-                    logger.accept(sb.toString().trim());
+                    if (logger != null) logger.accept(sb.toString().trim());
                 }
             } catch (Exception ignored) {}
             // 抛出异常以便主程序捕获并退出
             throw e;
         }
+    }
+
+    static String normalizeGroovyScriptForExecution(String code) {
+        if (code == null) return "";
+        String out = code;
+        out = out.replaceAll("```groovy", "").replaceAll("```java", "").replaceAll("```", "");
+        out = out.replaceFirst("(?s)^\\s*(groovy|java)\\s*\\r?\\n", "");
+
+        out = out.replaceAll("(?m)^\\s*import\\s+static\\s+[^\\r\\n]+\\s*$", "");
+
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.util\\.[A-Za-z0-9_.$]+\\s*$", "import java.util.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.math\\.[A-Za-z0-9_.$]+\\s*$", "import java.math.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.time\\.[A-Za-z0-9_.$]+\\s*$", "import java.time.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.text\\.[A-Za-z0-9_.$]+\\s*$", "import java.text.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.util\\.regex\\.[A-Za-z0-9_.$]+\\s*$", "import java.util.regex.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+com\\.google\\.gson\\.[A-Za-z0-9_.$]+\\s*$", "import com.google.gson.*");
+
+        out = out.replaceAll("(?m)^\\s*import\\s+groovy\\.json\\.(JsonOutput|JsonBuilder)\\s*$", "");
+
+        out = out.replaceAll("(?m)^\\s*println\\s+groovy\\.json\\.JsonBuilder\\.newInstance\\s*\\(", "println new groovy.json.JsonBuilder(");
+        out = out.replaceAll("groovy\\.json\\.JsonBuilder\\.newInstance\\s*\\(", "new groovy.json.JsonBuilder(");
+
+        out = out.replaceAll("new\\s+groovy\\.json\\.JsonBuilder\\(([^\\)]*)\\)\\.toPrettyString\\(\\)", "new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson($1)");
+        out = out.replaceAll("groovy\\.json\\.JsonBuilder\\s*\\(([^\\)]*)\\)\\.toPrettyString\\(\\)", "new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson($1)");
+        out = out.replaceAll("println\\s+new\\s+groovy\\.json\\.JsonBuilder\\(([^\\)]*)\\)\\.toPrettyString\\(\\)", "println new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson($1)");
+
+        out = out.replaceAll("JsonOutput\\.prettyPrint\\(\\s*JsonOutput\\.toJson\\(([^\\)]*)\\)\\s*\\)", "new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson($1)");
+        out = out.replaceAll("println\\s+JsonOutput\\.prettyPrint\\(\\s*JsonOutput\\.toJson\\(([^\\)]*)\\)\\s*\\)", "println new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson($1)");
+        out = out.replaceAll("JsonOutput\\.toJson\\(([^\\)]*)\\)", "new com.google.gson.Gson().toJson($1)");
+
+        out = out.replaceAll("new\\s+Date\\(\\s*\\)\\s*\\.\\s*format\\(\\s*\"([^\"]+)\"\\s*\\)", "new java.text.SimpleDateFormat(\"$1\").format(new Date())");
+        out = out.replaceAll("new\\s+Date\\(\\s*\\)\\s*\\.\\s*format\\(\\s*'([^']+)'\\s*\\)", "new java.text.SimpleDateFormat('$1').format(new Date())");
+        out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*format\\(\\s*\"([^\"]+)\"\\s*\\)", "new java.text.SimpleDateFormat(\"$2\").format($1)");
+        out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*format\\(\\s*'([^']+)'\\s*\\)", "new java.text.SimpleDateFormat('$2').format($1)");
+
+        out = out.replaceAll("new\\s+Date\\(\\s*\\)\\s*\\.\\s*minus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli(System.currentTimeMillis()).minus(java.time.Duration.ofDays($1L)).toEpochMilli())");
+        out = out.replaceAll("new\\s+Date\\(\\s*\\)\\s*\\.\\s*plus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli(System.currentTimeMillis()).plus(java.time.Duration.ofDays($1L)).toEpochMilli())");
+        out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*minus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli($1.getTime()).minus(java.time.Duration.ofDays($2L)).toEpochMilli())");
+        out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*plus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli($1.getTime()).plus(java.time.Duration.ofDays($2L)).toEpochMilli())");
+
+        return out.trim();
+    }
+
+    static org.codehaus.groovy.control.CompilerConfiguration secureGroovyCompilerConfig() {
+        org.codehaus.groovy.control.CompilerConfiguration cfg = new org.codehaus.groovy.control.CompilerConfiguration();
+        org.codehaus.groovy.control.customizers.SecureASTCustomizer sc = new org.codehaus.groovy.control.customizers.SecureASTCustomizer();
+
+        sc.setIndirectImportCheckEnabled(false);
+        sc.setClosuresAllowed(true);
+        sc.setMethodDefinitionAllowed(true);
+
+        sc.setAllowedImports(java.util.Collections.emptyList());
+        sc.setAllowedStaticImports(java.util.Collections.emptyList());
+        sc.setAllowedStaticStarImports(java.util.Collections.emptyList());
+        sc.setAllowedStarImports(java.util.Arrays.asList(
+                "java.lang",
+                "java.util",
+                "java.math",
+                "java.time",
+                "java.text",
+                "java.util.regex",
+                "com.google.gson"
+        ));
+
+        sc.setDisallowedReceivers(java.util.Arrays.asList(
+                "java.lang.System",
+                "java.lang.Runtime",
+                "java.lang.ProcessBuilder",
+                "java.lang.Class",
+                "java.lang.ClassLoader",
+                "java.lang.Thread",
+                "java.io.File",
+                "java.nio.file.Files",
+                "java.nio.file.Path",
+                "java.nio.file.Paths",
+                "java.net.URL",
+                "java.net.URI",
+                "java.net.Socket",
+                "java.net.ServerSocket",
+                "groovy.lang.GroovyShell",
+                "groovy.lang.GroovyClassLoader",
+                "groovy.util.Eval"
+        ));
+
+        cfg.addCompilationCustomizers(sc);
+        return cfg;
     }
 
 }

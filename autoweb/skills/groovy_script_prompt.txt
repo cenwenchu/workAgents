@@ -8,6 +8,12 @@ GLOBAL PRINCIPLES:
 - **Optimization Goal**: Generate robust, semantic code using the provided DSL.
 - **Language**: All non-code commentary (Plan, reasoning, notes) and `web.log()` messages SHOULD be in Chinese.
 - **Safety Rule**: 禁止使用 while(true) 或无限循环；使用有界循环或 DSL 的 extractTableData/locateItem/withMaxRetries 等。
+- **Runtime Compatibility (Hard Requirement)**:
+  - 你的脚本会在一个精简 Groovy 运行时中执行：仅保证 JDK 标准库 + 当前工程类（如 WebDSL、com.google.gson）可用；不保证 groovy-json、groovy-dateutil 等额外模块存在。
+  - 禁止使用或 import：`groovy.json.*`（JsonOutput/JsonBuilder 等）、`Date.format(...)`、`Date.minus(...)`、`Date.plus(...)`、以及任何 `import groovy.*`。
+  - 日期/时间：使用 `java.time`（如 `LocalDate/LocalDateTime/Instant/Duration`）或 `java.text.SimpleDateFormat`（用全限定名也可）。
+  - JSON 输出：使用 `new com.google.gson.Gson()` 或 `new com.google.gson.GsonBuilder().setPrettyPrinting().create()`；不要使用 JsonOutput/JsonBuilder。
+  - 生成的代码必须能被 GroovyShell 直接 parse + evaluate（不要输出非 Groovy 的裸文本、不要输出 markdown code fence）。
 - **Planning First (Required)**:
   - The Context Payload may contain `MODE: PLAN_ONLY` or `MODE: CODEGEN`.
   - **MODE: PLAN_ENTRY**:
@@ -125,6 +131,21 @@ SECTION 1: INTERACTION
 
 SECTION 2: DYNAMIC LISTS, TABLES & PAGINATION
 Use high-level DSL methods. Avoid manual scroll loops and DOM re-reading after extraction.
+
+- **关键要求：列表标识（必须做）**：
+  - 只要要“遍历/抽取列表、表格、卡片、搜索结果”，你必须从 HTML 快照里明确找出“单条记录对应的重复元素”，并把它写成 `rowSelector` 传给 DSL（不要默认 `tr`）。
+  - 列表不一定是 `tr`，常见形态包括：`tr` / `[role=row]` / `li` / `article` / `a` 卡片 / `div` 重复块。
+  - 你必须同时给出：
+    - `containerSelector`：可滚动的列表容器或列表根节点（用于虚拟滚动/去重/回到顶部）
+    - `rowSelector`：单条记录元素（必须能匹配到多条，至少 3 条）
+  - 选择器优先级（从高到低）：稳定的 `data-*` 属性 > 稳定的 `id` > 稳定的 class 组合 > 语义 role（如 `[role=row]`/`[role=listitem]`）> 标签名（如 `tr/li/a`，只作为最后兜底）。
+  - 禁止用基于索引的定位（如 `nth=...`、`:nth-child(...)` 来作为行选择器）；行选择器必须能覆盖“所有行/所有卡片”。
+  - 如果你无法从 HTML 快照中确定可靠选择器：把 `containerSelector` 和/或 `rowSelector` 设为 `"AUTO"`，让 DSL 自动推断，但仍需保证后续列选择器是相对 `row` 的。
+
+- **关键要求：columnsMap 的取值规则（必须做）**：
+  - `columnsMap` 的 value 必须是“相对 row 的 CSS 选择器”或“受支持的特殊取值”，禁止使用含糊的字符串（例如 `"text"` 这种非选择器）除非按下面的特殊取值规则。
+  - 若要取整条卡片/整行的文本：value 用 `"__ROW_TEXT__"`（或 `"ROW_TEXT"`），不要用 `"text"`。
+  - 若要取属性：支持 `@属性名`（从 row 本身取）或 `selector@属性名`（从 row 内部某个元素取）。示例：`"详情链接": "@href"` 或 `"图片": "img@src"`。
 
 - **Row Text Output**: `web.extractFirstPageRows(containerSelector, rowSelector, cellSelector)` then output the returned list.
 - **Structured Output**: 

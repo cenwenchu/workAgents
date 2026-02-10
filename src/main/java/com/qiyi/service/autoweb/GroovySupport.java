@@ -259,6 +259,7 @@ class GroovySupport {
             getTextLogMatcher.appendTail(getTextLogBuffer);
             normalized = getTextLogBuffer.toString();
         }
+        normalized = AutoWebAgent.normalizeGroovyScriptForExecution(normalized);
         normalized = escapeNonInterpolatedDollarInDoubleQuotedStrings(normalized);
         return normalized;
     }

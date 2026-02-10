@@ -5,10 +5,12 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.qiyi.config.AppConfig;
 import com.qiyi.util.LLMUtil;
 import com.qiyi.util.PlayWrightUtil;
 import com.qiyi.util.AppLog;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -129,24 +131,51 @@ public class MultiModelAutoRun {
         RunnerConfig cfg = defaultConfig();
         applyRuntimeOverrides(cfg);
 
-        cfg.models.add(AutoWebAgent.normalizeModelKey("deepseek"));
-        cfg.models.add(AutoWebAgent.normalizeModelKey("QWEN_MAX"));
-        cfg.models.add(AutoWebAgent.normalizeModelKey("MOONSHOT"));
+        List<String> modelsOverride = parseCsv(readArgOrProp(args, "models", "autoweb.e2e.models", ""));
+        if (!modelsOverride.isEmpty()) {
+            for (String m : modelsOverride) cfg.models.add(AutoWebAgent.normalizeModelKey(m));
+        } else {
+            cfg.models.add(AutoWebAgent.normalizeModelKey("deepseek"));
+            //cfg.models.add(AutoWebAgent.normalizeModelKey("QWEN_MAX"));
+            //cfg.models.add(AutoWebAgent.normalizeModelKey("MOONSHOT"));
+        }
+
+        List<CaseInput> casesOverride = loadCasesFromProperties();
+        if (casesOverride != null && !casesOverride.isEmpty()) {
+            cfg.cases.addAll(casesOverride);
+        } else {
+            List<String> genUrls = parseCsv(readArgOrProp(args, "genUrls", "autoweb.e2e.genUrls", ""));
+            String genPrompt = readArgOrProp(args, "genPrompt", "autoweb.e2e.genPrompt", "").trim();
+            
+            genUrls.add("https://sc.scm121.com/manage/goods/goodsManage/index?pageNum=1&pageSize=20");
+            genUrls.add("https://sc.scm121.com/suppliersManage/tower/distribute");
+            genUrls.add("https://sc.scm121.com/partnerManage/myPartner");
 
 
-        cfg.cases.add(new CaseInput() {{
-            id = "1";
-            entryUrl = "https://sc.scm121.com/manage/goods/goodsManage/index?pageNum=1&pageSize=20";
-            userTask = "请查询资料编码包含\"自由品牌\"的商品，输出这些商品的商品信息、类目名称、库存、基本售价，最多只需要 3 页";
-        }});
-        
-        cfg.cases.add(new CaseInput() {{
-            id = "2";
-            entryUrl = "https://sc.scm121.com/tradeManage/tower/distribute";
-            userTask = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\"列名:列内容（去掉回车换行）\"，然后用\"｜\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
-        }});
+            genPrompt ="请根据页面的元素，生成对应的测试用例；如果有列表，优先生成列表获取内容的测试案例，注意不要用现在页面有的统计数据作为测试用例的数据说明。";
 
-        
+            
+            if (!genUrls.isEmpty()) {
+                cfg.cases.addAll(generateCasesFromUrls(genUrls, genPrompt));
+            } else {
+                cfg.cases.add(new CaseInput() {{
+                    id = "1";
+                    entryUrl = "https://sc.scm121.com/manage/goods/goodsManage/index?pageNum=1&pageSize=20";
+                    userTask = "请查询资料编码包含\"自由品牌\"的商品，输出这些商品的商品信息、类目名称、库存、基本售价，最多只需要 3 页";
+                }});
+
+                cfg.cases.add(new CaseInput() {{
+                    id = "2";
+                    entryUrl = "https://sc.scm121.com/tradeManage/tower/distribute";
+                    userTask = "请帮我查询待发货所有的订单（包括多页的数据），并且输出订单的所有信息，输出格式为：\"列名:列内容（去掉回车换行）\"，然后用\"｜\"分隔，列的顺序保持表格的顺序，一条记录一行。输出以后，回到第一条订单，选中订单，然后点击审核推单，读取弹出页面的成功和失败的笔数，失败笔数大于0，页面上获取失败原因，也一起输出";
+                }});
+            }
+        }
+
+        //打印出cases里面所有的信息
+        for (CaseInput caseInput : cfg.cases) {
+            AppLog.info("Case: " + caseInput.id + " " + caseInput.entryUrl + " \\r\\n " + caseInput.userTask);
+        }
 
         
         Report report = runOnce(cfg);
@@ -581,7 +610,8 @@ public class MultiModelAutoRun {
     }
 
     private static List<String> safeLintErrors(String code) {
-        List<String> lintErrors = GroovyLinter.check(code);
+        String normalized = AutoWebAgent.normalizeGroovyScriptForExecution(code);
+        List<String> lintErrors = GroovyLinter.check(normalized);
         if (lintErrors == null || lintErrors.isEmpty()) return new ArrayList<>();
         return lintErrors;
     }
@@ -601,7 +631,17 @@ public class MultiModelAutoRun {
     private static String buildRepairHint(ModelRunResult r) {
         List<String> failed = collectFailedStepLabels(r);
         String failedText = failed.isEmpty() ? "" : String.join(",", failed);
-        return "运行代码阶段出现错误，请修复 Groovy 脚本，仅修改必要部分，保持原计划与输出格式不变。失败步骤=" + failedText;
+        StringBuilder sb = new StringBuilder();
+        sb.append("运行代码阶段出现错误，请修复 Groovy 脚本，仅修改必要部分，保持原计划与输出格式不变。失败步骤=").append(failedText);
+        sb.append("\n兼容性要求：禁止使用或 import groovy.json.*（JsonOutput/JsonBuilder 等），不要使用 Date.format/minus/plus；JSON 输出请使用 com.google.gson；日期请使用 java.time 或 java.text.SimpleDateFormat。");
+        if (r != null && r.lintErrors != null && !r.lintErrors.isEmpty()) {
+            sb.append("\n静态分析提示：\n");
+            for (String e : r.lintErrors) {
+                if (e == null || e.trim().isEmpty()) continue;
+                sb.append("- ").append(e.trim()).append("\n");
+            }
+        }
+        return sb.toString().trim();
     }
 
     private static String buildExecOutputForRepair(ModelRunResult r) {
@@ -715,6 +755,187 @@ public class MultiModelAutoRun {
         if (url.isEmpty()) return task;
         if (task.isEmpty()) return "入口URL: " + url;
         return task + "\n入口URL: " + url;
+    }
+
+    private static String readArgOrProp(String[] args, String argKey, String propKey, String fallback) {
+        String fromProp = System.getProperty(propKey, "");
+        if (fromProp != null && !fromProp.trim().isEmpty()) return fromProp.trim();
+        if (args != null && argKey != null && !argKey.trim().isEmpty()) {
+            String prefix = "--" + argKey.trim() + "=";
+            for (String a : args) {
+                if (a == null) continue;
+                String v = a.trim();
+                if (v.startsWith(prefix)) return v.substring(prefix.length()).trim();
+            }
+        }
+        return fallback == null ? "" : fallback;
+    }
+
+    private static List<CaseInput> generateCasesFromUrls(List<String> urls, String userPrompt) throws Exception {
+        if (urls == null || urls.isEmpty()) return new ArrayList<>();
+
+        List<String> unique = urls.stream()
+                .filter(u -> u != null && !u.trim().isEmpty())
+                .map(String::trim)
+                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .stream()
+                .collect(Collectors.toList());
+        if (unique.isEmpty()) return new ArrayList<>();
+
+        BufferingLogger logger = new BufferingLogger("[CASEGEN] ", true);
+        PlayWrightUtil.Connection connection = PlayWrightUtil.connectAndAutomate();
+        if (connection == null || connection.browser == null) throw new RuntimeException("Failed to connect to browser for case generation.");
+
+        AtomicInteger seq = new AtomicInteger(1);
+        List<CaseInput> out = new ArrayList<>();
+        try {
+            for (String url : unique) {
+                PageHandle pageHandle = null;
+                Path screenshot = null;
+                try {
+                    pageHandle = openPage(connection, url, logger);
+                    screenshot = Files.createTempFile("autoweb_casegen_", ".png");
+                    synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
+                        pageHandle.page.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions()
+                                .setPath(screenshot));
+                    }
+                    String aTree = "";
+                    String cleanedHtml = "";
+                    try {
+                        String capturedA11y = AutoWebAgent.getPageContent(pageHandle.page, AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT, false);
+                        String cleanedA11y = AutoWebAgent.cleanCapturedContent(capturedA11y, AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT);
+                        aTree = clipForPrompt(redactSecretsForPrompt(cleanedA11y), 120_000);
+                    } catch (Exception ignored) {}
+                    try {
+                        String capturedHtml = AutoWebAgent.getPageContent(pageHandle.page, AutoWebAgent.HtmlCaptureMode.RAW_HTML);
+                        String cleaned = AutoWebAgent.cleanCapturedContent(capturedHtml, AutoWebAgent.HtmlCaptureMode.RAW_HTML);
+                        cleanedHtml = clipForPrompt(redactSecretsForPrompt(cleaned), 120_000);
+                    } catch (Exception ignored) {}
+
+                    String prompt = buildCaseGenPrompt(url, userPrompt, aTree, cleanedHtml);
+                    String resp = analyzeScreenshotForCase(screenshot.toFile(), prompt);
+                    CaseInput c = parseCaseFromModelText(resp);
+                    if (c == null) {
+                        throw new RuntimeException("Failed to parse CaseInput from model response.");
+                    }
+                    if (c.entryUrl == null || c.entryUrl.trim().isEmpty()) c.entryUrl = url;
+                    if (c.id == null || c.id.trim().isEmpty()) c.id = String.valueOf(seq.get());
+                    out.add(c);
+                    seq.incrementAndGet();
+                } finally {
+                    if (pageHandle != null && pageHandle.page != null) {
+                        try {
+                            pageHandle.page.close();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (screenshot != null) {
+                        try {
+                            Files.deleteIfExists(screenshot);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            }
+        } finally {
+            try {
+                PlayWrightUtil.disconnectBrowser(connection.playwright, connection.browser);
+            } catch (Exception ignored) {
+            }
+        }
+
+        return out;
+    }
+
+    private static String buildCaseGenPrompt(String entryUrl, String userPrompt, String aTree, String cleanedHtml) {
+        String base = userPrompt == null ? "" : userPrompt.trim();
+        StringBuilder sb = new StringBuilder();
+        if (!base.isEmpty()) {
+            sb.append(base).append("\n\n");
+        }
+        sb.append("你会收到一张网页截图，以及页面结构内容（A tree / HTML）。请综合这些信息推断该页面的核心功能与关键交互点，然后为自动化测试生成一个 CaseInput。")
+                .append("\n")
+                .append("要求：只输出一个 JSON 对象（不要 markdown），字段为：")
+                .append("\n")
+                .append("{\"id\":\"<string>\",\"entryUrl\":\"").append(entryUrl == null ? "" : entryUrl.trim()).append("\",\"userTask\":\"<string>\"}")
+                .append("\n")
+                .append("其中 userTask 必须是中文、可执行、可量化的网页操作任务，尽量包含：筛选/搜索条件、分页限制、需要采集的字段、输出格式、以及任务结束后回到哪里。");
+        String at = aTree == null ? "" : aTree.trim();
+        if (!at.isEmpty()) {
+            sb.append("\n\n")
+                    .append("A_TREE:\n")
+                    .append(at);
+        }
+        String h = cleanedHtml == null ? "" : cleanedHtml.trim();
+        if (!h.isEmpty()) {
+            sb.append("\n\n")
+                    .append("HTML:\n")
+                    .append(h);
+        }
+        return sb.toString();
+    }
+
+    private static String analyzeScreenshotForCase(File screenshot, String prompt) {
+        AppConfig cfg = AppConfig.getInstance();
+        String geminiKey = cfg == null ? "" : (cfg.getGeminiApiKey() == null ? "" : cfg.getGeminiApiKey().trim());
+        String aliyunKey = cfg == null ? "" : (cfg.getAliyunApiKey() == null ? "" : cfg.getAliyunApiKey().trim());
+
+        String resp = "";
+
+        if (!aliyunKey.isEmpty()) {
+            resp = LLMUtil.analyzeImageWithAliyun(screenshot, prompt);
+        }
+        if (resp == null) resp = "";
+        return resp;
+    }
+
+    private static CaseInput parseCaseFromModelText(String text) {
+        String raw = text == null ? "" : text.trim();
+        if (raw.isEmpty()) return null;
+
+        int start = raw.indexOf('{');
+        int end = raw.lastIndexOf('}');
+        if (start < 0 || end <= start) return null;
+        String json = raw.substring(start, end + 1);
+
+        try {
+            JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            CaseInput c = new CaseInput();
+            if (obj.has("id") && !obj.get("id").isJsonNull()) c.id = obj.get("id").getAsString();
+            if (obj.has("entryUrl") && !obj.get("entryUrl").isJsonNull()) c.entryUrl = obj.get("entryUrl").getAsString();
+            if (obj.has("userTask") && !obj.get("userTask").isJsonNull()) c.userTask = obj.get("userTask").getAsString();
+            if (c.userTask == null || c.userTask.trim().isEmpty()) return null;
+            return c;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String clipForPrompt(String s, int maxChars) {
+        if (s == null) return "";
+        String v = s.trim();
+        if (v.isEmpty()) return "";
+        if (maxChars <= 0) return "";
+        if (v.length() <= maxChars) return v;
+        int head = Math.max(2000, Math.min(maxChars / 2, 60_000));
+        int tail = Math.max(2000, Math.min(maxChars - head, 60_000));
+        if (head + tail + 64 >= maxChars) {
+            return v.substring(0, maxChars) + "...(truncated)";
+        }
+        return v.substring(0, head) + "\n...(truncated)...\n" + v.substring(v.length() - tail);
+    }
+
+    private static String redactSecretsForPrompt(String s) {
+        if (s == null || s.isEmpty()) return s;
+        String out = s;
+        out = out.replaceAll("(?i)(api[_-]?key\\s*[:=]\\s*)([^\\s\"']+)", "$1***REDACTED***");
+        out = out.replaceAll("(?i)(api[_-]?key\\s*[:=]\\s*['\"])([^'\"]+)(['\"])", "$1***REDACTED***$3");
+        out = out.replaceAll("(?i)(token\\s*[:=]\\s*)([^\\s\"']+)", "$1***REDACTED***");
+        out = out.replaceAll("(?i)(token\\s*[:=]\\s*['\"])([^'\"]+)(['\"])", "$1***REDACTED***$3");
+        out = out.replaceAll("(?i)(secret\\s*[:=]\\s*)([^\\s\"']+)", "$1***REDACTED***");
+        out = out.replaceAll("(?i)(secret\\s*[:=]\\s*['\"])([^'\"]+)(['\"])", "$1***REDACTED***$3");
+        out = out.replaceAll("(?i)(Authorization\\s*[:=]\\s*Bearer\\s+)([A-Za-z0-9._-]+)", "$1***REDACTED***");
+        return out;
     }
 
     private static int parseInt(String s, int fallback) {

@@ -1,12 +1,358 @@
 package com.qiyi.service.autoweb;
 
 import com.microsoft.playwright.Page;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 
 /**
  * LLM payload 组装器
  * 负责把用户意图、页面信息、计划步骤拼成模型可读格式
  */
 class PayloadSupport {
+    private static boolean looksLikeAriaSnapshotJson(String s) {
+        if (s == null) return false;
+        String t = s.trim();
+        if (t.isEmpty()) return false;
+        if (!t.startsWith("{")) return false;
+        return t.contains("\"ariaSnapshotText\"");
+    }
+
+    private static String truncate(String s, int maxChars) {
+        if (s == null) return "";
+        if (maxChars <= 0) return "";
+        if (s.length() <= maxChars) return s;
+        return s.substring(0, maxChars) + "...(truncated)";
+    }
+
+    private static boolean containsDigitOrMoney(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (Character.isDigit(ch)) return true;
+            if (ch == '¥' || ch == '$' || ch == '￥') return true;
+        }
+        return false;
+    }
+
+    private static double shortItemTextRatio(Elements kids, int maxLen) {
+        if (kids == null || kids.isEmpty()) return 0.0;
+        int shortCnt = 0;
+        int cnt = 0;
+        for (Element c : kids) {
+            if (c == null) continue;
+            cnt++;
+            String t = "";
+            try { t = c.text(); } catch (Exception ignored) { t = ""; }
+            int len = t == null ? 0 : t.trim().length();
+            if (len <= maxLen) shortCnt++;
+        }
+        return cnt == 0 ? 0.0 : (shortCnt * 1.0 / cnt);
+    }
+
+    private static int avgElementComplexity(Elements els) {
+        if (els == null || els.isEmpty()) return 0;
+        int total = 0;
+        int cnt = 0;
+        for (Element e : els) {
+            if (e == null) continue;
+            cnt++;
+            try { total += e.getAllElements().size(); } catch (Exception ignored) {}
+        }
+        return cnt == 0 ? 0 : (total / cnt);
+    }
+
+    private static boolean hasAncestorTag(Element el, String tagNameLower) {
+        if (el == null || tagNameLower == null || tagNameLower.isEmpty()) return false;
+        Element cur = el.parent();
+        int guard = 0;
+        while (cur != null && guard < 60) {
+            String t = "";
+            try { t = cur.tagName(); } catch (Exception ignored) { t = ""; }
+            if (t != null && t.equalsIgnoreCase(tagNameLower)) return true;
+            cur = cur.parent();
+            guard++;
+        }
+        return false;
+    }
+
+    private static final class LevelPick {
+        final int depth;
+        final Elements items;
+        final int itemCount;
+        final double repeatRatio;
+        final Element sample;
+
+        private LevelPick(int depth, Elements items, int itemCount, double repeatRatio, Element sample) {
+            this.depth = depth;
+            this.items = items;
+            this.itemCount = itemCount;
+            this.repeatRatio = repeatRatio;
+            this.sample = sample;
+        }
+    }
+
+    private static LevelPick pickBestRepeatedLevel(Element container, int maxDepth) {
+        if (container == null) return null;
+        int depthLimit = maxDepth <= 0 ? 1 : Math.min(maxDepth, 6);
+        Elements level = null;
+        try { level = container.children(); } catch (Exception ignored) { level = null; }
+        LevelPick best = null;
+        double bestScore = 0.0;
+
+        for (int depth = 1; depth <= depthLimit; depth++) {
+            int n = level == null ? 0 : level.size();
+            if (n >= 5 && n <= 450) {
+                java.util.HashMap<String, Integer> sigCounts = new java.util.HashMap<>();
+                java.util.HashMap<String, Element> sigSample = new java.util.HashMap<>();
+                for (Element c : level) {
+                    if (c == null) continue;
+                    String cls = c.className();
+                    if (cls == null) cls = "";
+                    String firstClass = "";
+                    if (!cls.isEmpty()) {
+                        int sp = cls.indexOf(' ');
+                        firstClass = sp >= 0 ? cls.substring(0, sp) : cls;
+                    }
+                    String sig = c.tagName() + "|" + firstClass;
+                    sigCounts.put(sig, sigCounts.getOrDefault(sig, 0) + 1);
+                    if (!sigSample.containsKey(sig)) sigSample.put(sig, c);
+                }
+                int maxCount = 0;
+                String bestSig = "";
+                for (java.util.Map.Entry<String, Integer> e : sigCounts.entrySet()) {
+                    int v = e.getValue() == null ? 0 : e.getValue();
+                    if (v > maxCount) {
+                        maxCount = v;
+                        bestSig = e.getKey();
+                    }
+                }
+                double ratio = n == 0 ? 0.0 : (maxCount * 1.0 / n);
+                if (!(ratio < 0.55 && n < 12)) {
+                    double score = (n * ratio * 100.0);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = new LevelPick(depth, level, n, ratio, sigSample.get(bestSig));
+                    }
+                }
+            }
+
+            if (depth == depthLimit) break;
+            if (level == null || level.isEmpty()) break;
+            if (level.size() > 450) break;
+
+            Elements next = new Elements();
+            for (Element p : level) {
+                if (p == null) continue;
+                Elements kids = null;
+                try { kids = p.children(); } catch (Exception ignored) { kids = null; }
+                if (kids == null || kids.isEmpty()) continue;
+                for (Element k : kids) {
+                    if (k == null) continue;
+                    next.add(k);
+                    if (next.size() > 520) break;
+                }
+                if (next.size() > 520) break;
+            }
+            level = next;
+            if (level.size() > 520) break;
+        }
+        return best;
+    }
+
+    private static Element pickBestRepeatedListContainer(Document doc) {
+        if (doc == null) return null;
+        Element best = null;
+        double bestScore = 0.0;
+        for (Element el : doc.getAllElements()) {
+            if (el == null) continue;
+            String tag = el.tagName();
+            if ("html".equalsIgnoreCase(tag) || "body".equalsIgnoreCase(tag)) continue;
+
+            LevelPick lp = pickBestRepeatedLevel(el, 4);
+            if (lp == null || lp.items == null) continue;
+            int n = lp.itemCount;
+            double ratio = lp.repeatRatio;
+            Elements kidsForStats = lp.items;
+
+            int textLen = 0;
+            try { textLen = el.text() == null ? 0 : el.text().length(); } catch (Exception ignored) { textLen = 0; }
+
+            int linkCount = 0;
+            int imgCount = 0;
+            try { linkCount = el.select("a[href]").size(); } catch (Exception ignored) { linkCount = 0; }
+            try { imgCount = el.select("img").size(); } catch (Exception ignored) { imgCount = 0; }
+            boolean hasMoneyOrDigit = false;
+            try { hasMoneyOrDigit = containsDigitOrMoney(el.text()); } catch (Exception ignored) { hasMoneyOrDigit = false; }
+            int avgChildComplexity = avgElementComplexity(kidsForStats);
+            double shortRatio = shortItemTextRatio(kidsForStats, 24);
+
+            double score = (n * ratio * 100.0)
+                    + Math.min(textLen, 4000) / 20.0
+                    + Math.min(linkCount, 200) * 2.0
+                    + Math.min(imgCount, 100) * 3.0
+                    + Math.min(avgChildComplexity, 60) * 1.5
+                    + (hasMoneyOrDigit ? 50.0 : 0.0);
+
+            String id = "";
+            String cls = "";
+            try { id = el.id(); } catch (Exception ignored) { id = ""; }
+            try { cls = el.className(); } catch (Exception ignored) { cls = ""; }
+            String mark = ((tag == null ? "" : tag) + " " + (id == null ? "" : id) + " " + (cls == null ? "" : cls)).toLowerCase();
+            if (mark.contains("nav") || mark.contains("menu") || mark.contains("breadcrumb")) score *= 0.35;
+            if (mark.contains("filter") || mark.contains("facet") || mark.contains("sort")) score *= 0.55;
+            boolean isUlOl = "ul".equalsIgnoreCase(tag) || "ol".equalsIgnoreCase(tag);
+            if (isUlOl && imgCount == 0 && !hasMoneyOrDigit && avgChildComplexity <= 4 && shortRatio >= 0.85) score *= 0.08;
+            if (!isUlOl && imgCount == 0 && !hasMoneyOrDigit && avgChildComplexity <= 3 && shortRatio >= 0.9 && linkCount >= n) score *= 0.12;
+            if (linkCount >= 30 && imgCount == 0 && !hasMoneyOrDigit && avgChildComplexity <= 3 && shortRatio >= 0.85) score *= 0.03;
+            if ("footer".equalsIgnoreCase(tag) || hasAncestorTag(el, "footer") || mark.contains("footer")) score *= 0.12;
+
+            if ("nav".equalsIgnoreCase(tag) || "header".equalsIgnoreCase(tag) || "footer".equalsIgnoreCase(tag)) {
+                score *= 0.4;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        }
+        return best;
+    }
+
+    private static String buildCssSelectorHint(Element el) {
+        if (el == null) return "";
+        try {
+            String id = el.id();
+            if (id != null) {
+                String v = id.trim();
+                if (!v.isEmpty() && v.length() <= 64) return "#" + v;
+            }
+        } catch (Exception ignored) {}
+        String tag = "";
+        try { tag = el.tagName(); } catch (Exception ignored) { tag = ""; }
+        if (tag == null || tag.trim().isEmpty()) tag = "div";
+        String cls = "";
+        try { cls = el.className(); } catch (Exception ignored) { cls = ""; }
+        if (cls != null && !cls.trim().isEmpty()) {
+            String[] parts = cls.trim().split("\\s+");
+            int keep = Math.min(parts.length, 2);
+            StringBuilder sb = new StringBuilder();
+            sb.append(tag);
+            for (int i = 0; i < keep; i++) {
+                String p = parts[i];
+                if (p == null || p.isEmpty()) continue;
+                if (p.length() > 40) p = p.substring(0, 40);
+                sb.append('.').append(p);
+            }
+            return sb.toString();
+        }
+        return tag;
+    }
+
+    private static String inferRowSelectorHint(Element container) {
+        if (container == null) return "";
+        Elements kids = null;
+        try { kids = container.children(); } catch (Exception ignored) { kids = null; }
+        if (kids == null || kids.isEmpty()) return "";
+        java.util.HashMap<String, Integer> sigCounts = new java.util.HashMap<>();
+        java.util.HashMap<String, Element> sigSample = new java.util.HashMap<>();
+        for (Element c : kids) {
+            if (c == null) continue;
+            String cls = c.className();
+            if (cls == null) cls = "";
+            String firstClass = "";
+            if (!cls.isEmpty()) {
+                int sp = cls.indexOf(' ');
+                firstClass = sp >= 0 ? cls.substring(0, sp) : cls;
+            }
+            String sig = c.tagName() + "|" + firstClass;
+            sigCounts.put(sig, sigCounts.getOrDefault(sig, 0) + 1);
+            if (!sigSample.containsKey(sig)) sigSample.put(sig, c);
+        }
+        String bestSig = "";
+        int best = 0;
+        for (java.util.Map.Entry<String, Integer> e : sigCounts.entrySet()) {
+            int v = e.getValue() == null ? 0 : e.getValue();
+            if (v > best) {
+                best = v;
+                bestSig = e.getKey();
+            }
+        }
+        Element sample = sigSample.get(bestSig);
+        if (sample == null) return "";
+        return buildCssSelectorHint(sample);
+    }
+
+    private static String inferRowSelectorHintDeep(Element container) {
+        if (container == null) return "";
+        LevelPick lp = pickBestRepeatedLevel(container, 6);
+        if (lp == null || lp.sample == null) return "";
+        String sampleHint = buildCssSelectorHint(lp.sample);
+        if (sampleHint == null || sampleHint.trim().isEmpty()) return "";
+        if (lp.depth <= 1) return sampleHint.trim();
+        StringBuilder sb = new StringBuilder();
+        sb.append(":scope");
+        for (int i = 0; i < lp.depth - 1; i++) {
+            sb.append(" > *");
+        }
+        sb.append(" > ").append(sampleHint.trim());
+        return sb.toString();
+    }
+
+    private static String extractListSnippetFromRawHtml(String html, int maxChars) {
+        String s = html == null ? "" : html.trim();
+        if (s.isEmpty()) return "";
+        try {
+            Document doc = Jsoup.parse(s);
+            Element best = null;
+            int bestTr = 0;
+            for (Element table : doc.select("table")) {
+                int tr = 0;
+                try { tr = table.select("tr").size(); } catch (Exception ignored) { tr = 0; }
+                if (tr >= 8 && tr > bestTr) {
+                    bestTr = tr;
+                    best = table;
+                }
+            }
+            if (best == null) best = pickBestRepeatedListContainer(doc);
+            if (best == null) return truncate(s, maxChars);
+
+            Element clone = best.clone();
+            String containerHint = buildCssSelectorHint(best);
+            String rowHint = inferRowSelectorHintDeep(best);
+
+            int keep = 20;
+            if (rowHint != null && !rowHint.trim().isEmpty()) {
+                try {
+                    Elements rows = clone.select(rowHint.trim());
+                    if (rows != null && rows.size() > keep) {
+                        for (int i = rows.size() - 1; i >= keep; i--) {
+                            try { rows.get(i).remove(); } catch (Exception ignored) {}
+                        }
+                    }
+                } catch (Exception ignored) {}
+            } else {
+                Elements kids = clone.children();
+                int k = kids == null ? 0 : kids.size();
+                k = Math.min(k, keep);
+                if (kids != null && kids.size() > k) {
+                    for (int i = kids.size() - 1; i >= k; i--) {
+                        try { kids.get(i).remove(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+
+            String out = clone.outerHtml();
+            String enriched = "LIST_SELECTOR_HINTS:\n" +
+                    "containerSelector: " + (containerHint == null ? "" : containerHint) + "\n" +
+                    "rowSelector: " + (rowHint == null ? "" : rowHint) + "\n" +
+                    "SNIPPET:\n" + out;
+            return truncate(enriched, maxChars);
+        } catch (Exception ignored) {
+            return truncate(s, maxChars);
+        }
+    }
+
     /**
      * 在 currentUrl 与 step snapshot URL 中选择更可靠的当前页
      *
@@ -363,6 +709,20 @@ class PayloadSupport {
                 firstStepByUrl.put(urlKey, snap.stepIndex);
             }
             String body = snap.cleanedHtml;
+            if (looksLikeAriaSnapshotJson(body)) {
+                AutoWebAgent.HtmlSnapshot raw = HtmlSnapshotDao.readCachedHtml(
+                        snap.stepIndex,
+                        snap.url,
+                        snap.entryAction,
+                        AutoWebAgent.HtmlCaptureMode.RAW_HTML,
+                        false
+                );
+                if (raw != null && raw.cleanedHtml != null && !raw.cleanedHtml.trim().isEmpty()) {
+                    String ariaPart = truncate(body, 200000);
+                    String rawSnippet = extractListSnippetFromRawHtml(raw.cleanedHtml, 60000);
+                    body = "ARIA_SNAPSHOT:\n" + ariaPart + "\n\nRAW_HTML_LIST_SNIPPET:\n" + rawSnippet;
+                }
+            }
             int remaining = maxChars - used - header.length();
             if (remaining <= 0) break;
             if (body.length() > remaining) {

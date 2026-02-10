@@ -76,18 +76,65 @@ public class HTMLCleaner {
                      attr.setValue(val.substring(0, 50) + "...(truncated)");
                      continue;
                 }
+
+                if (key.equals("class")) {
+                    String cls = val == null ? "" : val.trim();
+                    if (!cls.isEmpty()) {
+                        String[] parts = cls.split("\\s+");
+                        int keep = Math.min(parts.length, 3);
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < parts.length && keep > 0; i++) {
+                            String p = parts[i];
+                            if (p == null || p.isEmpty()) continue;
+                            if (sb.length() > 0) sb.append(' ');
+                            sb.append(p.length() > 40 ? p.substring(0, 40) : p);
+                            keep--;
+                        }
+                        attr.setValue(sb.toString());
+                    }
+                    continue;
+                }
+
+                if ((key.equals("id") || key.equals("name") || key.equals("title") || key.equals("alt") || key.equals("placeholder") || key.equals("value")) && val != null && val.length() > 120) {
+                    attr.setValue(val.substring(0, 100) + "...(truncated)");
+                    continue;
+                }
+
+                if ((key.equals("href") || key.equals("src") || key.equals("action")) && val != null && val.length() > 160) {
+                    String trimmed = val;
+                    int q = trimmed.indexOf('?');
+                    if (q > 0) trimmed = trimmed.substring(0, q);
+                    int h = trimmed.indexOf('#');
+                    if (h > 0) trimmed = trimmed.substring(0, h);
+                    if (trimmed.length() > 160) trimmed = trimmed.substring(0, 140) + "...(truncated)";
+                    attr.setValue(trimmed);
+                    continue;
+                }
                 
                 // 保留白名单属性
                 if (ATTRIBUTES_TO_KEEP.contains(key)) continue;
                 
                 // 保留 aria- 开头的属性
-                if (key.startsWith("aria-")) continue;
+                if (key.startsWith("aria-")) {
+                    if (val != null && val.length() > 300) {
+                        attributesToRemove.add(key);
+                        continue;
+                    }
+                    if (val != null && val.length() > 120) {
+                        attr.setValue(val.substring(0, 100) + "...(truncated)");
+                    }
+                    continue;
+                }
                 
                 // 保留 data-testid 等测试专用属性，或者其他可能的 data- 属性
                 // 为了保险，保留所有 data- 属性，除非它们太长
                 if (key.startsWith("data-")) {
-                    if (val.length() > 50) { // 如果 data 属性值太长（可能是json数据），则移除
+                    if (val != null && val.length() > 200) {
                         attributesToRemove.add(key);
+                        continue;
+                    }
+                    if (val != null && val.length() > 80) {
+                        attr.setValue(val.substring(0, 70) + "...(truncated)");
                     }
                     continue;
                 }
@@ -103,6 +150,8 @@ public class HTMLCleaner {
 
         // 4. 截断长文本节点
         truncateLongText(doc.body());
+
+        pruneRepetitiveSiblings(doc.body());
 
         // 5. 移除完全空的无用容器节点
         pruneEmptyNodes(doc.body());
@@ -122,6 +171,55 @@ public class HTMLCleaner {
         StorageSupport.log(null, "HTML_CLEAN", "after len=" + cleaned.length(), null);
         
         return cleaned;
+    }
+
+    private static void pruneRepetitiveSiblings(Element root) {
+        if (root == null) return;
+        java.util.ArrayDeque<Element> stack = new java.util.ArrayDeque<>();
+        stack.push(root);
+        while (!stack.isEmpty()) {
+            Element el = stack.pop();
+            if (el == null) continue;
+            Elements children = el.children();
+            int n = children == null ? 0 : children.size();
+            if (n >= 80) {
+                java.util.HashMap<String, Integer> sigCounts = new java.util.HashMap<>();
+                for (Element c : children) {
+                    String cls = c.className();
+                    if (cls == null) cls = "";
+                    String firstClass = "";
+                    if (!cls.isEmpty()) {
+                        int sp = cls.indexOf(' ');
+                        firstClass = sp >= 0 ? cls.substring(0, sp) : cls;
+                    }
+                    String sig = c.tagName() + "|" + firstClass;
+                    sigCounts.put(sig, sigCounts.getOrDefault(sig, 0) + 1);
+                }
+                int maxCount = 0;
+                for (Integer v : sigCounts.values()) {
+                    if (v != null && v > maxCount) maxCount = v;
+                }
+                double ratio = n == 0 ? 0.0 : (maxCount * 1.0 / n);
+                if (ratio < 0.75) {
+                    for (Element c : el.children()) {
+                        stack.push(c);
+                    }
+                    continue;
+                }
+                int keep = 30;
+                String tag = el.tagName();
+                if ("select".equalsIgnoreCase(tag)) keep = 80;
+                if ("tbody".equalsIgnoreCase(tag) || "table".equalsIgnoreCase(tag) || "ul".equalsIgnoreCase(tag) || "ol".equalsIgnoreCase(tag)) keep = 50;
+                if (n > keep) {
+                    for (int i = n - 1; i >= keep; i--) {
+                        try { el.child(i).remove(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+            for (Element c : el.children()) {
+                stack.push(c);
+            }
+        }
     }
 
     /**

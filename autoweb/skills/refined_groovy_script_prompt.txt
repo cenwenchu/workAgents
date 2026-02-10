@@ -19,6 +19,12 @@ CRITICAL FIX REQUIREMENTS:
 - **Optimization Goal**: Use the `web` DSL variable for robust interaction.
 - **Language**: All non-code commentary (Plan, reasoning, notes) and `web.log()` messages SHOULD be in Chinese.
 - **Safety Rule**: 禁止使用 while(true) 或无限循环；改用有界循环或 DSL 的 extractTableData/locateItem/withMaxRetries 等。
+- **Runtime Compatibility (Hard Requirement)**:
+  - 你的脚本会在一个精简 Groovy 运行时中执行：仅保证 JDK 标准库 + 当前工程类（如 WebDSL、com.google.gson）可用；不保证 groovy-json、groovy-dateutil 等额外模块存在。
+  - 必须删除/避免：`import groovy.json.*`、`groovy.json.*` 调用、`Date.format(...)`、`Date.minus(...)`、`Date.plus(...)`、以及任何 `import groovy.*`。
+  - 日期/时间：使用 `java.time`（如 `LocalDate/LocalDateTime/Instant/Duration`）或 `java.text.SimpleDateFormat`（用全限定名也可）。
+  - JSON 输出：使用 `new com.google.gson.Gson()` 或 `new com.google.gson.GsonBuilder().setPrettyPrinting().create()`；不要使用 JsonOutput/JsonBuilder。
+  - 输出必须是完整可执行 Groovy 脚本（不要 markdown code fence，不要裸文本）。
 - **Refine Modes (Required)**:
   - The Context Payload may contain `MODE: PLAN_REFINE` or `MODE: REFINE_CODE`.
   - **MODE: PLAN_REFINE**:
@@ -71,6 +77,18 @@ CRITICAL FIX REQUIREMENTS:
 [CODEGEN_ONLY_START]
 SECTION 2: DYNAMIC LISTS, TABLES & PAGINATION
 Use high-level DSL methods. Avoid manual scroll loops and DOM re-reading after extraction.
+
+- **关键要求：列表标识（必须做）**：
+  - 只要要“遍历/抽取列表、表格、卡片、搜索结果”，你必须从 HTML 快照里明确找出“单条记录对应的重复元素”，并把它写成 `rowSelector` 传给 DSL（不要默认 `tr`）。
+  - 列表不一定是 `tr`，常见形态包括：`tr` / `[role=row]` / `li` / `article` / `a` 卡片 / `div` 重复块。
+  - 你必须同时给出 `containerSelector`（可滚动容器/列表根节点）与 `rowSelector`（单条记录元素，至少匹配 3 条）。
+  - 选择器优先级：稳定的 `data-*` 属性 > 稳定的 `id` > 稳定的 class 组合 > 语义 role > 标签名兜底。
+  - 如果无法确定可靠选择器：把 `containerSelector` 和/或 `rowSelector` 设为 `"AUTO"`，让 DSL 自动推断，但列选择器仍必须相对 `row`。
+
+- **关键要求：columnsMap 的取值规则（必须做）**：
+  - `columnsMap` 的 value 必须是“相对 row 的 CSS 选择器”或“受支持的特殊取值”；不要写含糊字符串。
+  - 取整条卡片/整行文本：value 用 `"__ROW_TEXT__"`（或 `"ROW_TEXT"`）。
+  - 取属性：`@属性名`（row 自身属性）或 `selector@属性名`（row 内元素属性），例如 `"链接":"@href"`、`"图片":"img@src"`。
 
 - **Row Text Output**: `web.extractFirstPageRows(containerSelector, rowSelector, cellSelector)` then output the returned list.
 - **Structured Output**: 

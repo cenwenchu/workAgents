@@ -2393,20 +2393,42 @@ public class WebDSL {
      * Fallback method for simpler calls (inferred selectors)
      */
     public List<java.util.Map<String, String>> extractFirstPageTable(java.util.Map<?, ?> columns) {
-        // Heuristic to find table
-        String[] containers = {".art-table-body", ".ant-table-tbody", ".el-table__body-wrapper", "table tbody", "table"};
-        String[] rows = {".art-table-row", ".ant-table-row", ".el-table__row", "tr", "tr"};
-        
-        for (int i=0; i<containers.length; i++) {
-             // check if container exists and has rows
-             try {
-                 if (count(containers[i]) > 0 && count(containers[i] + " " + rows[i]) > 0) {
-                     log("Action: Heuristic found table: " + containers[i]);
-                     return extractFirstPageTable(containers[i], rows[i], columns);
-                 }
-             } catch (Exception ignored) {}
+        java.util.List<java.util.AbstractMap.SimpleEntry<String, String>> candidates = java.util.Arrays.asList(
+                new java.util.AbstractMap.SimpleEntry<>(".art-table-body", ".art-table-row"),
+                new java.util.AbstractMap.SimpleEntry<>(".ant-table-tbody", "tr"),
+                new java.util.AbstractMap.SimpleEntry<>(".ant-table", ".ant-table-row"),
+                new java.util.AbstractMap.SimpleEntry<>(".el-table__body-wrapper", ".el-table__row"),
+                new java.util.AbstractMap.SimpleEntry<>("table tbody", "tr"),
+                new java.util.AbstractMap.SimpleEntry<>("table", "tr"),
+                new java.util.AbstractMap.SimpleEntry<>("[role=grid]", "[role=row]"),
+                new java.util.AbstractMap.SimpleEntry<>("[role=table]", "[role=row]"),
+                new java.util.AbstractMap.SimpleEntry<>("[role=list]", "[role=listitem]"),
+                new java.util.AbstractMap.SimpleEntry<>("ul", "li"),
+                new java.util.AbstractMap.SimpleEntry<>("ol", "li"),
+                new java.util.AbstractMap.SimpleEntry<>("main", "tr"),
+                new java.util.AbstractMap.SimpleEntry<>("body", "tr")
+        );
+
+        for (java.util.AbstractMap.SimpleEntry<String, String> c : candidates) {
+            try {
+                String container = c.getKey();
+                String row = c.getValue();
+                Locator rows = getRowsInContainer(container, row);
+                if (rows != null && rows.count() > 0) {
+                    log("Action: Heuristic found table/list: " + container + " | row=" + row + " | rows=" + rows.count());
+                    return extractFirstPageTable(container, row, columns);
+                }
+            } catch (Exception ignored) {}
         }
-        // Fallback to global tr if nothing matches
+
+        try {
+            ListSelectorHint hint = inferListSelectorHint();
+            if (hint != null && hint.rowSelector != null && !hint.rowSelector.trim().isEmpty()) {
+                log("Action: Heuristic inferred list selectors: container=" + hint.containerSelector + " | row=" + hint.rowSelector);
+                return extractFirstPageTable(hint.containerSelector, hint.rowSelector, columns);
+            }
+        } catch (Exception ignored) {}
+
         return extractFirstPageTable(null, "tr", columns);
     }
 
@@ -3075,8 +3097,31 @@ public class WebDSL {
      */
     public List<String> extractList(String containerSelector, String rowSelector, int limit) {
         log("Action: Extracting list from '" + containerSelector + "' (Limit: " + limit + ")");
+
+        if (isAutoSelector(containerSelector)) containerSelector = null;
+        if (isAutoSelector(rowSelector)) rowSelector = null;
+        if (rowSelector == null || rowSelector.trim().isEmpty()) {
+            try {
+                ListSelectorHint hint = inferListSelectorHint();
+                if (hint != null) {
+                    if (containerSelector == null || containerSelector.trim().isEmpty()) containerSelector = hint.containerSelector;
+                    if (hint.rowSelector != null && !hint.rowSelector.trim().isEmpty()) rowSelector = hint.rowSelector;
+                }
+            } catch (Exception ignored) {}
+        }
         
         containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+        try {
+            Locator initialRows = getRowsInContainer(containerSelector, rowSelector);
+            if (initialRows == null || initialRows.count() == 0) {
+                String detected = detectRowSelectorFallback(rowSelector);
+                if (detected != null && !detected.trim().isEmpty() && !detected.equals(rowSelector)) {
+                    log("  -> Row selector fallback: '" + detected + "'");
+                    rowSelector = detected;
+                    containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+                }
+            }
+        } catch (Exception ignored) {}
         
         java.util.Set<String> processed = new java.util.HashSet<>();
         java.util.List<String> results = new java.util.ArrayList<>();
@@ -3166,9 +3211,37 @@ public class WebDSL {
      */
     public List<java.util.Map<String, String>> extractTableData(String containerSelector, String rowSelector, int limit, java.util.Map<?, ?> columns) {
         log("Action: Extracting table data from '" + containerSelector + "'...");
+
+        if (isAutoSelector(containerSelector)) containerSelector = null;
+        if (isAutoSelector(rowSelector)) rowSelector = null;
+        if (rowSelector == null || rowSelector.trim().isEmpty()) {
+            try {
+                ListSelectorHint hint = inferListSelectorHint();
+                if (hint != null) {
+                    if (containerSelector == null || containerSelector.trim().isEmpty()) containerSelector = hint.containerSelector;
+                    if (hint.rowSelector != null && !hint.rowSelector.trim().isEmpty()) rowSelector = hint.rowSelector;
+                }
+            } catch (Exception ignored) {}
+        }
         
         containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+        String effectiveRowSelector = rowSelector;
+        try {
+            Locator initialRows = getRowsInContainer(containerSelector, rowSelector);
+            if (initialRows == null || initialRows.count() == 0) {
+                String detected = detectRowSelectorFallback(rowSelector);
+                if (detected != null && !detected.trim().isEmpty() && !detected.equals(rowSelector)) {
+                    log("  -> Row selector fallback: '" + detected + "'");
+                    effectiveRowSelector = detected;
+                    containerSelector = ensureScrollableContainer(containerSelector, effectiveRowSelector);
+                }
+            }
+        } catch (Exception ignored) {}
         java.util.Map<String, String> resolvedColumns = resolveColumnSelectors(containerSelector, columns);
+        try {
+            int cnt = getRowsInContainer(containerSelector, effectiveRowSelector).count();
+            log("  -> Using containerSelector='" + containerSelector + "', rowSelector='" + effectiveRowSelector + "' (rows=" + cnt + ")");
+        } catch (Exception ignored) {}
         
         java.util.Set<String> processedKeys = new java.util.HashSet<>();
         List<java.util.Map<String, String>> results = new java.util.ArrayList<>();
@@ -3183,7 +3256,7 @@ public class WebDSL {
         int wheelStep = 800;
         
         for (int i = 0; i < maxScrolls; i++) {
-            Locator rows = getRowsInContainer(containerSelector, rowSelector);
+            Locator rows = getRowsInContainer(containerSelector, effectiveRowSelector);
             int count = rows.count();
             boolean foundNew = false;
             
@@ -3213,19 +3286,10 @@ public class WebDSL {
                         aliasKey = rawColSel;
                     }
                     try {
-                        // Relative selector from the row
-                        Locator colLoc = row.locator(colSel).first();
-                        if (colLoc.count() > 0) {
-                            String val = colLoc.innerText();
-                            rowData.put(colName, val);
-                            if (aliasKey != null && !aliasKey.equals(colName)) {
-                                rowData.put(aliasKey, val);
-                            }
-                        } else {
-                            rowData.put(colName, ""); 
-                            if (aliasKey != null && !aliasKey.equals(colName)) {
-                                rowData.put(aliasKey, "");
-                            }
+                        String val = extractCellValue(row, colSel);
+                        rowData.put(colName, val);
+                        if (aliasKey != null && !aliasKey.equals(colName)) {
+                            rowData.put(aliasKey, val);
                         }
                     } catch (Exception e) {
                         rowData.put(colName, "");
@@ -3285,6 +3349,243 @@ public class WebDSL {
         log("  -> Extracted " + results.size() + " structured rows.");
         return results;
     }
+
+    private String extractCellValue(Locator row, String colSel) {
+        if (row == null) return "";
+        String sel = colSel == null ? "" : colSel.trim();
+        if (sel.isEmpty()) {
+            try { return row.innerText(); } catch (Exception ignored) { return ""; }
+        }
+        String lower = sel.toLowerCase();
+        if ("text".equals(lower) || "innertext".equals(lower) || "row_text".equals(lower) || "__row_text__".equals(lower) || ":scope".equals(lower) || ".".equals(sel)) {
+            try { return row.innerText(); } catch (Exception ignored) { return ""; }
+        }
+        if (lower.startsWith("attr:")) {
+            String attr = sel.substring("attr:".length()).trim();
+            if (!attr.isEmpty()) {
+                try {
+                    String v = row.getAttribute(attr);
+                    return v == null ? "" : v;
+                } catch (Exception ignored) {}
+            }
+            return "";
+        }
+        if (sel.startsWith("@") && sel.length() > 1) {
+            String attr = sel.substring(1).trim();
+            if (!attr.isEmpty()) {
+                try {
+                    String v = row.getAttribute(attr);
+                    return v == null ? "" : v;
+                } catch (Exception ignored) {}
+            }
+            return "";
+        }
+        int at = sel.lastIndexOf('@');
+        if (at > 0 && at < sel.length() - 1) {
+            String targetSel = sel.substring(0, at).trim();
+            String attr = sel.substring(at + 1).trim();
+            if (!targetSel.isEmpty() && !attr.isEmpty()) {
+                try {
+                    Locator loc = row.locator(targetSel).first();
+                    if (loc.count() > 0) {
+                        String v = loc.getAttribute(attr);
+                        if (v != null && !v.isEmpty()) return v;
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    String v = row.getAttribute(attr);
+                    return v == null ? "" : v;
+                } catch (Exception ignored) {}
+            }
+        }
+        try {
+            Locator colLoc = row.locator(sel).first();
+            if (colLoc.count() > 0) {
+                String v = colLoc.innerText();
+                if (v != null && !v.isEmpty()) return v;
+                String t = colLoc.getAttribute("title");
+                if (t != null && !t.isEmpty()) return t;
+                String a = colLoc.getAttribute("aria-label");
+                if (a != null && !a.isEmpty()) return a;
+            }
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private String detectRowSelectorFallback(String preferredRowSelector) {
+        String preferred = preferredRowSelector == null ? "" : preferredRowSelector.trim();
+        String[] candidates = new String[] {
+                preferred,
+                ".ant-table-tbody tr",
+                ".ant-table-row",
+                ".art-table-row",
+                ".el-table__row",
+                "table tbody tr",
+                "tbody tr",
+                "tr",
+                "role=row",
+                ".offer-item",
+                ".offer-list-item",
+                "[role=listitem]",
+                "role=listitem",
+                "li",
+                "a"
+        };
+        for (String sel : candidates) {
+            if (sel == null) continue;
+            String s = sel.trim();
+            if (s.isEmpty()) continue;
+            try {
+                Locator rows = locator(s);
+                if (rows != null && rows.count() > 0) return s;
+            } catch (Exception ignored) {}
+        }
+        return preferredRowSelector;
+    }
+
+    private static final class ListSelectorHint {
+        final String containerSelector;
+        final String rowSelector;
+
+        ListSelectorHint(String containerSelector, String rowSelector) {
+            this.containerSelector = containerSelector;
+            this.rowSelector = rowSelector;
+        }
+    }
+
+    private static boolean isAutoSelector(String selector) {
+        if (selector == null) return false;
+        String s = selector.trim();
+        if (s.isEmpty()) return false;
+        return "AUTO".equalsIgnoreCase(s) || "AUTO_DETECT".equalsIgnoreCase(s);
+    }
+
+    private ListSelectorHint inferListSelectorHint() {
+        String js = ""
+                + "() => {"
+                + "  const stableClass = (c) => {"
+                + "    if (!c) return false;"
+                + "    if (c.length > 48) return false;"
+                + "    if (/\\d{4,}/.test(c)) return false;"
+                + "    if (/^(css|sc|jsx)-/i.test(c)) return false;"
+                + "    if (/[A-Fa-f0-9]{8,}/.test(c)) return false;"
+                + "    return true;"
+                + "  };"
+                + "  const esc = (s) => String(s).replace(/([ #;?%&,.+*~\\':\"!^$\\[\\]()=>|\\/])/g,'\\\\$1');"
+                + "  const isVisible = (el) => {"
+                + "    if (!el) return false;"
+                + "    const r = el.getBoundingClientRect();"
+                + "    if (!r) return false;"
+                + "    return r.width > 2 && r.height > 2;"
+                + "  };"
+                + "  const selectorByAttrs = (el) => {"
+                + "    if (!el || !el.getAttribute) return '';"
+                + "    const attrs = ['data-testid','data-test','data-qa','data-automation','data-automation-id','data-id','data-key','data-row-key','data-rowid','data-row-id','data-spm','data-spm-anchor-id'];"
+                + "    for (const a of attrs) {"
+                + "      const v = el.getAttribute(a);"
+                + "      if (v && v.length <= 80) {"
+                + "        const vv = String(v).replace(/\"/g, '\\\\\"');"
+                + "        return `[${a}=\"${vv}\"]`;"
+                + "      }"
+                + "    }"
+                + "    const id = el.getAttribute('id');"
+                + "    if (id && id.length <= 48 && !/\\d{5,}/.test(id) && !id.includes(':')) {"
+                + "      return `#${esc(id)}`;"
+                + "    }"
+                + "    const role = el.getAttribute('role');"
+                + "    if ((role === 'row' || role === 'listitem') && role.length <= 24) {"
+                + "      return `[role=\"${role}\"]`;"
+                + "    }"
+                + "    return '';"
+                + "  };"
+                + "  const selectorByTagAndClasses = (tag, classes) => {"
+                + "    const t = (tag || '').toLowerCase();"
+                + "    if (!t) return '';"
+                + "    const cs = (classes || []).filter(stableClass).slice(0, 3);"
+                + "    if (cs.length === 0) return t;"
+                + "    return t + cs.map(c => '.' + esc(c)).join('');"
+                + "  };"
+                + "  const commonStableClasses = (els) => {"
+                + "    if (!els || els.length === 0) return [];"
+                + "    const sets = els.map(el => new Set(Array.from(el.classList || []).filter(stableClass)));"
+                + "    let inter = sets[0];"
+                + "    for (let i=1; i<sets.length; i++) {"
+                + "      const next = new Set();"
+                + "      for (const c of inter) { if (sets[i].has(c)) next.add(c); }"
+                + "      inter = next;"
+                + "      if (inter.size === 0) break;"
+                + "    }"
+                + "    return Array.from(inter).sort();"
+                + "  };"
+                + "  const chooseBestGroup = (els) => {"
+                + "    const groups = new Map();"
+                + "    for (const el of els) {"
+                + "      if (!isVisible(el)) continue;"
+                + "      const txt = (el.innerText || '').trim();"
+                + "      if (txt.length < 6) continue;"
+                + "      const tag = (el.tagName || '').toLowerCase();"
+                + "      if (!tag) continue;"
+                + "      const classes = Array.from(el.classList || []).filter(stableClass).sort();"
+                + "      const key = tag + '|' + classes.slice(0, 3).join('.');"
+                + "      if (!groups.has(key)) groups.set(key, []);"
+                + "      groups.get(key).push(el);"
+                + "    }"
+                + "    let best = null;"
+                + "    for (const [key, arr] of groups.entries()) {"
+                + "      if (arr.length < 3) continue;"
+                + "      if (arr.length > 200) continue;"
+                + "      let score = arr.length;"
+                + "      const tag = key.split('|')[0];"
+                + "      if (tag === 'tr') score += 10;"
+                + "      if (tag === 'li') score += 6;"
+                + "      if (tag === 'a') score += 5;"
+                + "      const role = arr[0].getAttribute && arr[0].getAttribute('role');"
+                + "      if (role === 'row' || role === 'listitem') score += 10;"
+                + "      if (!best || score > best.score) best = { key, arr, score };"
+                + "    }"
+                + "    return best;"
+                + "  };"
+                + "  const candidates = Array.from(document.querySelectorAll('tr, [role=\"row\"], [role=\"listitem\"], li, article, a'));"
+                + "  const best = chooseBestGroup(candidates);"
+                + "  if (!best) return { containerSelector: '', rowSelector: '' };"
+                + "  const rows = best.arr;"
+                + "  const sample = rows[0];"
+                + "  const rowTag = (sample.tagName || '').toLowerCase();"
+                + "  const rowClasses = commonStableClasses(rows.slice(0, 8));"
+                + "  const rowSelector = selectorByAttrs(sample) || selectorByTagAndClasses(rowTag, rowClasses) || rowTag;"
+                + "  let scrollContainer = null;"
+                + "  let cur = sample;"
+                + "  for (let i=0; i<12 && cur; i++) {"
+                + "    const p = cur.parentElement;"
+                + "    if (!p) break;"
+                + "    const sh = p.scrollHeight || 0;"
+                + "    const ch = p.clientHeight || 0;"
+                + "    if (sh - ch > 2) { scrollContainer = p; break; }"
+                + "    cur = p;"
+                + "  }"
+                + "  let containerSelector = '';"
+                + "  if (scrollContainer && scrollContainer.setAttribute) {"
+                + "    scrollContainer.setAttribute('data-webdsl-scroll-target','1');"
+                + "    containerSelector = \"[data-webdsl-scroll-target='1']\";"
+                + "  }"
+                + "  return { containerSelector, rowSelector };"
+                + "}";
+
+        try {
+            Frame f = ensureFrame();
+            Object v = (f != null) ? f.evaluate(js) : page.evaluate(js);
+            if (!(v instanceof java.util.Map)) return null;
+            java.util.Map<?, ?> m = (java.util.Map<?, ?>) v;
+            Object c = m.get("containerSelector");
+            Object r = m.get("rowSelector");
+            String container = c == null ? "" : c.toString();
+            String row = r == null ? "" : r.toString();
+            if (row.trim().isEmpty()) return null;
+            return new ListSelectorHint(container, row);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
     
     /**
      * Extracts row texts (comma-joined cells) for the first page using MD5 dedup.
@@ -3292,8 +3593,31 @@ public class WebDSL {
      */
     public List<String> extractRowTexts(String containerSelector, String rowSelector, String cellSelector, int limit) {
         log("Action: Extracting row texts from '" + containerSelector + "'...");
+
+        if (isAutoSelector(containerSelector)) containerSelector = null;
+        if (isAutoSelector(rowSelector)) rowSelector = null;
+        if (rowSelector == null || rowSelector.trim().isEmpty()) {
+            try {
+                ListSelectorHint hint = inferListSelectorHint();
+                if (hint != null) {
+                    if (containerSelector == null || containerSelector.trim().isEmpty()) containerSelector = hint.containerSelector;
+                    if (hint.rowSelector != null && !hint.rowSelector.trim().isEmpty()) rowSelector = hint.rowSelector;
+                }
+            } catch (Exception ignored) {}
+        }
         
         containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+        try {
+            Locator rows = getRowsInContainer(containerSelector, rowSelector);
+            if (rows == null || rows.count() == 0) {
+                String detected = detectRowSelectorFallback(rowSelector);
+                if (detected != null && !detected.trim().isEmpty() && !detected.equals(rowSelector)) {
+                    log("  -> Row selector fallback: '" + detected + "'");
+                    rowSelector = detected;
+                    containerSelector = ensureScrollableContainer(containerSelector, rowSelector);
+                }
+            }
+        } catch (Exception ignored) {}
         
         java.util.Set<String> processedKeys = new java.util.HashSet<>();
         List<String> results = new java.util.ArrayList<>();
