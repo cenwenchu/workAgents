@@ -471,12 +471,20 @@ public class AutoWebAgent {
         return PayloadSupport.buildPlanOnlyPayload(currentUrl, userPrompt);
     }
 
+    static String buildPlanOnlyPayload(String currentUrl, String userPrompt, String entryUrl) {
+        return PayloadSupport.buildPlanOnlyPayload(currentUrl, userPrompt, entryUrl);
+    }
+
     static String buildPlanEntryPayload(Page currentPage, String userPrompt) {
         return PayloadSupport.buildPlanEntryPayload(currentPage, userPrompt);
     }
 
     static String buildPlanEntryPayload(String currentUrl, String userPrompt) {
         return PayloadSupport.buildPlanEntryPayload(currentUrl, userPrompt);
+    }
+
+    static String buildPlanEntryPayload(String currentUrl, String userPrompt, String entryUrl) {
+        return PayloadSupport.buildPlanEntryPayload(currentUrl, userPrompt, entryUrl);
     }
 
     static String buildPlanRefinePayload(Page currentPage, String userPrompt, String refineHint) {
@@ -503,12 +511,28 @@ public class AutoWebAgent {
         return PayloadSupport.buildCodegenPayload(currentPage, planText, snapshots, visualDescription);
     }
 
+    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots) {
+        return PayloadSupport.buildCodegenPayload(currentUrl, planText, snapshots);
+    }
+
+    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
+        return PayloadSupport.buildCodegenPayload(currentUrl, planText, snapshots, visualDescription);
+    }
+
     static String buildRefinePayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint) {
         return PayloadSupport.buildRefinePayload(currentPage, planText, snapshots, currentCleanedHtml, userPrompt, refineHint);
     }
 
     static String buildRefinePayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint, String visualDescription) {
         return PayloadSupport.buildRefinePayload(currentPage, planText, snapshots, currentCleanedHtml, userPrompt, refineHint, visualDescription);
+    }
+
+    static String buildRefinePayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint) {
+        return PayloadSupport.buildRefinePayload(currentUrl, planText, snapshots, currentCleanedHtml, userPrompt, refineHint);
+    }
+
+    static String buildRefinePayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint, String visualDescription) {
+        return PayloadSupport.buildRefinePayload(currentUrl, planText, snapshots, currentCleanedHtml, userPrompt, refineHint, visualDescription);
     }
 
     static long utf8Bytes(String s) {

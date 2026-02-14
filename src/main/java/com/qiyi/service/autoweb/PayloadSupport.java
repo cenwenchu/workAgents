@@ -455,6 +455,39 @@ class PayloadSupport {
     }
 
     /**
+     * 生成 PLAN_ONLY 模式 payload（显式指定入口 URL）
+     *
+     * @param currentUrl 当前 URL
+     * @param userPrompt 用户任务描述
+     * @param entryUrl 入口 URL（优先写入 USER_PROVIDED_URL）
+     * @return payload 文本
+     */
+    static String buildPlanOnlyPayload(String currentUrl, String userPrompt, String entryUrl) {
+        boolean samePageOperation = false;
+        if (userPrompt != null) {
+            String t = userPrompt;
+            samePageOperation =
+                    t.contains("所有的任务都是这个页面") ||
+                    t.contains("不是独立的入口") ||
+                    t.contains("不需要独立的入口") ||
+                    t.contains("不独立的入口");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("MODE: PLAN_ONLY\n");
+        if (currentUrl != null && !currentUrl.isEmpty()) {
+            sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(currentUrl)).append("\n");
+        }
+        if (entryUrl != null && !entryUrl.trim().isEmpty()) {
+            sb.append("USER_PROVIDED_URL: ").append(entryUrl.trim()).append("\n");
+        }
+        if (samePageOperation) {
+            sb.append("SAME_PAGE_OPERATION: true\n");
+        }
+        return sb.toString();
+    }
+
+    /**
      * 生成 PLAN_ENTRY 模式 payload
      *
      * @param currentPage 当前页面
@@ -504,6 +537,40 @@ class PayloadSupport {
                 if (k.isEmpty()) sb.append("- ").append(v).append("\n");
                 else sb.append("- ").append(k).append(": ").append(v).append("\n");
             }
+        }
+        if (samePageOperation) {
+            sb.append("SAME_PAGE_OPERATION: true\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 生成 PLAN_ENTRY 模式 payload（显式指定入口 URL）
+     *
+     * @param currentUrl 当前 URL
+     * @param userPrompt 用户任务描述
+     * @param entryUrl 入口 URL（优先写入 USER_PROVIDED_URL）
+     * @return payload 文本
+     */
+    static String buildPlanEntryPayload(String currentUrl, String userPrompt, String entryUrl) {
+        boolean samePageOperation = false;
+
+        if (userPrompt != null) {
+            String t = userPrompt;
+            samePageOperation =
+                    t.contains("所有的任务都是这个页面") ||
+                    t.contains("不是独立的入口") ||
+                    t.contains("不需要独立的入口") ||
+                    t.contains("不独立的入口");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("MODE: PLAN_ENTRY\n");
+        if (currentUrl != null && !currentUrl.isEmpty()) {
+            sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(currentUrl)).append("\n");
+        }
+        if (entryUrl != null && !entryUrl.trim().isEmpty()) {
+            sb.append("USER_PROVIDED_URL: ").append(entryUrl.trim()).append("\n");
         }
         if (samePageOperation) {
             sb.append("SAME_PAGE_OPERATION: true\n");
@@ -658,6 +725,32 @@ class PayloadSupport {
         return sb.toString();
     }
 
+    /**
+     * 生成 CODEGEN 模式 payload（显式指定当前 URL）
+     *
+     * @param currentUrl 当前 URL（优先作为 CURRENT_PAGE_URL）
+     * @param planText 计划文本
+     * @param snapshots 步骤快照
+     * @return payload 文本
+     */
+    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots) {
+        String cur = currentUrl == null ? "" : currentUrl.trim();
+        if (!cur.isEmpty() && !"about:blank".equalsIgnoreCase(cur)) {
+            cur = PlanRoutingSupport.stripUrlQuery(cur);
+        } else {
+            cur = chooseCurrentUrl(cur, snapshots);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("MODE: CODEGEN\n");
+        if (!cur.isEmpty()) {
+            sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(cur)).append("\n");
+        }
+        sb.append("PLAN:\n").append(planText == null ? "" : planText).append("\n");
+        sb.append("STEP_HTMLS_CLEANED:\n");
+        appendStepHtmlsCleaned(sb, snapshots, 500000);
+        return sb.toString();
+    }
+
     static String buildCodegenPayload(Page currentPage, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, String visualDescription) {
         String currentUrl = chooseCurrentUrl(StorageSupport.safePageUrl(currentPage), snapshots);
 
@@ -665,6 +758,36 @@ class PayloadSupport {
         sb.append("MODE: CODEGEN\n");
         if (!currentUrl.isEmpty()) {
             sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(currentUrl)).append("\n");
+        }
+        if (visualDescription != null && !visualDescription.trim().isEmpty()) {
+            sb.append("VISUAL_DESCRIPTION:\n").append(visualDescription.trim()).append("\n");
+        }
+        sb.append("PLAN:\n").append(planText == null ? "" : planText).append("\n");
+        sb.append("STEP_HTMLS_CLEANED:\n");
+        appendStepHtmlsCleaned(sb, snapshots, 500000);
+        return sb.toString();
+    }
+
+    /**
+     * 生成 CODEGEN 模式 payload（显式指定当前 URL）
+     *
+     * @param currentUrl 当前 URL（优先作为 CURRENT_PAGE_URL）
+     * @param planText 计划文本
+     * @param snapshots 步骤快照
+     * @param visualDescription 可选视觉补充描述
+     * @return payload 文本
+     */
+    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, String visualDescription) {
+        String cur = currentUrl == null ? "" : currentUrl.trim();
+        if (!cur.isEmpty() && !"about:blank".equalsIgnoreCase(cur)) {
+            cur = PlanRoutingSupport.stripUrlQuery(cur);
+        } else {
+            cur = chooseCurrentUrl(cur, snapshots);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("MODE: CODEGEN\n");
+        if (!cur.isEmpty()) {
+            sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(cur)).append("\n");
         }
         if (visualDescription != null && !visualDescription.trim().isEmpty()) {
             sb.append("VISUAL_DESCRIPTION:\n").append(visualDescription.trim()).append("\n");
@@ -755,6 +878,71 @@ class PayloadSupport {
         sb.append("MODE: REFINE_CODE\n");
         if (!currentUrl.isEmpty()) {
             sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(currentUrl)).append("\n");
+        }
+        if (visualDescription != null && !visualDescription.trim().isEmpty()) {
+            sb.append("VISUAL_DESCRIPTION:\n").append(visualDescription.trim()).append("\n");
+        }
+
+        java.util.LinkedHashMap<String, String> urlMappings = new java.util.LinkedHashMap<>();
+        urlMappings.putAll(PlanRoutingSupport.extractUrlMappingsFromText(userPrompt));
+        java.util.LinkedHashMap<String, String> hintMappings = PlanRoutingSupport.extractUrlMappingsFromText(refineHint);
+        for (java.util.Map.Entry<String, String> e : hintMappings.entrySet()) {
+            String k = e.getKey();
+            String v = e.getValue();
+            if (v == null || v.trim().isEmpty()) continue;
+            boolean exists = urlMappings.values().stream().anyMatch(x -> x.equals(v.trim()));
+            if (!exists) {
+                urlMappings.put(k, v.trim());
+            }
+        }
+        if (!urlMappings.isEmpty()) {
+            sb.append("USER_PROVIDED_URLS:\n");
+            for (java.util.Map.Entry<String, String> e : urlMappings.entrySet()) {
+                String k = e.getKey() == null ? "" : e.getKey().trim();
+                String v = e.getValue() == null ? "" : e.getValue().trim();
+                if (v.isEmpty()) continue;
+                if (k.isEmpty()) sb.append("- ").append(v).append("\n");
+                else sb.append("- ").append(k).append(": ").append(v).append("\n");
+            }
+        }
+
+        if (currentCleanedHtml != null && !currentCleanedHtml.isEmpty()) {
+            String v = currentCleanedHtml;
+            if (v.length() > 200000) v = v.substring(0, 200000) + "...(truncated)";
+            sb.append("CURRENT_PAGE_HTML_CLEANED:\n").append(v).append("\n");
+        }
+        sb.append("PLAN:\n").append(planText == null ? "" : planText).append("\n");
+        sb.append("STEP_HTMLS_CLEANED:\n");
+        appendStepHtmlsCleaned(sb, snapshots, 500000);
+        return sb.toString();
+    }
+
+    /**
+     * 生成 REFINE_CODE 模式 payload（显式指定当前 URL）
+     *
+     * @param currentUrl 当前 URL（优先作为 CURRENT_PAGE_URL）
+     * @param planText 计划文本
+     * @param snapshots 步骤快照
+     * @param currentCleanedHtml 当前页清洗后的 HTML
+     * @param userPrompt 用户任务描述
+     * @param refineHint 修正提示
+     * @return payload 文本
+     */
+    static String buildRefinePayload(String currentUrl, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint) {
+        return buildRefinePayload(currentUrl, planText, snapshots, currentCleanedHtml, userPrompt, refineHint, null);
+    }
+
+    static String buildRefinePayload(String currentUrl, String planText, java.util.List<AutoWebAgent.HtmlSnapshot> snapshots, String currentCleanedHtml, String userPrompt, String refineHint, String visualDescription) {
+        String cur = currentUrl == null ? "" : currentUrl.trim();
+        if (!cur.isEmpty() && !"about:blank".equalsIgnoreCase(cur)) {
+            cur = PlanRoutingSupport.stripUrlQuery(cur);
+        } else {
+            cur = chooseCurrentUrl(cur, snapshots);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("MODE: REFINE_CODE\n");
+        if (!cur.isEmpty()) {
+            sb.append("CURRENT_PAGE_URL: ").append(PlanRoutingSupport.stripUrlQuery(cur)).append("\n");
         }
         if (visualDescription != null && !visualDescription.trim().isEmpty()) {
             sb.append("VISUAL_DESCRIPTION:\n").append(visualDescription.trim()).append("\n");

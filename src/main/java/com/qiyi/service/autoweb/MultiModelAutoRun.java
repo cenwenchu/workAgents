@@ -39,7 +39,7 @@ public class MultiModelAutoRun {
 
     /**
      * Runner 的运行参数集合。
-     * 注意：该类默认值偏向回归测试场景（captureMode=ARIA_SNAPSHOT、useVisualSupplement=true）。
+     * 注意：默认回归场景在 defaultConfig() 中设置为 captureMode=RAW_HTML、useVisualSupplement=true。
      */
     static class RunnerConfig {
         List<String> models = new ArrayList<>();
@@ -391,7 +391,7 @@ public class MultiModelAutoRun {
         out.entryUrlUsed = c.entryUrl;
 
         String currentUrl = StorageSupport.safePageUrl(page);
-        String planPayload = AutoWebAgent.buildPlanOnlyPayload(currentUrl, out.prompt);
+        String planPayload = AutoWebAgent.buildPlanOnlyPayload(currentUrl, out.prompt, c.entryUrl);
         String planText = AutoWebAgent.generateGroovyScript(out.prompt, planPayload, logger, model);
         out.planText = planText == null ? "" : planText;
 
@@ -877,7 +877,7 @@ public class MultiModelAutoRun {
 
     private static String analyzeScreenshotForCase(File screenshot, String prompt) {
         AppConfig cfg = AppConfig.getInstance();
-        String geminiKey = cfg == null ? "" : (cfg.getGeminiApiKey() == null ? "" : cfg.getGeminiApiKey().trim());
+    
         String aliyunKey = cfg == null ? "" : (cfg.getAliyunApiKey() == null ? "" : cfg.getAliyunApiKey().trim());
 
         String resp = "";
@@ -994,7 +994,7 @@ public class MultiModelAutoRun {
     private static RunnerConfig defaultConfig() {
         RunnerConfig cfg = new RunnerConfig();
         cfg.models = new ArrayList<>();
-        cfg.captureMode = AutoWebAgent.HtmlCaptureMode.ARIA_SNAPSHOT;
+        cfg.captureMode = AutoWebAgent.HtmlCaptureMode.RAW_HTML;
         cfg.useVisualSupplement = true;
         cfg.alsoStdout = true;
         cfg.localAnalyze = false;

@@ -43,6 +43,7 @@ AutoWeb 代码介绍文档（autoweb 包）
 关键点：
 - 并发模型：后台线程并发请求多个模型；用 uiEpoch 避免“过期任务”回写 UI。
 - Playwright 串行：所有浏览器操作使用 PLAYWRIGHT_LOCK 串行化，避免跨线程并发操作不稳定。
+- 入口 URL 统一入口：在“用户任务”区域顶部提供入口URL输入框（必填）；支持“从浏览器读入”一键从当前激活页面读取并填入；PLAN/CODEGEN/REFINE_CODE 的 payload 统一优先使用该入口 URL。
 
 ### 1.3 PayloadSupport（payload 组装器）
 核心职责：
@@ -53,6 +54,8 @@ AutoWeb 代码介绍文档（autoweb 包）
 - buildPlanRefinePayload：在入口不明确时补充 URL 映射与用户输入，重新规划。
 - buildCodegenPayload：拼接 PLAN + STEP_HTMLS_CLEANED，进入 CODEGEN。
 - buildRefinePayload：拼接 CURRENT_PAGE_HTML_CLEANED + PLAN + STEP_HTMLS_CLEANED，用于 REFINE_CODE。
+补充说明：
+- payload 支持写入 USER_PROVIDED_URL（显式入口 URL）与 USER_PROVIDED_URLS（用户提供的 URL 映射列表）；CURRENT_PAGE_URL 与 USER_PROVIDED_URL 默认会做忽略 query 的规整（stripUrlQuery）。
 
 ### 1.4 GroovySupport（模型调用 + 代码归一化 + 执行）
 核心职责：
@@ -111,6 +114,7 @@ AutoWeb 代码介绍文档（autoweb 包）
 ### 1.12 MultiModelAutoRun（多模型 E2E 回归 Runner）
 核心职责：
 - 用同一批 Case 在多个模型上跑 Plan/Code/执行，对比成功率/耗时/日志，并生成报告到 autoweb/debug。
+ - 默认回归场景 captureMode 采用 RAW_HTML（可通过 System Properties 覆盖）。
 
 ---
 ## 2. AutoWebAgent 功能介绍与自动化网页流程（含核心对象定义）
@@ -135,6 +139,7 @@ AutoWeb 代码介绍文档（autoweb 包）
 2) 生成计划（PLAN_*）
    - PayloadSupport.buildPlanOnlyPayload / buildPlanEntryPayload：
      生成 MODE=PLAN_ONLY/PLAN_ENTRY 的 payload（包含 CURRENT_PAGE_URL、用户提供 URL/映射等）。
+   - UI 交互场景下入口 URL 为必填：PLAN/CODEGEN/REFINE_CODE 的 payload 会统一优先写入 USER_PROVIDED_URL（来自入口URL输入框/从浏览器读入）。
    - GroovySupport.generateGroovyScript：用 skills 模板拼 prompt 并调用模型。
    - PlanRoutingSupport.parsePlanFromText：解析 Step 列表并判断 confirmed。
 3) 采集页面（为生成代码做准备）

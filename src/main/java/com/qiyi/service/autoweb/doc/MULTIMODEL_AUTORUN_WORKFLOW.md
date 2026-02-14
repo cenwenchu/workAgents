@@ -1,6 +1,6 @@
 # MultiModelAutoRun 工作流程说明（适合生成流程图）
 
-本文基于 [MultiModelAutoRun.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java) 总结其 E2E Runner 的执行链路、关键分支与主要数据结构，便于后续把流程转换成可视化流程图（或导入到自动生成工具）。
+本文基于 [MultiModelAutoRun.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java) 总结其 E2E Runner 的执行链路、关键分支与主要数据结构，便于后续把流程转换成可视化流程图（或导入到自动生成工具）。
 
 ## 1. 目标与产物
 
@@ -11,7 +11,7 @@
 
 ## 2. 主流程概览（从 main 到报告）
 
-入口：[MultiModelAutoRun.main](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L127-L162)
+入口：[MultiModelAutoRun.main](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L127-L162)
 
 高层步骤：
 
@@ -24,13 +24,13 @@
 
 ## 3. runOnce(cfg) 详细流程
 
-入口：[runOnce](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L203-L295)
+入口：[runOnce](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L203-L295)
 
 ### 3.1 初始化阶段
 
 - 参数校验：cfg/models/cases 不能为空
 - 清理运行产物：
-  - [cleanupAutowebArtifacts](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L789-L814) 会清空 `autoweb/cache` 与 `autoweb/debug` 的目录内容
+  - [cleanupAutowebArtifacts](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L789-L814) 会清空 `autoweb/cache` 与 `autoweb/debug` 的目录内容
 - 生成 ts：`AutoWebAgent.newDebugTimestamp()`
 - 构建 Report 并填充：
   - ts / models / captureMode / analysisPrompt / localAnalysisModel 等
@@ -42,7 +42,7 @@
 对每个 CaseInput：
 
 - 初始化 CaseRunResult（id/entryUrl/userTask/runs）
-- 打开页面 [openPage](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L301-L334)
+- 打开页面 [openPage](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L301-L334)
   - 取已有 BrowserContext（若不存在则新建）
   - `ctx.newPage()` 后导航到 entryUrl 并等待 `NETWORKIDLE`（超时 120s）
   - 额外等待 1000ms
@@ -57,7 +57,7 @@
 
 ## 4. runSingleModelCase(model, case, page, ...) 详细流程
 
-入口：[runSingleModelCase](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L336-L456)
+入口：[runSingleModelCase](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L336-L456)
 
 一次 model×case 的运行，可能产生 1~2 个 ModelRunResult（首次 + 可选修复）。
 
@@ -67,7 +67,7 @@
 - 构建 prompt：`buildPrompt(case)`（把 userTask 与 entryUrl 拼在一起）
 - 生成计划：
   - `currentUrl = StorageSupport.safePageUrl(page)`
-  - `planPayload = AutoWebAgent.buildPlanOnlyPayload(currentUrl, prompt)`
+  - `planPayload = AutoWebAgent.buildPlanOnlyPayload(currentUrl, prompt, entryUrl)`（入口 URL 会写入 USER_PROVIDED_URL）
   - `planText = AutoWebAgent.generateGroovyScript(prompt, planPayload, logger, model)`
 - 解析计划：
   - `parsed = AutoWebAgent.parsePlanFromText(planText)`
@@ -95,12 +95,12 @@
 
 ### 4.4 执行阶段（逐步执行 PlanStep）
 
-- 进入 [executePlanSteps](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L468-L550)
+- 进入 [executePlanSteps](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L468-L550)
 - 记录本次执行的 stepResults / formattedErrors / runLogHead / runLogTail
 
 ### 4.5 修复阶段（可选）
 
-触发条件：[shouldRepair](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L458-L466)
+触发条件：[shouldRepair](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L458-L466)
 
 - 条件：planSteps 非空，stepResults 非空，且存在任一步 `ok=false`
 
@@ -123,7 +123,7 @@
 
 ## 5. executePlanSteps：逐步执行与超时重试策略
 
-入口：[executePlanSteps](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L468-L550)
+入口：[executePlanSteps](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L468-L550)
 
 每次执行都会：
 
@@ -134,11 +134,11 @@
 对每个 PlanStep：
 
 1) 从整段 code 中提取该 step 的代码块  
-   - [extractStepCode](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L934-L983)
+   - [extractStepCode](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L934-L983)
    - 支持用 “Step/步骤 n” 的标题切块；若完全找不到标题则把整段 code 当作 step1
 2) 若没找到该 step 的代码：标记失败并继续下一步
 3) 将 top-level `def x = ...` 改写为 `x = ...`，用于变量提升与共享  
-   - [promoteTopLevelDefs](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L564-L578)
+   - [promoteTopLevelDefs](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L564-L578)
 4) 选择最佳执行上下文（Page/Frame）：`AutoWebAgent.waitAndFindContext(page, stepLogger)`
 5) 执行 Groovy：`AutoWebAgent.executeWithGroovy(...)`
 6) 若捕获到“超时类异常”：
@@ -151,7 +151,7 @@
 
 ### 6.1 MultiModelAutoRun 内部结构
 
-来源：[MultiModelAutoRun.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L41-L121)
+来源：[MultiModelAutoRun.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L41-L121)
 
 ```java
 static class RunnerConfig {
@@ -217,7 +217,7 @@ static class Report {
 
 ### 6.2 AutoWebAgent 相关结构（被 MultiModelAutoRun 直接使用）
 
-来源：[AutoWebAgent.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/AutoWebAgent.java#L312-L377)
+来源：[AutoWebAgent.java](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/AutoWebAgent.java#L312-L377)
 
 ```java
 static class ContextWrapper {
@@ -419,7 +419,7 @@ flowchart TD
 
 ## 9. 运行时参数（System Properties）
 
-这些参数在类内已有解析逻辑（见 [resolveCaptureModeFromSystemProperties](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/autoweb/MultiModelAutoRun.java#L816-L822) 与相关 helper 方法），可用于在 CI/命令行覆盖部分行为：
+这些参数在类内已有解析逻辑（见 [resolveCaptureModeFromSystemProperties](file:///Users/cenwenchu/Desktop/Demo/workAgents/src/main/java/com/qiyi/service/autoweb/MultiModelAutoRun.java#L816-L822) 与相关 helper 方法），可用于在 CI/命令行覆盖部分行为：
 
 - `autoweb.e2e.captureMode`: `ARIA` / `ARIA_SNAPSHOT` / `A11Y` / `RAW_HTML`
 - `autoweb.e2e.simplifiedHtml`: `true/false`（当 captureMode 未显式指定时决定使用 ARIA_SNAPSHOT 还是 RAW_HTML）
@@ -430,4 +430,3 @@ flowchart TD
 - `autoweb.e2e.reportMaxChars`: 报告落盘时的最大字符数（截断保护）
 - `autoweb.e2e.casesFile`: 读取 case JSON 文件路径
 - `autoweb.e2e.cases`: inline case 字符串（`;;` 分隔 case，`|||` 分隔 url/task）
-

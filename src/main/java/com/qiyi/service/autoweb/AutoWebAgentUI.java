@@ -28,6 +28,7 @@ import static com.qiyi.service.autoweb.AutoWebAgent.*;
  * - 维护每个模型的会话状态（Plan/Steps/Code/执行结果），并将状态渲染到 Tab；
  * - 串联 AutoWebAgent 的采集/LLM/执行能力，提供“生成计划 → 生成代码 → 修正 → 执行”的闭环；
  * - 提供 PLAN_REFINE 的入口补全交互，以及（可选）视觉补充能力（截图 → 图片理解 → 页面描述）。
+ * - 提供“入口URL”统一入口：所有计划/代码/修正的生成流程都强制从入口URL输入框读取；支持从浏览器读入当前页 URL。
  *
  * 并发与线程模型：
  * - UI 线程：仅做 Swing 渲染、按钮状态控制与用户输入；
@@ -236,11 +237,11 @@ class AutoWebAgentUI {
 
         JCheckBox chkUseA11yTree = new JCheckBox("使用简化Html采集模式（Accessibility tree ）");
         chkUseA11yTree.setAlignmentX(Component.LEFT_ALIGNMENT);
-        chkUseA11yTree.setSelected(true);
+        chkUseA11yTree.setSelected(false);
         JCheckBox chkA11yInterestingOnly = new JCheckBox("Accessibility Tree 仅保留语义节点(interestingOnly)");
         chkA11yInterestingOnly.setAlignmentX(Component.LEFT_ALIGNMENT);
         chkA11yInterestingOnly.setSelected(false);
-        chkA11yInterestingOnly.setEnabled(true);
+        chkA11yInterestingOnly.setEnabled(false);
         chkUseA11yTree.addActionListener(e -> chkA11yInterestingOnly.setEnabled(chkUseA11yTree.isSelected()));
         JCheckBox chkUseVisualSupplement = new JCheckBox("使用视觉补充能力");
         chkUseVisualSupplement.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -256,11 +257,69 @@ class AutoWebAgentUI {
 
         JPanel promptPanel = new JPanel(new BorderLayout());
         promptPanel.setBorder(BorderFactory.createTitledBorder("用户任务"));
+        JPanel urlPanel = new JPanel();
+        urlPanel.setLayout(new BoxLayout(urlPanel, BoxLayout.X_AXIS));
+        JLabel lblEntryUrl = new JLabel("入口URL:");
+        JTextField urlInput = new JTextField();
+        String initUrl = safePageUrl(rootPageRef.get());
+        if (initUrl != null && !initUrl.trim().isEmpty() && !"about:blank".equalsIgnoreCase(initUrl.trim())) {
+            urlInput.setText(initUrl.trim());
+        }
+        urlPanel.add(lblEntryUrl);
+        urlPanel.add(Box.createHorizontalStrut(8));
+        urlPanel.add(urlInput);
+        urlPanel.add(Box.createHorizontalStrut(8));
+        JButton btnLoadUrlFromBrowser = new JButton("从浏览器读入");
+        btnLoadUrlFromBrowser.addActionListener(e -> {
+            try {
+                refreshRootPageRefIfNeeded(rootPageRef, connectionRef, null, "从浏览器读入入口URL");
+            } catch (Exception ignored) {}
+            Page p = rootPageRef.get();
+            String url = safePageUrl(p);
+            if (url == null || url.trim().isEmpty() || "about:blank".equalsIgnoreCase(url.trim())) {
+                try {
+                    PlayWrightUtil.Connection conn = connectionRef.get();
+                    if (conn != null && conn.browser != null && !conn.browser.contexts().isEmpty()) {
+                        Page best = null;
+                        for (com.microsoft.playwright.BrowserContext ctx : conn.browser.contexts()) {
+                            if (ctx == null) continue;
+                            java.util.List<Page> pages = ctx.pages();
+                            if (pages == null || pages.isEmpty()) continue;
+                            for (int i = pages.size() - 1; i >= 0; i--) {
+                                Page cand = pages.get(i);
+                                if (cand == null) continue;
+                                boolean closed;
+                                try { closed = cand.isClosed(); } catch (Exception ex) { closed = true; }
+                                if (closed) continue;
+                                String u = safePageUrl(cand);
+                                if (u != null && !u.trim().isEmpty() && !"about:blank".equalsIgnoreCase(u.trim())) {
+                                    best = cand;
+                                    url = u;
+                                    break;
+                                }
+                            }
+                            if (best != null) break;
+                        }
+                        if (best != null) {
+                            try { rootPageRef.set(best); } catch (Exception ignored) {}
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (url == null || url.trim().isEmpty() || "about:blank".equalsIgnoreCase(url.trim())) {
+                JOptionPane.showMessageDialog(frame, "当前浏览器页面未获取到可用URL。请先在浏览器中打开目标网页。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            String finalUrl = url.trim();
+            try { urlInput.setText(finalUrl); } catch (Exception ignored) {}
+        });
+        urlPanel.add(btnLoadUrlFromBrowser);
         JTextArea promptArea = new JTextArea(defaultPrompt);
         promptArea.setLineWrap(true);
         promptArea.setWrapStyleWord(true);
         promptArea.setRows(3);
         JScrollPane promptScroll = new JScrollPane(promptArea);
+        promptPanel.add(urlPanel, BorderLayout.NORTH);
         promptPanel.add(promptScroll, BorderLayout.CENTER);
 
         JPanel refinePanel = new JPanel(new BorderLayout());
@@ -849,6 +908,26 @@ class AutoWebAgentUI {
                 return;
             }
 
+            String entryUrlInput = "";
+            try { entryUrlInput = urlInput.getText() == null ? "" : urlInput.getText().trim(); } catch (Exception ignored) { entryUrlInput = ""; }
+            if (entryUrlInput.isEmpty()) {
+                String pageUrl = safePageUrl(rootPageRef.get());
+                if (pageUrl != null && !pageUrl.trim().isEmpty() && !"about:blank".equalsIgnoreCase(pageUrl.trim())) {
+                    entryUrlInput = pageUrl.trim();
+                    String finalEntryUrlInput = entryUrlInput;
+                    SwingUtilities.invokeLater(() -> {
+                        try { urlInput.setText(finalEntryUrlInput); } catch (Exception ignored) {}
+                    });
+                }
+            }
+            final String entryUrlFinal = entryUrlInput;
+            if (entryUrlFinal == null || entryUrlFinal.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "请先在“用户任务”区域顶部的入口URL输入框中填写入口地址。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            final String promptForPayload = stripUrlsFromText(currentPrompt);
+            final String promptForLlm = promptForPayload;
+
             final long planEpoch = uiEpoch.get();
             java.util.List<String> pendingEntryModels = new java.util.ArrayList<>();
             for (String modelName : selectedModels) {
@@ -884,12 +963,9 @@ class AutoWebAgentUI {
                         codeTabs.setSelectedIndex(0);
                     }
 
-                    String entryInput = promptForMultilineInputBlocking(
-                            frame,
-                            "补充入口地址",
-                            buildEntryInputHint(pendingEntryModels, sessionsByModel)
-                    );
+                    String entryInput = entryUrlFinal;
                     if (entryInput == null || entryInput.trim().isEmpty()) {
+                        JOptionPane.showMessageDialog(frame, "请先在“用户任务”区域顶部的入口URL输入框中填写入口地址。", "提示", JOptionPane.INFORMATION_MESSAGE);
                         return;
                     }
 
@@ -965,11 +1041,11 @@ class AutoWebAgentUI {
                                             }
                                             visualDescriptionFinal = v;
                                         }
-                                        String currentUrlForRefine = safePageUrl(rootPageRef.get());
-                                        String payload = buildPlanRefinePayload(currentUrlForRefine, currentPrompt, entryInput, useVisualSupplement ? visualDescriptionFinal : null);
+                                        String currentUrlForRefine = entryUrlFinal;
+                                        String payload = buildPlanRefinePayload(currentUrlForRefine, promptForPayload, entryInput, useVisualSupplement ? visualDescriptionFinal : null);
                                         uiLogger.accept("PLAN_REFINE Payload Hash: " + payload.hashCode() + " | Length: " + payload.length());
                                         uiLogger.accept("阶段中: model=" + modelName + ", planMode=" + extractModeFromPayload(payload));
-                                        String text = generateGroovyScript(currentPrompt, payload, uiLogger, modelName);
+                                        String text = generateGroovyScript(promptForLlm, payload, uiLogger, modelName);
                                         String finalText = text == null ? "" : text;
                                         if (uiEpoch.get() != planEpoch) return;
                                         AutoWebAgentUtils.saveDebugCodeVariant(finalText, modelName, "plan_refine", uiLogger);
@@ -1049,7 +1125,7 @@ class AutoWebAgentUI {
                     if (uiEpoch.get() != planEpoch) return;
                     uiLogger.accept("规划阶段：仅发送用户任务与提示规则，不采集 HTML。");
                     refreshRootPageRefIfNeeded(rootPageRef, connectionRef, uiLogger, "生成计划前刷新页面");
-                    String currentUrlForPlan = safePageUrl(rootPageRef.get());
+                    String currentUrlForPlan = entryUrlFinal;
                     java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(selectedModels.size());
                     java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
                     java.util.Set<String> needsEntryModels = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
@@ -1059,15 +1135,14 @@ class AutoWebAgentUI {
                             try {
                                 if (uiEpoch.get() != planEpoch) return;
                                 uiLogger.accept("阶段开始: model=" + modelName + ", action=PLAN");
-                                String combinedForUrl = currentPrompt;
-                                boolean hasUrl = extractFirstUrlFromText(combinedForUrl) != null || !extractUrlMappingsFromText(combinedForUrl).isEmpty();
+                                boolean hasUrl = entryUrlFinal != null && !entryUrlFinal.trim().isEmpty();
                                 
                                 String payload = hasUrl
-                                        ? buildPlanOnlyPayload(currentUrlForPlan, combinedForUrl)
-                                        : buildPlanEntryPayload(currentUrlForPlan, combinedForUrl);
+                                        ? buildPlanOnlyPayload(currentUrlForPlan, promptForPayload, entryUrlFinal)
+                                        : buildPlanEntryPayload(currentUrlForPlan, promptForPayload);
                                 uiLogger.accept("阶段中: model=" + modelName + ", planMode=" + extractModeFromPayload(payload));
                                 
-                                String planResult = generateGroovyScript(currentPrompt, payload, uiLogger, modelName);
+                                String planResult = generateGroovyScript(promptForLlm, payload, uiLogger, modelName);
                                 String finalPlanResult = planResult == null ? "" : planResult;
                                 if (uiEpoch.get() != planEpoch) return;
                                 ModelSession session = sessionsByModel.computeIfAbsent(modelName, k -> new ModelSession());
@@ -1102,7 +1177,7 @@ class AutoWebAgentUI {
                                 }
                                 if (parsed.hasQuestion || !parsed.confirmed) {
                                     needsEntryModels.add(modelName);
-                                    uiLogger.accept("规划未完成: " + modelName + " 仍需要入口信息。将弹窗提示输入入口地址。");
+                                    uiLogger.accept("规划未完成: " + modelName + " 仍需要入口信息。");
                                 } else {
                                     uiLogger.accept("规划已确认: " + modelName + "。点击“生成代码”将按计划采集 HTML 并生成脚本。");
                                 }
@@ -1144,17 +1219,13 @@ class AutoWebAgentUI {
                         return;
                     }
 
-                    String entryInput = promptForMultilineInputBlocking(
-                            frame,
-                            "补充入口地址",
-                            buildEntryInputHint(needList, sessionsByModel)
-                    );
+                    String entryInput = entryUrlFinal;
                     if (entryInput == null || entryInput.trim().isEmpty()) {
                         if (uiEpoch.get() == planEpoch) {
                             setStage.accept("NONE");
                             SwingUtilities.invokeLater(() -> {
                                 setActionButtonsEnabled(btnPlan, btnGetCode, btnRefinePlan, btnRefine, btnStepExecute, btnExecute, btnClearAll, true);
-                                uiLogger.accept("已取消入口地址输入，规划未确认的模型仍需入口信息。");
+                                uiLogger.accept("入口URL为空，规划未确认的模型仍需入口信息。");
                             });
                         }
                         return;
@@ -1163,7 +1234,7 @@ class AutoWebAgentUI {
                     if (uiEpoch.get() != planEpoch) return;
                     uiLogger.accept("开始提交入口地址并修正规划...");
                     refreshRootPageRefIfNeeded(rootPageRef, connectionRef, uiLogger, "修正规划前刷新页面");
-                    String currentUrlForRefine = safePageUrl(rootPageRef.get());
+                    String currentUrlForRefine = entryUrlFinal;
                     boolean useVisualSupplement = chkUseVisualSupplement.isSelected();
                     java.util.concurrent.atomic.AtomicReference<String> visualDescriptionRef = new java.util.concurrent.atomic.AtomicReference<>(null);
                     Object visualDescriptionLock = new Object();
@@ -1230,11 +1301,11 @@ class AutoWebAgentUI {
                                             }
                                             visualDescriptionFinal = v;
                                         }
-                                        String currentUrlForRefine2 = safePageUrl(rootPageRef.get());
-                                        String payload = buildPlanRefinePayload(currentUrlForRefine2, currentPrompt, entryInput, useVisualSupplement ? visualDescriptionFinal : null);
+                                        String currentUrlForRefine2 = entryUrlFinal;
+                                        String payload = buildPlanRefinePayload(currentUrlForRefine2, promptForPayload, entryInput, useVisualSupplement ? visualDescriptionFinal : null);
                                         uiLogger.accept("PLAN_REFINE Payload Hash: " + payload.hashCode() + " | Length: " + payload.length());
                                         uiLogger.accept("阶段中: model=" + modelName + ", planMode=" + extractModeFromPayload(payload));
-                                        String text = generateGroovyScript(currentPrompt, payload, uiLogger, modelName);
+                                        String text = generateGroovyScript(promptForLlm, payload, uiLogger, modelName);
                                         String finalText = text == null ? "" : text;
                                         if (uiEpoch.get() != planEpoch) return;
                                         AutoWebAgentUtils.saveDebugCodeVariant(finalText, modelName, "plan_refine", uiLogger);
@@ -1310,6 +1381,26 @@ class AutoWebAgentUI {
                 return;
             }
 
+            String entryUrlInput = "";
+            try { entryUrlInput = urlInput.getText() == null ? "" : urlInput.getText().trim(); } catch (Exception ignored) { entryUrlInput = ""; }
+            if (entryUrlInput.isEmpty()) {
+                String pageUrl = safePageUrl(rootPageRef.get());
+                if (pageUrl != null && !pageUrl.trim().isEmpty() && !"about:blank".equalsIgnoreCase(pageUrl.trim())) {
+                    entryUrlInput = pageUrl.trim();
+                    String finalEntryUrlInput = entryUrlInput;
+                    SwingUtilities.invokeLater(() -> {
+                        try { urlInput.setText(finalEntryUrlInput); } catch (Exception ignored) {}
+                    });
+                }
+            }
+            if (entryUrlInput.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "请先在“用户任务”区域顶部的入口URL输入框中填写入口地址。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            final String entryUrlFinal = entryUrlInput;
+            final String promptForPayload = stripUrlsFromText(currentPrompt);
+            final String promptForLlm = promptForPayload;
+
             refreshRootPageRefIfNeeded(rootPageRef, connectionRef, uiLogger, "生成代码前刷新页面");
 
             java.util.List<String> readyModels = new java.util.ArrayList<>();
@@ -1328,8 +1419,7 @@ class AutoWebAgentUI {
                         PlanStep firstStep = session.steps.get(0);
                         String target = firstStep == null ? "" : firstStep.targetUrl;
                         boolean hasTarget = looksLikeUrl(target);
-                        String currentUrl = safePageUrl(rootPageRef.get());
-                        boolean hasLivePage = currentUrl != null && !currentUrl.isEmpty() && !"about:blank".equalsIgnoreCase(currentUrl);
+                        boolean hasLivePage = entryUrlFinal != null && !entryUrlFinal.trim().isEmpty();
                         
                         if (!hasTarget && !hasLivePage) {
                             reason = "计划未确认，且第一步无具体URL，当前浏览器也未打开网页";
@@ -1472,7 +1562,7 @@ class AutoWebAgentUI {
                                         }
                                         visualDescriptionFinal = v;
                                     }
-                                    String payload = buildCodegenPayload(rootPageRef.get(), session.planText, snaps, useVisualSupplement ? visualDescriptionFinal : null);
+                                    String payload = buildCodegenPayload(entryUrlFinal, session.planText, snaps, useVisualSupplement ? visualDescriptionFinal : null);
                                     int htmlLen = 0;
                                     try {
                                         int h = payload == null ? -1 : payload.indexOf("STEP_HTMLS_CLEANED:");
@@ -1486,7 +1576,7 @@ class AutoWebAgentUI {
                                     HtmlCaptureMode captureModeForLog = chkUseA11yTree.isSelected() ? HtmlCaptureMode.ARIA_SNAPSHOT : HtmlCaptureMode.RAW_HTML;
                                     uiLogger.accept("将要提交给大模型的 操作页面网页的长度为 " + htmlLen + " ，采集模式为 " + captureModeForLog);
                                     uiLogger.accept("阶段中: model=" + modelName + ", action=CODEGEN, payloadMode=" + extractModeFromPayload(payload) + ", steps=" + session.steps.size() + ", snapshots=" + snaps.size());
-                                    String generatedCode = generateGroovyScript(currentPrompt, payload, uiLogger, modelName);
+                                    String generatedCode = generateGroovyScript(promptForLlm, payload, uiLogger, modelName);
                                     String normalizedCode = normalizeGeneratedGroovy(generatedCode);
                                     if (normalizedCode != null && !normalizedCode.equals(generatedCode)) {
                                         java.util.List<String> normalizeErrors = GroovyLinter.check(normalizedCode);
@@ -1498,7 +1588,7 @@ class AutoWebAgentUI {
 
                                     generatedCode = repairStepMarkersIfNeeded(
                                             modelName,
-                                            currentPrompt,
+                                            promptForLlm,
                                             session,
                                             rootPageRef.get(),
                                             snaps,
@@ -1585,6 +1675,25 @@ class AutoWebAgentUI {
                 JOptionPane.showMessageDialog(frame, "当前没有可用于修正的代码。", "提示", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
+
+            String entryUrlInput = "";
+            try { entryUrlInput = urlInput.getText() == null ? "" : urlInput.getText().trim(); } catch (Exception ignored) { entryUrlInput = ""; }
+            if (entryUrlInput.isEmpty()) {
+                String pageUrl = safePageUrl(rootPageRef.get());
+                if (pageUrl != null && !pageUrl.trim().isEmpty() && !"about:blank".equalsIgnoreCase(pageUrl.trim())) {
+                    entryUrlInput = pageUrl.trim();
+                    String finalEntryUrlInput = entryUrlInput;
+                    SwingUtilities.invokeLater(() -> {
+                        try { urlInput.setText(finalEntryUrlInput); } catch (Exception ignored) {}
+                    });
+                }
+            }
+            if (entryUrlInput.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "请先在“用户任务”区域顶部的入口URL输入框中填写入口地址。", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            final String entryUrlFinal = entryUrlInput;
+
             if (refineHintForModel == null || refineHintForModel.trim().isEmpty()) {
                 int choice = JOptionPane.showConfirmDialog(
                         frame,
@@ -1673,7 +1782,7 @@ class AutoWebAgentUI {
 
                     java.util.List<HtmlSnapshot> stepSnaps = new java.util.ArrayList<>(session.stepSnapshots.values());
                     stepSnaps.sort(java.util.Comparator.comparingInt(a -> a.stepIndex));
-                    String payload = buildRefinePayload(rootPageRef.get(), session.planText, stepSnaps, freshCleanedHtml, currentPrompt, refineHintForModel, useVisualSupplement ? visualDescriptionForRefineFinal : null);
+                    String payload = buildRefinePayload(entryUrlFinal, session.planText, stepSnaps, freshCleanedHtml, stripUrlsFromText(currentPrompt), refineHintForModel, useVisualSupplement ? visualDescriptionForRefineFinal : null);
                     uiLogger.accept("阶段中: model=" + modelName + ", action=REFINE_CODE, payloadMode=" + extractModeFromPayload(payload) + ", snapshots=" + stepSnaps.size());
                     String promptForRefine = currentPrompt;
                     try {
@@ -1813,7 +1922,8 @@ class AutoWebAgentUI {
                         try {
                             ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
                             Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
-                            executeWithGroovy(code, executionTarget, uiLogger, sharedBinding, null, null);
+                            String normalized = promoteTopLevelDefsForSharedBinding(code, uiLogger);
+                            executeWithGroovy(normalized, executionTarget, uiLogger, sharedBinding, null, null);
                             hasExecuted.set(true);
                             for (PlanStep step : selectedSteps) {
                                 if (step == null) continue;
@@ -1862,7 +1972,8 @@ class AutoWebAgentUI {
                         try {
                             ContextWrapper bestContext = waitAndFindContext(liveRootPage, uiLogger);
                             Object executionTarget = bestContext == null ? liveRootPage : bestContext.context;
-                            executeWithGroovy(stepCode, executionTarget, uiLogger, sharedBinding, null, null);
+                            String normalizedStep = promoteTopLevelDefsForSharedBinding(stepCode, uiLogger);
+                            executeWithGroovy(normalizedStep, executionTarget, uiLogger, sharedBinding, null, null);
                             hasExecuted.set(true);
                             statusMap.put(stepIndex, true);
                             errorMap.remove(stepIndex);
@@ -3041,6 +3152,7 @@ class AutoWebAgentUI {
             java.util.List<com.microsoft.playwright.BrowserContext> contexts = connection.browser.contexts();
             Page lastAny = null;
             Page lastNonBlank = null;
+            Page firstVisibleNonBlank = null;
             for (com.microsoft.playwright.BrowserContext ctx : contexts) {
                 if (ctx == null) continue;
                 java.util.List<Page> pages = ctx.pages();
@@ -3054,16 +3166,48 @@ class AutoWebAgentUI {
                         closed = true;
                     }
                     if (closed) continue;
-                    lastAny = p;
                     String u = safePageUrl(p);
+                    lastAny = p;
                     if (!u.isEmpty() && !"about:blank".equalsIgnoreCase(u)) {
                         lastNonBlank = p;
+                        Boolean focused = tryEvalBoolean(p, "() => (document.hasFocus ? document.hasFocus() : false)");
+                        if (Boolean.TRUE.equals(focused)) return p;
+                        if (firstVisibleNonBlank == null) {
+                            String vis = tryEvalString(p, "() => (document.visibilityState || '')");
+                            if ("visible".equalsIgnoreCase(vis)) firstVisibleNonBlank = p;
+                        }
                     }
                 }
             }
+            if (firstVisibleNonBlank != null) return firstVisibleNonBlank;
             return lastNonBlank != null ? lastNonBlank : lastAny;
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private static Boolean tryEvalBoolean(Page page, String js) {
+        if (page == null) return null;
+        if (js == null || js.trim().isEmpty()) return null;
+        try {
+            Object v = page.evaluate(js);
+            if (v == null) return null;
+            if (v instanceof Boolean) return (Boolean) v;
+            return Boolean.parseBoolean(String.valueOf(v).trim());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String tryEvalString(Page page, String js) {
+        if (page == null) return "";
+        if (js == null || js.trim().isEmpty()) return "";
+        try {
+            Object v = page.evaluate(js);
+            if (v == null) return "";
+            return String.valueOf(v).trim();
+        } catch (Exception ignored) {
+            return "";
         }
     }
 
@@ -3162,6 +3306,26 @@ class AutoWebAgentUI {
         if (hasExecuted != null) hasExecuted.set(false);
         if (uiLogger != null) uiLogger.accept("已重新连接浏览器并恢复页面。");
         return newPage;
+    }
+
+    private static String promoteTopLevelDefsForSharedBinding(String code, java.util.function.Consumer<String> uiLogger) {
+        if (code == null) return "";
+        try {
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?m)^(\\s*)(?:final\\s+)?def\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=");
+            java.util.regex.Matcher m = p.matcher(code);
+            java.util.LinkedHashSet<String> vars = new java.util.LinkedHashSet<>();
+            while (m.find()) {
+                String v = m.group(2);
+                if (v != null && !v.trim().isEmpty()) vars.add(v.trim());
+            }
+            String rewritten = m.replaceAll("$1$2 =");
+            if (!vars.isEmpty() && uiLogger != null) {
+                uiLogger.accept("已将 top-level def 变量提升为共享变量: " + String.join(",", vars));
+            }
+            return rewritten;
+        } catch (Exception ignored) {
+            return code;
+        }
     }
 
     private static double asDouble(Object v, double defaultValue) {
@@ -3726,6 +3890,14 @@ class AutoWebAgentUI {
         } catch (Exception ignored) {
             return "";
         }
+    }
+
+    private static String stripUrlsFromText(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String out = s;
+        try { out = out.replaceAll("(?i)https?://\\S+", ""); } catch (Exception ignored) {}
+        try { out = out.replaceAll("(?i)\\bwww\\.[^\\s]+", ""); } catch (Exception ignored) {}
+        return out;
     }
 
     /**
