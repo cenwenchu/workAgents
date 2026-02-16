@@ -27,8 +27,45 @@ public class WebDSL {
     private final Consumer<String> logger;
     private int defaultTimeout;
     private int maxRetries = 3;
+    private Object result;
+    private final java.util.ArrayList<UiFrameworkSupport> uiFrameworkSupports = new java.util.ArrayList<>();
     
     private static final Pattern ARIA_LABEL_ONLY_PATTERN = Pattern.compile("^\\s*\\[\\s*aria-label\\s*=\\s*(['\"])(.*?)\\1\\s*\\]\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern DATE_PART_PATTERN = Pattern.compile("(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})");
+    private static final Pattern TIME_PART_PATTERN = Pattern.compile("(\\d{1,2})\\s*[:：]\\s*(\\d{1,2})(?:\\s*[:：]\\s*(\\d{1,2}))?");
+
+    public interface UiFrameworkSupport {
+        boolean isDatePickerOverlayVisible(WebDSL web);
+        boolean tryPickDateTimeFromOverlay(WebDSL web, String text);
+        boolean tryConfirmDatePicker(WebDSL web);
+    }
+
+    Page page() {
+        return page;
+    }
+
+    Locator locatorInCurrentContext(String selector) {
+        Frame f = ensureFrame();
+        String raw = sanitizeSelectorRawString(selector);
+        if (f != null) return f.locator(raw);
+        return page.locator(raw);
+    }
+
+    int defaultTimeoutMs() {
+        return defaultTimeout;
+    }
+
+    private void initDefaultUiFrameworkSupports() {
+        uiFrameworkSupports.add(new AntDesignSupport());
+        uiFrameworkSupports.add(new DefaultDatePickerSupport());
+    }
+
+    public WebDSL withUiFrameworkSupport(UiFrameworkSupport support) {
+        if (support != null) {
+            uiFrameworkSupports.add(0, support);
+        }
+        return this;
+    }
 
     /**
      * 创建 DSL 上下文，支持 Page 或 Frame
@@ -47,6 +84,7 @@ public class WebDSL {
         }
         this.logger = logger;
         this.defaultTimeout = AppConfig.getInstance().getAutowebWaitForLoadStateTimeoutMs();
+        initDefaultUiFrameworkSupports();
     }
 
     /**
@@ -63,6 +101,14 @@ public class WebDSL {
     public WebDSL withMaxRetries(int retries) {
         this.maxRetries = Math.max(1, retries);
         return this;
+    }
+
+    public void setResult(Object value) {
+        this.result = value;
+    }
+
+    public Object getResult() {
+        return this.result;
     }
 
     /**
@@ -136,13 +182,14 @@ public class WebDSL {
      */
     private Locator locator(String selector) {
         Frame f = ensureFrame();
-        Locator a11y = tryBuildA11yLocator(f, selector);
+        String raw = sanitizeSelectorRawString(selector);
+        Locator a11y = tryBuildA11yLocator(f, raw);
         if (a11y != null) return a11y;
         
-        String normalized = normalizeSelectorString(selector);
+        String normalized = normalizeSelectorString(raw);
         normalized = normalizeTextRegexSelectorString(normalized);
-        if (selector != null && normalized != null && !normalized.equals(selector)) {
-            log("Selector: Normalize '" + selector + "' -> '" + normalized + "'");
+        if (raw != null && normalized != null && !normalized.equals(raw)) {
+            log("Selector: Normalize '" + raw + "' -> '" + normalized + "'");
         }
         if (f != null) {
             return f.locator(normalized);
@@ -152,14 +199,27 @@ public class WebDSL {
     }
 
     private Locator locatorInContext(Frame f, String selector) {
-        Locator a11y = tryBuildA11yLocator(f, selector);
+        String raw = sanitizeSelectorRawString(selector);
+        Locator a11y = tryBuildA11yLocator(f, raw);
         if (a11y != null) return a11y;
-        String normalized = normalizeSelectorString(selector);
+        String normalized = normalizeSelectorString(raw);
         normalized = normalizeTextRegexSelectorString(normalized);
         if (f != null) {
             return f.locator(normalized);
         }
         return page.locator(normalized);
+    }
+
+    private String sanitizeSelectorRawString(String selector) {
+        if (selector == null) return null;
+        String s = selector;
+        if (s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) {
+            s = s.replace("\r", "").replace("\n", "");
+        }
+        if (s.indexOf('\t') >= 0) {
+            s = s.replace("\t", " ");
+        }
+        return s;
     }
 
     private void switchToFrame(Frame f) {
@@ -687,7 +747,37 @@ public class WebDSL {
      * 返回当前页面 URL。
      */
     public String getCurrentUrl() {
-        return page.url();
+        String u = "";
+        try { u = StorageSupport.safePageUrl(page); } catch (Exception ignored) { u = ""; }
+        if (u == null) u = "";
+        u = u.trim();
+        if (!u.isEmpty() && !"about:blank".equalsIgnoreCase(u)) return u;
+
+        int budget = 800;
+        try { budget = Math.min(2000, Math.max(300, defaultTimeout / 5)); } catch (Exception ignored) { budget = 800; }
+        long deadline = System.currentTimeMillis() + budget;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                synchronized (AutoWebAgent.PLAYWRIGHT_LOCK) {
+                    String cur = "";
+                    try { cur = page.url(); } catch (Exception ignored) { cur = ""; }
+                    if (cur == null) cur = "";
+                    cur = cur.trim();
+                    if (!cur.isEmpty() && !"about:blank".equalsIgnoreCase(cur)) return cur;
+
+                    try {
+                        Object v = page.evaluate("() => location.href");
+                        if (v instanceof String) {
+                            String e = ((String) v).trim();
+                            if (!e.isEmpty() && !"about:blank".equalsIgnoreCase(e)) return e;
+                        }
+                    } catch (Exception ignored) {}
+
+                    try { page.waitForTimeout(120); } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+        }
+        return u;
     }
 
     /**
@@ -1266,7 +1356,7 @@ public class WebDSL {
         return bestAttached;
     }
 
-    private boolean tryDomClickFallback(Locator loc) {
+    boolean tryDomClickFallback(Locator loc) {
         if (loc == null) return false;
         try {
             if (loc.count() == 0) return false;
@@ -1346,6 +1436,261 @@ public class WebDSL {
         return loc;
     }
 
+    private boolean isDatePickerOverlayVisible() {
+        for (UiFrameworkSupport s : uiFrameworkSupports) {
+            if (s == null) continue;
+            try {
+                if (s.isDatePickerOverlayVisible(this)) return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    boolean waitForClickable(Locator loc, int timeoutMs) {
+        if (loc == null) return false;
+        int timeout = Math.max(0, timeoutMs);
+        long deadline = System.currentTimeMillis() + timeout;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                if (loc.count() == 0) return false;
+                if (!loc.isVisible()) {
+                    page.waitForTimeout(50);
+                    continue;
+                }
+                boolean enabled = true;
+                try { enabled = loc.isEnabled(); } catch (Exception ignored) { enabled = true; }
+                if (enabled) {
+                    try {
+                        Object v = loc.evaluate("el => {" +
+                                "  if (!el) return false;" +
+                                "  const aria = el.getAttribute && el.getAttribute('aria-disabled');" +
+                                "  const disAttr = el.getAttribute && el.getAttribute('disabled');" +
+                                "  const dis = (el.disabled === true) || (disAttr != null);" +
+                                "  const cls = (el.className || '').toString();" +
+                                "  const classDisabled = cls.includes('ant-btn-disabled') || cls.includes('is-disabled') || cls.includes('disabled');" +
+                                "  return !(dis || aria === 'true' || classDisabled);" +
+                                "}");
+                        if (!(v instanceof Boolean) || (Boolean) v) return true;
+                    } catch (Exception ignored) { return true; }
+                }
+            } catch (Exception ignored) {}
+            page.waitForTimeout(50);
+        }
+        return false;
+    }
+
+    private boolean isLikelyDatePickerTrigger(Locator loc) {
+        if (loc == null) return false;
+        try { if (loc.count() == 0) return false; } catch (Exception ignored) { return false; }
+        try {
+            Object v = loc.evaluate("el => {" +
+                    "  try {" +
+                    "    const p = el && el.closest ? el.closest('.ant-picker, .ant-calendar-picker, .ant-calendar-picker-input, .el-date-editor, .layui-laydate') : null;" +
+                    "    if (p) return true;" +
+                    "    const tag = (el && el.tagName) ? el.tagName.toLowerCase() : '';" +
+                    "    if (tag === 'input') {" +
+                    "      const type = (el.getAttribute && (el.getAttribute('type') || '')).toLowerCase();" +
+                    "      if (type === 'date' || type === 'time' || type === 'datetime-local') return true;" +
+                    "      if (el.readOnly === true) return true;" +
+                    "      const ro = (el.getAttribute && el.getAttribute('readonly'));" +
+                    "      if (ro != null) return true;" +
+                    "    }" +
+                    "    const hp = (el && el.getAttribute) ? (el.getAttribute('aria-haspopup') || '') : '';" +
+                    "    if (hp === 'dialog') return true;" +
+                    "  } catch (e) {}" +
+                    "  return false;" +
+                    "}");
+            return (v instanceof Boolean) && (Boolean) v;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private boolean isLikelyDropdownTrigger(Locator loc) {
+        if (loc == null) return false;
+        try { if (loc.count() == 0) return false; } catch (Exception ignored) { return false; }
+        try {
+            Object v = loc.evaluate("el => {" +
+                    "  try {" +
+                    "    if (!el) return false;" +
+                    "    const dp = el.closest ? el.closest('.ant-picker, .ant-calendar-picker, .el-date-editor, .layui-laydate') : null;" +
+                    "    if (dp) return false;" +
+                    "    const ant = el.closest ? el.closest('.ant-select') : null;" +
+                    "    if (ant) return true;" +
+                    "    const elsel = el.closest ? el.closest('.el-select') : null;" +
+                    "    if (elsel) return true;" +
+                    "    const role = (el.getAttribute && el.getAttribute('role')) || '';" +
+                    "    if (role === 'combobox') return true;" +
+                    "    const hp = (el.getAttribute && el.getAttribute('aria-haspopup')) || '';" +
+                    "    if (hp === 'listbox' || hp === 'tree' || hp === 'menu') return true;" +
+                    "    const ae = (el.getAttribute && el.getAttribute('aria-expanded')) || '';" +
+                    "    if (ae === 'true' || ae === 'false') return true;" +
+                    "  } catch (e) {}" +
+                    "  return false;" +
+                    "}");
+            return (v instanceof Boolean) && (Boolean) v;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private boolean tryKeyboardTypeInto(Locator loc, String text, boolean pressEnter) {
+        if (loc == null) return false;
+        String t = text == null ? "" : text;
+        try { if (loc.count() == 0) return false; } catch (Exception ignored) { return false; }
+        try {
+            if (!loc.isVisible()) return false;
+        } catch (Exception ignored) { return false; }
+        try {
+            highlight(loc);
+            try { loc.click(); } catch (Exception e) { if (!tryDomClickFallback(loc)) return false; }
+            try { loc.press("Control+A"); } catch (Exception ignored) {}
+            try { loc.press("Meta+A"); } catch (Exception ignored) {}
+            try { loc.press("Backspace"); } catch (Exception ignored) {}
+            try { loc.type(t); } catch (Exception ignored) {}
+            if (pressEnter) {
+                try { loc.press("Enter"); } catch (Exception ignored) {}
+            }
+            return true;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private boolean looksLikeDateOrTimeText(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (t.isEmpty()) return false;
+        if (t.matches("\\d{4}-\\d{2}-\\d{2}.*")) return true;
+        if (t.matches("\\d{2}:\\d{2}(:\\d{2})?")) return true;
+        if (t.matches("\\d{4}/\\d{1,2}/\\d{1,2}.*")) return true;
+        return false;
+    }
+
+    String normalizeAntDateTitleFromText(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.isEmpty()) return null;
+        Matcher m = DATE_PART_PATTERN.matcher(t);
+        if (!m.find()) return null;
+        try {
+            int y = Integer.parseInt(m.group(1));
+            int mo = Integer.parseInt(m.group(2));
+            int d = Integer.parseInt(m.group(3));
+            if (y <= 0 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+            return String.format("%04d-%02d-%02d", y, mo, d);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    String[] normalizeHmsFromText(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.isEmpty()) return null;
+        Matcher m = TIME_PART_PATTERN.matcher(t);
+        if (!m.find()) return null;
+        try {
+            int hh = Integer.parseInt(m.group(1));
+            int mm = Integer.parseInt(m.group(2));
+            int ss = -1;
+            if (m.group(3) != null && !m.group(3).isEmpty()) ss = Integer.parseInt(m.group(3));
+            if (hh < 0 || hh > 23) return null;
+            if (mm < 0 || mm > 59) return null;
+            if (ss != -1 && (ss < 0 || ss > 59)) return null;
+            String h = String.format("%02d", hh);
+            String mi = String.format("%02d", mm);
+            String s = (ss == -1) ? null : String.format("%02d", ss);
+            return new String[] { h, mi, s };
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    boolean clickAntTimeCellInColumn(Locator column, String value) {
+        if (column == null) return false;
+        String v = value == null ? "" : value.trim();
+        if (v.isEmpty()) return false;
+        try { if (column.count() == 0) return false; } catch (Exception ignored) { return false; }
+        try {
+            Object ok = column.evaluate("(el, vv) => {" +
+                    "  try {" +
+                    "    const lis = el.querySelectorAll('li');" +
+                    "    for (const li of lis) {" +
+                    "      const t = (li.textContent || '').trim();" +
+                    "      const dv = (li.getAttribute && (li.getAttribute('data-value') || '')).trim();" +
+                    "      if (t === vv || t === String(parseInt(vv, 10)) || dv === vv) {" +
+                    "        try { li.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}" +
+                    "        const target = li.querySelector('div') || li;" +
+                    "        try { target.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}" +
+                    "        target.click();" +
+                    "        return true;" +
+                    "      }" +
+                    "    }" +
+                    "  } catch (e) {}" +
+                    "  return false;" +
+                    "}", v);
+            return (ok instanceof Boolean) && (Boolean) ok;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private void ensureDatePickerOverlayOpened(Locator base) {
+        if (isDatePickerOverlayVisible()) return;
+        if (base == null) return;
+        try { if (base.count() == 0) return; } catch (Exception ignored) { return; }
+        boolean didAction = false;
+        try {
+            try { if (base.isVisible()) base.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+            try { base.click(); didAction = true; } catch (Exception e) { didAction = tryDomClickFallback(base); }
+        } catch (Exception ignored) {}
+        try {
+            if (isDatePickerOverlayVisible()) return;
+            Object v = base.evaluate("el => {" +
+                    "  try {" +
+                    "    const p = el && el.closest ? el.closest('.ant-picker, .ant-calendar-picker, .ant-calendar-picker-input, .el-date-editor, .layui-laydate') : null;" +
+                    "    if (!p) return false;" +
+                    "    const icon = p.querySelector('.ant-picker-suffix, .anticon-calendar, .anticon-clock-circle, .anticon-clock-circle-o');" +
+                    "    if (icon) { icon.click(); return true; }" +
+                    "    p.click();" +
+                    "    return true;" +
+                    "  } catch (e) {}" +
+                    "  return false;" +
+                    "}");
+            if (v instanceof Boolean && (Boolean) v) {
+                didAction = true;
+                try { page.waitForTimeout(120); } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        if (!didAction) return;
+        if (isDatePickerOverlayVisible()) return;
+        int budget = 500;
+        try { budget = Math.min(1200, Math.max(200, defaultTimeout / 10)); } catch (Exception ignored) { budget = 500; }
+        long deadline = System.currentTimeMillis() + budget;
+        while (System.currentTimeMillis() < deadline) {
+            if (isDatePickerOverlayVisible()) return;
+            try { page.waitForTimeout(50); } catch (Exception ignored) {}
+        }
+    }
+
+    private boolean tryPickDateTimeFromOverlay(String text) {
+        if (!isDatePickerOverlayVisible()) return false;
+        for (UiFrameworkSupport s : uiFrameworkSupports) {
+            if (s == null) continue;
+            try {
+                if (s.tryPickDateTimeFromOverlay(this, text)) return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    private void tryConfirmDatePickerIfPresent() {
+        if (!isDatePickerOverlayVisible()) return;
+        for (UiFrameworkSupport s : uiFrameworkSupports) {
+            if (s == null) continue;
+            try {
+                if (s.tryConfirmDatePicker(this)) break;
+            } catch (Exception ignored) {}
+        }
+    }
+
     // --- Basic Interaction ---
 
     /**
@@ -1410,6 +1755,19 @@ public class WebDSL {
                 if (tryDomClickFallback(loc)) return;
                 throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException(e);
             }
+            try {
+                if (!isDatePickerOverlayVisible()) return;
+                Object v = loc.evaluate("el => {" +
+                        "  try {" +
+                        "    if (!el) return false;" +
+                        "    const inOverlay = el.closest && el.closest('.ant-picker-dropdown, .ant-calendar-picker-container, .el-picker-panel, .layui-laydate');" +
+                        "    if (inOverlay) return true;" +
+                        "    const inTrigger = el.closest && el.closest('.ant-picker, .ant-calendar-picker, .ant-calendar-picker-input, .el-date-editor, .layui-laydate');" +
+                        "    return !!inTrigger;" +
+                        "  } catch (e) { return false; }" +
+                        "}");
+                if ((v instanceof Boolean) && (Boolean) v) tryConfirmDatePickerIfPresent();
+            } catch (Exception ignored) {}
         }, "click " + selector);
     }
     
@@ -1427,6 +1785,19 @@ public class WebDSL {
                 if (tryDomClickFallback(loc)) return;
                 throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException(e);
             }
+            try {
+                if (!isDatePickerOverlayVisible()) return;
+                Object v = loc.evaluate("el => {" +
+                        "  try {" +
+                        "    if (!el) return false;" +
+                        "    const inOverlay = el.closest && el.closest('.ant-picker-dropdown, .ant-calendar-picker-container, .el-picker-panel, .layui-laydate');" +
+                        "    if (inOverlay) return true;" +
+                        "    const inTrigger = el.closest && el.closest('.ant-picker, .ant-calendar-picker, .ant-calendar-picker-input, .el-date-editor, .layui-laydate');" +
+                        "    return !!inTrigger;" +
+                        "  } catch (e) { return false; }" +
+                        "}");
+                if ((v instanceof Boolean) && (Boolean) v) tryConfirmDatePickerIfPresent();
+            } catch (Exception ignored) {}
         }, "click " + selector + " at " + index);
     }
 
@@ -1459,9 +1830,52 @@ public class WebDSL {
                     throw e;
                 }
             }
+            Locator inputLike = target;
+            try {
+                Locator cand = target.locator("input, textarea, [contenteditable=true]").first();
+                waitForLocatorAttached(cand, 150);
+                if (cand != null && cand.count() > 0 && cand.isVisible()) inputLike = cand;
+            } catch (Exception ignored) {}
+            boolean wantsDateOrTime = looksLikeDateOrTimeText(text);
+            String expectedDate = wantsDateOrTime ? normalizeAntDateTitleFromText(text) : null;
+            String[] expectedHms = wantsDateOrTime ? normalizeHmsFromText(text) : null;
+
             highlight(target);
             try {
-                target.fill(text);
+                if (wantsDateOrTime) {
+                    Locator kb = inputLike != null ? inputLike : target;
+                    boolean did = false;
+                    try { did = tryKeyboardTypeInto(kb, text, true); } catch (Exception ignored) { did = false; }
+                    if (!did) {
+                        inputLike.fill(text);
+                        try { inputLike.press("Enter"); } catch (Exception ignored) {}
+                    }
+                    boolean effective = false;
+                    try {
+                        String actual = readControlValue(target);
+                        if (expectedDate != null && !expectedDate.isEmpty()) {
+                            String actualDate = normalizeAntDateTitleFromText(actual);
+                            effective = expectedDate.equals(actualDate);
+                        } else if (expectedHms != null) {
+                            String[] actualHms = normalizeHmsFromText(actual);
+                            if (actualHms != null) {
+                                boolean hhOk = expectedHms[0] == null || expectedHms[0].equals(actualHms[0]);
+                                boolean mmOk = expectedHms[1] == null || expectedHms[1].equals(actualHms[1]);
+                                boolean ssOk = expectedHms[2] == null || (actualHms[2] != null && expectedHms[2].equals(actualHms[2]));
+                                if (expectedHms[2] == null) ssOk = hhOk && mmOk;
+                                effective = hhOk && mmOk && ssOk;
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                    if (effective) return;
+
+                    if (expectedDate != null && !expectedDate.isEmpty() && expectedHms == null) {
+                        String out = expectedDate + " 00:00:00";
+                        try { tryKeyboardTypeInto(kb, out, true); } catch (Exception ignored) {}
+                    }
+                    return;
+                }
+                inputLike.fill(text);
             } catch (Exception fillEx) {
                 try { if (target.count() > 0 && !target.isVisible()) tryDomClickFallback(target); } catch (Exception ignored) {}
                 Locator input = null;
@@ -1470,7 +1884,20 @@ public class WebDSL {
                     waitForLocatorAttached(input, 300);
                     if (input != null && input.count() > 0 && input.isVisible()) {
                         highlight(input);
-                        input.fill(text);
+                        if (wantsDateOrTime) {
+                            try { tryKeyboardTypeInto(input, text, true); } catch (Exception ignored) {}
+                            if (expectedDate != null && !expectedDate.isEmpty() && expectedHms == null) {
+                                try {
+                                    String actual = readControlValue(target);
+                                    String actualDate = normalizeAntDateTitleFromText(actual);
+                                    if (actualDate == null || !actualDate.equals(expectedDate)) {
+                                        try { tryKeyboardTypeInto(input, expectedDate + " 00:00:00", true); } catch (Exception ignored) {}
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+                        } else {
+                            input.fill(text);
+                        }
                         return;
                     }
                 } catch (Exception ignored) {}
@@ -1482,7 +1909,20 @@ public class WebDSL {
                         waitForLocatorAttached(input, 300);
                         if (input != null && input.count() > 0 && input.isVisible()) {
                             highlight(input);
-                            input.fill(text);
+                            if (wantsDateOrTime) {
+                                try { tryKeyboardTypeInto(input, text, true); } catch (Exception ignored) {}
+                                if (expectedDate != null && !expectedDate.isEmpty() && expectedHms == null) {
+                                    try {
+                                        String actual = readControlValue(target);
+                                        String actualDate = normalizeAntDateTitleFromText(actual);
+                                        if (actualDate == null || !actualDate.equals(expectedDate)) {
+                                            try { tryKeyboardTypeInto(input, expectedDate + " 00:00:00", true); } catch (Exception ignored) {}
+                                        }
+                                    } catch (Exception ignored) {}
+                                }
+                            } else {
+                                input.fill(text);
+                            }
                             return;
                         }
                     }
@@ -1497,6 +1937,50 @@ public class WebDSL {
                 throw (fillEx instanceof RuntimeException) ? (RuntimeException) fillEx : new RuntimeException(fillEx);
             }
         }, "type into " + selector);
+    }
+
+    private String readControlValue(Locator base) {
+        if (base == null) return null;
+        Locator input = base;
+        try {
+            Locator cand = base.locator("input, textarea").first();
+            waitForLocatorAttached(cand, 120);
+            if (cand != null && cand.count() > 0) input = cand;
+        } catch (Exception ignored) {}
+        try {
+            Object v = input.evaluate("el => { try { if (!el) return ''; const val = (el.value != null) ? String(el.value) : ''; if (val && val.trim()) return val.trim(); const tc = (el.textContent || '').trim(); return tc; } catch (e) { return ''; } }");
+            if (v != null) return String.valueOf(v);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    public void setDate(String selector, String dateText) {
+        String d = normalizeAntDateTitleFromText(dateText);
+        if (d == null || d.isEmpty()) d = dateText;
+        type(selector, d);
+    }
+
+    public void setTime(String selector, String timeText) {
+        String[] hms = normalizeHmsFromText(timeText);
+        String t = timeText;
+        if (hms != null) {
+            t = hms[0] + ":" + hms[1] + (hms[2] == null ? "" : (":" + hms[2]));
+        }
+        type(selector, t);
+    }
+
+    public void setDateTime(String selector, String dateOrDateTimeText) {
+        String d = normalizeAntDateTitleFromText(dateOrDateTimeText);
+        String[] hms = normalizeHmsFromText(dateOrDateTimeText);
+        String out = dateOrDateTimeText;
+        if (d != null && !d.isEmpty()) {
+            if (hms == null) {
+                out = d + " 00:00:00";
+            } else {
+                out = d + " " + hms[0] + ":" + hms[1] + ":" + (hms[2] == null ? "00" : hms[2]);
+            }
+        }
+        type(selector, out);
     }
     
     public void check(String selector) {
@@ -1633,6 +2117,64 @@ public class WebDSL {
         }, "selectDropdown " + dd + " -> " + opt);
     }
 
+    public void clearDropdown(String dropdownNameOrSelector) {
+        String dd = dropdownNameOrSelector == null ? "" : dropdownNameOrSelector.trim();
+        if (dd.isEmpty()) throw new RuntimeException("clearDropdown: empty input");
+        log("Action: Clear dropdown '" + dd + "'");
+        retry(() -> {
+            Locator trigger = resolveDropdownTrigger(dd);
+            if (trigger == null) throw new RuntimeException("Dropdown not found: " + dd);
+            waitForLocatorAttached(trigger, defaultTimeout);
+
+            try {
+                Locator ant = trigger.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]").first();
+                waitForLocatorAttached(ant, 250);
+                if (ant.count() > 0) {
+                    Locator clear = ant.locator(".ant-select-clear, .ant-select-selection-item-remove, .anticon-close-circle, .anticon-close").first();
+                    waitForLocatorAttached(clear, 250);
+                    if (clear.count() > 0) {
+                        try { clear.scrollIntoViewIfNeeded(); } catch (Exception ignored) {}
+                        if (clear.isVisible()) {
+                            highlight(clear);
+                            try { clear.click(); } catch (Exception e) { if (!tryDomClickFallback(clear)) throw e; }
+                            return;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            try {
+                Locator input = trigger.locator("input").first();
+                waitForLocatorAttached(input, 250);
+                if (input.count() > 0) {
+                    if (input.isVisible()) {
+                        highlight(input);
+                        try { input.click(); } catch (Exception e) { if (!tryDomClickFallback(input)) throw e; }
+                        try { input.press("Control+A"); } catch (Exception ignored) {}
+                        try { input.press("Meta+A"); } catch (Exception ignored) {}
+                        try { input.press("Backspace"); } catch (Exception ignored) {}
+                        try { input.press("Delete"); } catch (Exception ignored) {}
+                        try { input.press("Enter"); } catch (Exception ignored) {}
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            try {
+                if (trigger.isVisible()) {
+                    highlight(trigger);
+                    try { trigger.click(); } catch (Exception e) { if (!tryDomClickFallback(trigger)) throw e; }
+                    try { page.keyboard().press("Backspace"); } catch (Exception ignored) {}
+                    try { page.keyboard().press("Delete"); } catch (Exception ignored) {}
+                    try { page.keyboard().press("Escape"); } catch (Exception ignored) {}
+                    return;
+                }
+            } catch (Exception ignored) {}
+
+            throw new RuntimeException("Dropdown clear failed: " + dd);
+        }, "clearDropdown " + dd);
+    }
+
     /**
      * 获取元素文本（innerText）。
      * 会先等待元素出现，便于直接用在“表格/列表抽取”的脚本里。
@@ -1665,6 +2207,7 @@ public class WebDSL {
                 Locator base = locator(s);
                 waitForLocatorAttached(base.first(), 800);
                 if (base.count() == 0) return null;
+                try { if (isLikelyDatePickerTrigger(base.first())) return null; } catch (Exception ignored) {}
                 try {
                     Locator ant = base.first().locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
                     waitForLocatorAttached(ant, 200);
@@ -1684,7 +2227,27 @@ public class WebDSL {
                     waitForLocatorAttached(descendantCombobox, 200);
                     if (descendantCombobox.count() > 0) return descendantCombobox.first();
                 } catch (Exception ignored) {}
-                return base.first();
+                try {
+                    Locator next = base.first().locator("xpath=following::*[@role='combobox' or contains(@class,'ant-select') or contains(@class,'el-select')][1]").first();
+                    waitForLocatorAttached(next, 250);
+                    if (next.count() > 0) {
+                        try { if (isLikelyDatePickerTrigger(next)) return null; } catch (Exception ignored) {}
+                        Locator ant2 = next.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]").first();
+                        waitForLocatorAttached(ant2, 150);
+                        if (ant2.count() > 0) {
+                            Locator t = ant2.locator(".ant-select-selection-overflow-item-suffix, .ant-select-selector, [role=combobox]").first();
+                            waitForLocatorAttached(t, 150);
+                            if (t.count() > 0) return t;
+                        }
+                        Locator cb2 = next.locator("xpath=ancestor-or-self::*[@role='combobox'][1]").first();
+                        waitForLocatorAttached(cb2, 150);
+                        if (cb2.count() > 0) return cb2;
+                        if (isLikelyDropdownTrigger(next)) return next;
+                        return null;
+                    }
+                } catch (Exception ignored) {}
+                if (isLikelyDropdownTrigger(base.first())) return base.first();
+                return null;
             }
         } catch (Exception ignored) {}
         
@@ -1695,6 +2258,8 @@ public class WebDSL {
             waitForLocatorAttached(byRole, 600);
             if (byRole.count() > 0) {
                 Locator cb = byRole.first();
+                try { if (isLikelyDatePickerTrigger(cb)) return null; } catch (Exception ignored) {}
+                try { if (!isLikelyDropdownTrigger(cb)) return null; } catch (Exception ignored) {}
                 try {
                     Locator ant = cb.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
                     waitForLocatorAttached(ant, 200);
@@ -1713,6 +2278,8 @@ public class WebDSL {
             waitForLocatorAttached(byLabel, 600);
             if (byLabel.count() > 0) {
                 Locator lb = byLabel.first();
+                try { if (isLikelyDatePickerTrigger(lb)) return null; } catch (Exception ignored) {}
+                try { if (!isLikelyDropdownTrigger(lb)) return null; } catch (Exception ignored) {}
                 try {
                     Locator ant = lb.locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");
                     waitForLocatorAttached(ant, 200);
@@ -1745,10 +2312,18 @@ public class WebDSL {
             } catch (Exception ignored) {}
             Locator nextCombobox = text.first().locator("xpath=following::*[@role='combobox'][1]");
             waitForLocatorAttached(nextCombobox, 400);
-            if (nextCombobox.count() > 0) return nextCombobox.first();
+            if (nextCombobox.count() > 0) {
+                Locator cb = nextCombobox.first();
+                try { if (isLikelyDatePickerTrigger(cb)) return null; } catch (Exception ignored) {}
+                try { if (isLikelyDropdownTrigger(cb)) return cb; } catch (Exception ignored) {}
+            }
             Locator ancestorCombobox = text.first().locator("xpath=ancestor-or-self::*[@role='combobox'][1]");
             waitForLocatorAttached(ancestorCombobox, 400);
-            if (ancestorCombobox.count() > 0) return ancestorCombobox.first();
+            if (ancestorCombobox.count() > 0) {
+                Locator cb = ancestorCombobox.first();
+                try { if (isLikelyDatePickerTrigger(cb)) return null; } catch (Exception ignored) {}
+                try { if (isLikelyDropdownTrigger(cb)) return cb; } catch (Exception ignored) {}
+            }
         } catch (Exception ignored) {}
         
         return null;
@@ -2494,7 +3069,7 @@ public class WebDSL {
         return allData;
     }
     
-    private void waitForLocatorAttached(Locator loc, int timeoutMs) {
+    void waitForLocatorAttached(Locator loc, int timeoutMs) {
         try {
             if (loc == null) return;
             loc.waitFor(new Locator.WaitForOptions()
@@ -2894,7 +3469,7 @@ public class WebDSL {
         } catch (Exception ignored) {}
     }
 
-    private void highlight(Locator loc) {
+    void highlight(Locator loc) {
         try {
             int c = 0;
             try { c = loc.count(); } catch (Exception ignored) {}
@@ -2963,6 +3538,7 @@ public class WebDSL {
             };
         } else {
             String escaped = escapeForSelectorValue(raw);
+            String pattern = escapeForRegexLiteralInSelector(raw);
             attempts = new String[] {
                     "role=button[name=\"" + escaped + "\"]",
                     "role=tab[name=\"" + escaped + "\"]",
@@ -2973,7 +3549,8 @@ public class WebDSL {
                     "a:has-text(\"" + escaped + "\")",
                     "a:has(p:has-text(\"" + escaped + "\"))",
                     "a[class*=\"menuItem\"]:has-text(\"" + escaped + "\")",
-                    "text=\"" + escaped + "\""
+                    "text=\"" + escaped + "\"",
+                    "text=/\\s*" + pattern + "\\s*/"
             };
         }
 
@@ -3030,12 +3607,14 @@ public class WebDSL {
             };
         } else {
             String escaped = escapeForSelectorValue(raw);
+            String pattern = escapeForRegexLiteralInSelector(raw);
             attempts = new String[] {
                     "role=tab[name=\"" + escaped + "\"]",
                     "[role=tab]:has-text(\"" + escaped + "\")",
                     ".ant-tabs-tab:has-text(\"" + escaped + "\")",
                     ".el-tabs__item:has-text(\"" + escaped + "\")",
-                    "text=\"" + escaped + "\""
+                    "text=\"" + escaped + "\"",
+                    "text=/\\s*" + pattern + "\\s*/"
             };
         }
 

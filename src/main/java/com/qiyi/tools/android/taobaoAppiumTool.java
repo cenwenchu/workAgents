@@ -59,7 +59,7 @@ import java.util.Set;
                 "- operation (String, 选填): 'search' (默认) 或 'buy'。\n" +
                 "- max_shop_count (Integer, 选填): 搜索店铺数量限制，默认为 3。"
 )
-public class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
+class TaobaoAppiumTool extends BaseMobileRPAProcessor implements Tool {
     
     private ToolMessenger messenger;
 

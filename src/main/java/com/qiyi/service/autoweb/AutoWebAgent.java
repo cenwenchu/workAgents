@@ -31,7 +31,7 @@ import javax.swing.SwingUtilities;
  */
 public class AutoWebAgent {
     static String ACTIVE_MODEL = "DEEPSEEK";
-    static final Object PLAYWRIGHT_LOCK = new Object();
+    public static final Object PLAYWRIGHT_LOCK = new Object();
     private static final Gson PRETTY_GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 
     static java.util.List<String> supportedModelKeys() {
@@ -66,7 +66,7 @@ public class AutoWebAgent {
         return "DeepSeek";
     }
 
-    static String normalizeModelKey(String displayOrKey) {
+    public static String normalizeModelKey(String displayOrKey) {
         if (displayOrKey == null) return "DEEPSEEK";
         String raw = displayOrKey.trim();
         if (raw.isEmpty()) return "DEEPSEEK";
@@ -93,7 +93,7 @@ public class AutoWebAgent {
      * - RAW_HTML：直接取 DOM HTML，适合结构化节点与属性较完整的页面；
      * - ARIA_SNAPSHOT：走可访问性语义快照，适合 iframe/虚拟列表/结构复杂但语义稳定的页面。
      */
-    enum HtmlCaptureMode {
+    public enum HtmlCaptureMode {
         RAW_HTML,
         ARIA_SNAPSHOT
     }
@@ -316,9 +316,9 @@ public class AutoWebAgent {
      * - context 可能是 {@link Page} 或 {@link Frame}；
      * - name 用于 UI 展示与日志标识（例如 “Main Page” 或 “Frame: xxx”）。
      */
-    static class ContextWrapper {
-        Object context;
-        String name;
+    public static class ContextWrapper {
+        public Object context;
+        public String name;
         @Override
         public String toString() {
             return name;
@@ -329,7 +329,7 @@ public class AutoWebAgent {
      * 上下文扫描结果。
      * wrappers 为候选上下文列表；best 为当前最推荐的上下文（通常是内容区 iframe）。
      */
-    static class ScanResult {
+    public static class ScanResult {
         java.util.List<ContextWrapper> wrappers = new java.util.ArrayList<>();
         ContextWrapper best;
     }
@@ -344,12 +344,12 @@ public class AutoWebAgent {
      * - entryAction：当需要进入目标页面/区域时的入口动作提示（例如点击某菜单/按钮）；
      * - status：CONFIRMED/UNKNOWN 等，用于判断计划是否可执行。
      */
-    static class PlanStep {
-        int index;
-        String description;
-        String targetUrl;
-        String entryAction;
-        String status;
+    public static class PlanStep {
+        public int index;
+        public String description;
+        public String targetUrl;
+        public String entryAction;
+        public String status;
     }
 
     /**
@@ -357,39 +357,39 @@ public class AutoWebAgent {
      * planText 为原始计划文本（可能已截取 PLAN_START~PLAN_END）；steps 为解析出的步骤列表；
      * confirmed/hasQuestion 用于驱动 UI 是否需要补充入口地址或重新规划。
      */
-    static class PlanParseResult {
-        String planText;
-        java.util.List<PlanStep> steps = new java.util.ArrayList<>();
-        boolean confirmed;
-        boolean hasQuestion;
+    public static class PlanParseResult {
+        public String planText;
+        public java.util.List<PlanStep> steps = new java.util.ArrayList<>();
+        public boolean confirmed;
+        public boolean hasQuestion;
     }
 
     /**
      * 步骤 HTML 快照结构。
      * 采集与清洗后的页面内容会写入 autoweb/cache，并在生成 CODEGEN/REFINE_CODE payload 时复用。
      */
-    static class HtmlSnapshot {
-        int stepIndex;
-        String url;
-        String entryAction;
-        String cacheKey;
-        String cleanedHtml;
+    public static class HtmlSnapshot {
+        public int stepIndex;
+        public String url;
+        public String entryAction;
+        public String cacheKey;
+        public String cleanedHtml;
     }
 
     /**
      * 单模型会话状态（UI 侧每个模型一个会话）。
      * 该对象在 {@link AutoWebAgentUI} 中承载计划/步骤、采集结果与执行阶段的状态切换。
      */
-    static class ModelSession {
-        String userPrompt;
-        String planText;
-        java.util.List<PlanStep> steps = new java.util.ArrayList<>();
-        java.util.Map<Integer, HtmlSnapshot> stepSnapshots = new java.util.HashMap<>();
-        boolean planConfirmed;
-        boolean htmlPrepared;
-        HtmlCaptureMode htmlCaptureMode;
-        boolean htmlA11yInterestingOnly;
-        String lastArtifactType;
+    public static class ModelSession {
+        public String userPrompt;
+        public String planText;
+        public java.util.List<PlanStep> steps = new java.util.ArrayList<>();
+        public java.util.Map<Integer, HtmlSnapshot> stepSnapshots = new java.util.HashMap<>();
+        public boolean planConfirmed;
+        public boolean htmlPrepared;
+        public HtmlCaptureMode htmlCaptureMode;
+        public boolean htmlA11yInterestingOnly;
+        public String lastArtifactType;
     }
 
     static String safePageUrl(Page page) {
@@ -420,7 +420,7 @@ public class AutoWebAgent {
         return PlanRoutingSupport.firstQuotedToken(s);
     }
 
-    static PlanParseResult parsePlanFromText(String text) {
+    public static PlanParseResult parsePlanFromText(String text) {
         return PlanRoutingSupport.parsePlanFromText(text);
     }
 
@@ -463,15 +463,15 @@ public class AutoWebAgent {
         return AutoWebAgentUtils.clearDirFiles(dir, uiLogger);
     }
 
-    static String buildPlanOnlyPayload(Page currentPage, String userPrompt) {
+    public static String buildPlanOnlyPayload(Page currentPage, String userPrompt) {
         return PayloadSupport.buildPlanOnlyPayload(currentPage, userPrompt);
     }
 
-    static String buildPlanOnlyPayload(String currentUrl, String userPrompt) {
+    public static String buildPlanOnlyPayload(String currentUrl, String userPrompt) {
         return PayloadSupport.buildPlanOnlyPayload(currentUrl, userPrompt);
     }
 
-    static String buildPlanOnlyPayload(String currentUrl, String userPrompt, String entryUrl) {
+    public static String buildPlanOnlyPayload(String currentUrl, String userPrompt, String entryUrl) {
         return PayloadSupport.buildPlanOnlyPayload(currentUrl, userPrompt, entryUrl);
     }
 
@@ -503,19 +503,19 @@ public class AutoWebAgent {
         return PayloadSupport.buildPlanRefinePayload(currentUrl, userPrompt, refineHint, visualDescription);
     }
 
-    static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots) {
+    public static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots) {
         return PayloadSupport.buildCodegenPayload(currentPage, planText, snapshots);
     }
 
-    static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
+    public static String buildCodegenPayload(Page currentPage, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
         return PayloadSupport.buildCodegenPayload(currentPage, planText, snapshots, visualDescription);
     }
 
-    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots) {
+    public static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots) {
         return PayloadSupport.buildCodegenPayload(currentUrl, planText, snapshots);
     }
 
-    static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
+    public static String buildCodegenPayload(String currentUrl, String planText, java.util.List<HtmlSnapshot> snapshots, String visualDescription) {
         return PayloadSupport.buildCodegenPayload(currentUrl, planText, snapshots, visualDescription);
     }
 
@@ -686,14 +686,14 @@ public class AutoWebAgent {
     /**
      * 确保 rootPage 定位到目标 URL（必要时导航或等待）
      */
-    static boolean ensureRootPageAtUrl(Page rootPage, String targetUrl, java.util.function.Consumer<String> uiLogger) {
+    public static boolean ensureRootPageAtUrl(Page rootPage, String targetUrl, java.util.function.Consumer<String> uiLogger) {
         return PlanRoutingSupport.ensureRootPageAtUrl(rootPage, targetUrl, uiLogger);
     }
 
     /**
      * 等待并选取最佳执行上下文（主页面或 iframe）
      */
-    static ContextWrapper waitAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
+    public static ContextWrapper waitAndFindContext(Page rootPage, java.util.function.Consumer<String> uiLogger) {
         return PlanRoutingSupport.waitAndFindContext(rootPage, uiLogger);
     }
 
@@ -716,7 +716,7 @@ public class AutoWebAgent {
      * @param uiLogger 可选日志输出
      * @return 采集结果列表
      */
-    static java.util.List<HtmlSnapshot> prepareStepHtmls(
+    public static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
             java.util.function.Consumer<String> uiLogger
@@ -733,7 +733,7 @@ public class AutoWebAgent {
      * @param captureMode 采集模式
      * @return 采集结果列表
      */
-    static java.util.List<HtmlSnapshot> prepareStepHtmls(
+    public static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
             java.util.function.Consumer<String> uiLogger,
@@ -752,7 +752,7 @@ public class AutoWebAgent {
      * @param a11yInterestingOnly ARIA 快照是否仅保留语义节点
      * @return 采集结果列表
      */
-    static java.util.List<HtmlSnapshot> prepareStepHtmls(
+    public static java.util.List<HtmlSnapshot> prepareStepHtmls(
             Page rootPage,
             java.util.List<PlanStep> steps,
             java.util.function.Consumer<String> uiLogger,
@@ -1027,7 +1027,7 @@ public class AutoWebAgent {
      * @param pageOrFrame Page 或 Frame
      * @return 页面内容
      */
-    static String getPageContent(Object pageOrFrame) {
+    public static String getPageContent(Object pageOrFrame) {
         return getPageContent(pageOrFrame, HtmlCaptureMode.RAW_HTML);
     }
 
@@ -1039,7 +1039,7 @@ public class AutoWebAgent {
      * @param captureMode 采集模式
      * @return 页面内容
      */
-    static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode) {
+    public static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode) {
         return getPageContent(pageOrFrame, captureMode, true);
     }
 
@@ -1052,7 +1052,7 @@ public class AutoWebAgent {
      * @param a11yInterestingOnly ARIA 快照是否仅保留语义节点
      * @return 页面内容
      */
-    static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode, boolean a11yInterestingOnly) {
+    public static String getPageContent(Object pageOrFrame, HtmlCaptureMode captureMode, boolean a11yInterestingOnly) {
         HtmlCaptureMode mode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
         if (mode == HtmlCaptureMode.ARIA_SNAPSHOT) {
             String snap = getAriaSnapshot(pageOrFrame, a11yInterestingOnly);
@@ -1493,7 +1493,7 @@ public class AutoWebAgent {
      * @param captureMode 采集模式
      * @return 清洗后的内容
      */
-    static String cleanCapturedContent(String captured, HtmlCaptureMode captureMode) {
+    public static String cleanCapturedContent(String captured, HtmlCaptureMode captureMode) {
         HtmlCaptureMode mode = captureMode == null ? HtmlCaptureMode.RAW_HTML : captureMode;
         String out;
         if (mode == HtmlCaptureMode.ARIA_SNAPSHOT) {
@@ -1514,7 +1514,7 @@ public class AutoWebAgent {
      * 3. 组装最终 Prompt (模板 + 用户任务 + Payload)
      * 4. 调用 LLM (callModel) 并记录 Debug Artifacts
      */
-    static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger, String modelName) {
+    public static String generateGroovyScript(String userPrompt, String cleanedHtml, java.util.function.Consumer<String> uiLogger, String modelName) {
         return GroovySupport.generateGroovyScript(userPrompt, cleanedHtml, uiLogger, modelName);
     }
 
@@ -1531,7 +1531,7 @@ public class AutoWebAgent {
         return "";
     }
 
-    static String generateRefinedGroovyScript(
+    public static String generateRefinedGroovyScript(
         String originalUserPrompt,
         String cleanedHtml,
         String previousCode,
@@ -1703,11 +1703,11 @@ public class AutoWebAgent {
         return out.toString();
     }
 
-    static void executeWithGroovy(String scriptCode, Object pageOrFrame, java.util.function.Consumer<String> logger) throws Exception {
+    public static void executeWithGroovy(String scriptCode, Object pageOrFrame, java.util.function.Consumer<String> logger) throws Exception {
         executeWithGroovy(scriptCode, pageOrFrame, logger, null, null, null);
     }
 
-    static void executeWithGroovy(
+    public static void executeWithGroovy(
             String scriptCode,
             Object pageOrFrame,
             java.util.function.Consumer<String> logger,
@@ -1829,6 +1829,7 @@ public class AutoWebAgent {
         out = out.replaceAll("(?m)^\\s*import\\s+java\\.util\\.[A-Za-z0-9_.$]+\\s*$", "import java.util.*");
         out = out.replaceAll("(?m)^\\s*import\\s+java\\.math\\.[A-Za-z0-9_.$]+\\s*$", "import java.math.*");
         out = out.replaceAll("(?m)^\\s*import\\s+java\\.time\\.[A-Za-z0-9_.$]+\\s*$", "import java.time.*");
+        out = out.replaceAll("(?m)^\\s*import\\s+java\\.time\\.format\\.[A-Za-z0-9_.$]+\\s*$", "");
         out = out.replaceAll("(?m)^\\s*import\\s+java\\.text\\.[A-Za-z0-9_.$]+\\s*$", "import java.text.*");
         out = out.replaceAll("(?m)^\\s*import\\s+java\\.util\\.regex\\.[A-Za-z0-9_.$]+\\s*$", "import java.util.regex.*");
         out = out.replaceAll("(?m)^\\s*import\\s+com\\.google\\.gson\\.[A-Za-z0-9_.$]+\\s*$", "import com.google.gson.*");
@@ -1855,6 +1856,12 @@ public class AutoWebAgent {
         out = out.replaceAll("new\\s+Date\\(\\s*\\)\\s*\\.\\s*plus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli(System.currentTimeMillis()).plus(java.time.Duration.ofDays($1L)).toEpochMilli())");
         out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*minus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli($1.getTime()).minus(java.time.Duration.ofDays($2L)).toEpochMilli())");
         out = out.replaceAll("([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*plus\\(\\s*(\\d+)\\s*\\)", "new Date(java.time.Instant.ofEpochMilli($1.getTime()).plus(java.time.Duration.ofDays($2L)).toEpochMilli())");
+
+        out = out.replaceAll("(?<![A-Za-z0-9_\\.])LocalDate\\b", "java.time.LocalDate");
+        out = out.replaceAll("(?<![A-Za-z0-9_\\.])LocalDateTime\\b", "java.time.LocalDateTime");
+        out = out.replaceAll("(?<![A-Za-z0-9_\\.])LocalTime\\b", "java.time.LocalTime");
+        out = out.replaceAll("(?<![A-Za-z0-9_\\.])DateTimeFormatter\\b", "java.time.format.DateTimeFormatter");
+        out = out.replaceAll("(?<![A-Za-z0-9_\\.])DateTimeParseException\\b", "java.time.format.DateTimeParseException");
 
         return out.trim();
     }

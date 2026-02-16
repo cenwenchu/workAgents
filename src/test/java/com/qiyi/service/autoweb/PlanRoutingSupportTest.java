@@ -102,6 +102,20 @@ public class PlanRoutingSupportTest {
     }
 
     @Test
+    public void normalizeGroovyScriptForExecution_shouldQualifyDateTimeFormatter() {
+        String code = String.join("\n",
+                "def today = java.time.LocalDate.now()",
+                "DateTimeFormatter formatter = DateTimeFormatter.ofPattern(\"yyyy-MM-dd\")",
+                "def s = today.format(formatter)",
+                ""
+        );
+
+        String normalized = AutoWebAgent.normalizeGroovyScriptForExecution(code);
+        Assertions.assertTrue(normalized.contains("java.time.format.DateTimeFormatter"));
+        Assertions.assertFalse(normalized.contains(" DateTimeFormatter "));
+    }
+
+    @Test
     public void readCachedHtml_shouldTreatEmptyA11yCacheAsMiss() throws Exception {
         String oldUserDir = System.getProperty("user.dir");
         Path tmp = Files.createTempDirectory("autoweb-cache-test");
