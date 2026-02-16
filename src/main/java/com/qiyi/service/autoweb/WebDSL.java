@@ -103,6 +103,17 @@ public class WebDSL {
         return this;
     }
 
+    public Object withMaxRetries(int retries, groovy.lang.Closure<?> block) {
+        int prev = this.maxRetries;
+        this.maxRetries = Math.max(1, retries);
+        try {
+            if (block == null) return null;
+            return block.call();
+        } finally {
+            this.maxRetries = prev;
+        }
+    }
+
     public void setResult(Object value) {
         this.result = value;
     }
@@ -2206,7 +2217,22 @@ public class WebDSL {
             if (isSelectorLike(s) || s.startsWith("role=") || s.startsWith("text=") || s.startsWith("xpath=")) {
                 Locator base = locator(s);
                 waitForLocatorAttached(base.first(), 800);
-                if (base.count() == 0) return null;
+                if (base.count() == 0) {
+                    String candidate = s;
+                    for (int i = 0; i < 3; i++) {
+                        int lastSpace = candidate.lastIndexOf(' ');
+                        if (lastSpace <= 0) break;
+                        candidate = candidate.substring(0, lastSpace).trim();
+                        if (candidate.isEmpty()) break;
+                        Locator b2 = locator(candidate);
+                        waitForLocatorAttached(b2.first(), 350);
+                        if (b2.count() > 0) {
+                            base = b2;
+                            break;
+                        }
+                    }
+                    if (base.count() == 0) return null;
+                }
                 try { if (isLikelyDatePickerTrigger(base.first())) return null; } catch (Exception ignored) {}
                 try {
                     Locator ant = base.first().locator("xpath=ancestor-or-self::*[contains(@class,'ant-select')][1]");

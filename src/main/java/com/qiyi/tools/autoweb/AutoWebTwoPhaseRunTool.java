@@ -430,6 +430,8 @@ public class AutoWebTwoPhaseRunTool implements Tool {
         if (v instanceof CharSequence) return v.toString();
         if (v instanceof Number) return v;
         if (v instanceof Boolean) return v;
+        String csv = tryConvertToCsv(v);
+        if (csv != null) return csv;
         if (v instanceof JSONObject) return v;
         if (v instanceof JSONArray) return v;
         if (v instanceof java.util.Map) return v;
@@ -499,6 +501,153 @@ public class AutoWebTwoPhaseRunTool implements Tool {
             messenger.sendText(sb.toString());
         } catch (Exception ignored) {
         }
+
+        String codePreview = buildStepCodePreviewMarkdown(session, 8, 1200, 200);
+        if (!codePreview.isEmpty()) {
+            try {
+                messenger.sendMarkdown("AUTOWEB: 步骤代码", codePreview);
+            } catch (Exception ignored) {
+                try {
+                    messenger.sendText("AUTOWEB: 步骤代码\n" + codePreview);
+                } catch (Exception ignored2) {
+                }
+            }
+        }
+    }
+
+    private static String buildStepCodePreviewMarkdown(RunSession session, int maxSteps, int maxCharsPerStep, int maxTotalLines) {
+        if (session == null || session.planSteps == null || session.planSteps.isEmpty()) return "";
+        String code = session.code == null ? "" : session.code;
+        if (code.trim().isEmpty()) return "";
+
+        int steps = Math.max(1, maxSteps);
+        int perStepChars = Math.max(200, maxCharsPerStep);
+        int totalLines = Math.max(50, maxTotalLines);
+
+        StringBuilder sb = new StringBuilder();
+        int emittedSteps = 0;
+        int emittedLines = 0;
+        for (AutoWebAgent.PlanStep s : session.planSteps) {
+            if (s == null) continue;
+            if (emittedSteps >= steps) break;
+            String block = extractStepCode(code, s.index);
+            if (block == null) block = "";
+            block = block.trim();
+            if (block.isEmpty()) continue;
+
+            String desc = s.description == null ? "" : s.description.trim();
+            if (desc.isEmpty()) desc = "(无描述)";
+            sb.append("#### Step ").append(s.index).append(": ").append(desc).append("\n\n");
+
+            String compact = block;
+            if (compact.length() > perStepChars) compact = compact.substring(0, perStepChars) + "...(truncated)";
+            sb.append("```groovy\n").append(compact).append("\n```\n\n");
+
+            emittedSteps++;
+            emittedLines = sb.toString().split("\n", -1).length;
+            if (emittedLines >= totalLines) {
+                sb.append("...(truncated)\n");
+                break;
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    private static String tryConvertToCsv(Object v) {
+        List<List<String>> rows = extractRows(v, 5000);
+        if (rows == null || rows.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (List<String> row : rows) {
+            if (row == null) continue;
+            if (count > 0) sb.append("\n");
+            for (int i = 0; i < row.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(escapeCsvField(row.get(i)));
+            }
+            count++;
+            if (count >= 3000) break;
+        }
+        String out = sb.toString().trim();
+        return out.isEmpty() ? null : out;
+    }
+
+    private static String escapeCsvField(String s) {
+        String v = s == null ? "" : s;
+        boolean needQuote = v.indexOf(',') >= 0 || v.indexOf('\n') >= 0 || v.indexOf('\r') >= 0 || v.indexOf('"') >= 0;
+        if (!needQuote) return v;
+        String escaped = v.replace("\"", "\"\"");
+        return "\"" + escaped + "\"";
+    }
+
+    private static List<List<String>> extractRows(Object v, int maxRows) {
+        if (v == null) return null;
+        int limit = Math.max(1, maxRows);
+
+        if (v instanceof JSONArray) {
+            JSONArray arr = (JSONArray) v;
+            List<List<String>> rows = new ArrayList<>();
+            for (int i = 0; i < arr.size() && rows.size() < limit; i++) {
+                Object r = arr.get(i);
+                List<String> row = extractRowValues(r);
+                if (row != null) rows.add(row);
+            }
+            return rows.isEmpty() ? null : rows;
+        }
+
+        if (v instanceof java.util.Collection) {
+            java.util.Collection<?> c = (java.util.Collection<?>) v;
+            List<List<String>> rows = new ArrayList<>();
+            for (Object r : c) {
+                if (rows.size() >= limit) break;
+                List<String> row = extractRowValues(r);
+                if (row != null) rows.add(row);
+            }
+            return rows.isEmpty() ? null : rows;
+        }
+
+        return null;
+    }
+
+    private static List<String> extractRowValues(Object rowObj) {
+        if (rowObj == null) return null;
+
+        if (rowObj instanceof JSONArray) {
+            JSONArray a = (JSONArray) rowObj;
+            List<String> row = new ArrayList<>();
+            for (int i = 0; i < a.size(); i++) {
+                row.add(a.get(i) == null ? "" : String.valueOf(a.get(i)));
+            }
+            return row;
+        }
+
+        if (rowObj instanceof java.util.Collection) {
+            java.util.Collection<?> c = (java.util.Collection<?>) rowObj;
+            List<String> row = new ArrayList<>();
+            for (Object x : c) row.add(x == null ? "" : String.valueOf(x));
+            return row;
+        }
+
+        if (rowObj instanceof JSONObject) {
+            Object values = ((JSONObject) rowObj).get("values");
+            List<String> row = extractRowValues(values);
+            if (row != null) return row;
+        }
+
+        if (rowObj instanceof java.util.Map) {
+            Object values = ((java.util.Map<?, ?>) rowObj).get("values");
+            List<String> row = extractRowValues(values);
+            if (row != null) return row;
+        }
+
+        try {
+            java.lang.reflect.Method m = rowObj.getClass().getMethod("getValues");
+            Object values = m.invoke(rowObj);
+            return extractRowValues(values);
+        } catch (Exception ignored) {
+        }
+
+        return null;
     }
 
     private static Object chooseExecutionTarget(Page rootPage, java.util.function.Consumer<String> logger) {
